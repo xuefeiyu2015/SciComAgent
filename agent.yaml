@@ -15,6 +15,7 @@ tools:
   - name: generate
     description: Turn a paper into multi-platform sci-comm drafts + provenance + overstatement flags
     parameters:
+      source_type: { required: true, allowed: [doi, url, pdf], description: "How to interpret `source`" }
       source:     { required: true,  description: "PDF link / DOI / web URL of the paper" }
       platforms:  { required: false, default: [news, wechat, xhs], allowed: [news, wechat, xhs] }
       language:   { required: false, default: zh, allowed: [zh, en] }
