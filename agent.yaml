@@ -1,24 +1,41 @@
-# agent.yaml — Turing Planet MCP agent manifest (placeholder, no logic)
-# Fill in real values as the agent takes shape.
+# agent.yaml — Turing Planet MCP agent manifest
+# Models are declared by ROLE; concrete names live in config, never here.
 
 name: scicomm-agent
 version: 0.1.0
-owner: ""              # TODO: owner/team
+owner: "xuefeiyu"
+
+# Routing: how user requests map to this agent
+routing:
+  intents: [paper to public, science communication, explain research]
+  keywords: [sci-comm, paper, news, wechat, xiaohongshu, explainer]
 
 # MCP tools exposed by /mcp (thin wrappers over /api)
-tools: []              # TODO: e.g. run_pipeline
-
-# Routing intents that map user requests to this agent
-routing_intents: []    # TODO
+tools:
+  - name: generate
+    description: Turn a paper into multi-platform sci-comm drafts + provenance + overstatement flags
+    parameters:
+      source_type: { required: true, allowed: [doi, url, pdf], description: "How to interpret `source`" }
+      source:     { required: true,  description: "PDF link / DOI / web URL of the paper" }
+      platforms:  { required: false, default: [news, wechat, xhs], allowed: [news, wechat, xhs] }
+      language:   { required: false, default: zh, allowed: [zh, en] }
+      audience:   { required: false, default: general_public }
+      liveliness: { required: false, default: 3, min: 1, max: 5 }
 
 # Models are declared by ROLE; concrete names live in config, never here.
 model_requirements:
-  extractor: {}        # cheap   — fetch/extract + claim ledger
-  drafter: {}          # writing — per-platform draft
-  reviewer: {}         # strong  — faithfulness check (different model than drafter)
+  - { role: extractor, tier: cheap }    # fetch/extract + claim ledger
+  - { role: drafter,   tier: writing }  # per-platform draft
+  - { role: reviewer,  tier: strong }   # faithfulness check (different model than drafter)
 
 # Schema describing the agent's configurable settings (see config/).
-config_schema: {}      # TODO
+config_schema:
+  models:
+    extractor: { provider: env, model: env }
+    drafter:   { provider: env, model: env }
+    reviewer:  { provider: env, model: env }
+  byo_key: true
+  platforms: [news, wechat, xhs]
 
 # Health/readiness probe
-health: {}             # TODO
+health: /health
