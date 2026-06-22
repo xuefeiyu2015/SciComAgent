@@ -20,6 +20,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from api.config_loader import get_model
+from api.jsonio import as_text, json_object_slice
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "extract.md"
 
@@ -51,7 +52,7 @@ def extract_card(text: str) -> dict[str, Any]:
 
 def _parse_card(raw: Any) -> dict[str, Any]:
     """Parse a model response into a normalized card dict."""
-    data = json.loads(_json_slice(_as_text(raw)))
+    data = json.loads(json_object_slice(as_text(raw)))
     if not isinstance(data, dict):
         raise ValueError("extractor did not return a JSON object")
     card: dict[str, Any] = {}
@@ -59,25 +60,3 @@ def _parse_card(raw: Any) -> dict[str, Any]:
         default: Any = "" if field == "title" else []
         card[field] = data.get(field, default)
     return card
-
-
-def _as_text(raw: Any) -> str:
-    """Coerce message content (string or list of content blocks) to text."""
-    if isinstance(raw, str):
-        return raw
-    if isinstance(raw, list):
-        parts = [
-            block.get("text", "") if isinstance(block, dict) else str(block)
-            for block in raw
-        ]
-        return "".join(parts)
-    return str(raw)
-
-
-def _json_slice(text: str) -> str:
-    """Return the outermost JSON object substring, tolerating fences/prose."""
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("no JSON object found in extractor response")
-    return text[start : end + 1]
