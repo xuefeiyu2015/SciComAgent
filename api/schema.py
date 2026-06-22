@@ -40,6 +40,14 @@ class Status(str, Enum):
     failed = "failed"
 
 
+class ConfidenceLevel(str, Enum):
+    """How strongly the source card supports a claim-ledger entry."""
+
+    high = "high"      # explicit, clearly-stated result / number
+    medium = "medium"  # stated but hedged
+    low = "low"        # implied / uncertain
+
+
 class NoticeCode(str, Enum):
     """Machine code for a pipeline notice.
 
@@ -76,11 +84,18 @@ class AgentInput(BaseModel):
 class Claim(BaseModel):
     """One claim-ledger entry: a statement bound to its source and qualifier."""
 
+    id: str = Field(
+        default="", description="Stable ledger id (e.g. 'c1'); assigned by build_ledger."
+    )
     claim: str = Field(description="The claim as it appears / will be written.")
     source_evidence: str = Field(description="Source span or pointer backing the claim.")
     qualifier: str = Field(
         description="Scope to preserve (species, sample, correlation-not-causation, "
         "'preliminary', etc.)."
+    )
+    confidence: ConfidenceLevel = Field(
+        default=ConfidenceLevel.low,
+        description="How strongly the source card supports the claim.",
     )
 
 
