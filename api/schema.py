@@ -40,6 +40,21 @@ class Status(str, Enum):
     failed = "failed"
 
 
+class NoticeCode(str, Enum):
+    """Machine code for a pipeline notice.
+
+    Values mirror api.fetch.FetchResult.code exactly so the pipeline can map
+    a FetchResult straight onto a Notice. (schema.py does not import fetch.py;
+    the two stay decoupled and share these string values by convention.)
+    """
+
+    ok = "ok"
+    need_pdf = "need_pdf"        # source exists but access blocked -> ask for PDF
+    too_short = "too_short"      # reachable but too little text -> ask for PDF
+    not_a_paper = "not_a_paper"  # not a research paper -> check the link
+    fetch_error = "fetch_error"  # network failure / unreachable link
+
+
 # --- input ------------------------------------------------------------------
 
 class AgentInput(BaseModel):
@@ -89,10 +104,23 @@ class OverreachFlag(BaseModel):
     )
 
 
+class Notice(BaseModel):
+    """A non-draft message from the pipeline (e.g. why fetch failed).
+
+    A fetch failure yields `status=failed` plus one Notice carrying the
+    machine `code` and an actionable, human-readable `message`.
+    """
+
+    code: NoticeCode
+    message: str = Field(description="Human-readable, actionable reason.")
+    source_url: str = Field(default="", description="Source the notice is about.")
+
+
 class AgentOutput(BaseModel):
     """Result of the `generate` tool: draft + provenance + flags. Never auto-published."""
 
     platform_outputs: list[PlatformOutput] = Field(default_factory=list)
     claim_ledger: list[Claim] = Field(default_factory=list)
     overreach_flags: list[OverreachFlag] = Field(default_factory=list)
+    notices: list[Notice] = Field(default_factory=list)
     status: Status = Status.needs_review

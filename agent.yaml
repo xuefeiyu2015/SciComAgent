@@ -21,6 +21,21 @@ tools:
       language:   { required: false, default: zh, allowed: [zh, en] }
       audience:   { required: false, default: general_public }
       liveliness: { required: false, default: 3, min: 1, max: 5 }
+    # Return contract (see AgentOutput in api/schema.py). Never auto-published.
+    output:
+      platform_outputs: "Per-platform drafts (title_options, cover_copy, body, hashtags)"
+      claim_ledger:     "Source-grounded claims with evidence + qualifier"
+      overreach_flags:  "Statements that over-claim vs. the ledger (for a human)"
+      status:           { allowed: [ok, needs_review, failed], description: "Coarse outcome" }
+      # Non-draft messages (e.g. why fetch failed). On failure: status=failed + one notice.
+      notices:
+        item: { code: NoticeCode, message: "actionable, human-readable reason", source_url: "source the notice is about" }
+        code_meanings:
+          ok:          "full text obtained"
+          need_pdf:    "source exists but access is blocked (paywall) -> ask the user for the PDF"
+          too_short:   "reachable but too little text (stub / scanned PDF) -> ask the user for the PDF"
+          not_a_paper: "content is not a research paper -> ask the user to double-check the link"
+          fetch_error: "network failure / unreachable link"
 
 # Models are declared by ROLE; concrete names live in config, never here.
 model_requirements:
