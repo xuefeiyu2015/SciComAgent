@@ -9,10 +9,12 @@ claim ledger. Pure code, no AI:
 for drafting, and otherwise returns a ``FetchResult`` whose ``code`` says why:
 
     ok          -> full text obtained
+    need_pdf    -> source exists but access is blocked (HTTP 401/402/403/451,
+                   e.g. a publisher paywall) -> provide the PDF
     too_short   -> reachable, but too little text (paywall/landing stub, or a
-                   scanned PDF with no text layer) -> get the PDF
+                   scanned PDF with no text layer) -> provide the PDF
     not_a_paper -> text lacks academic structure (e.g. a marketing page)
-    fetch_error -> network/HTTP failure
+    fetch_error -> network failure / unreachable link
 
 To get the *whole* body, an HTML abstract/landing page is auto-upgraded to its
 full-text PDF via the Highwire ``citation_pdf_url`` meta tag (arXiv + most
@@ -66,7 +68,7 @@ class FetchResult:
     ok: bool
     text: str = ""
     reason: str = ""  # human-readable; empty when ok
-    code: str = "ok"  # machine: ok | too_short | not_a_paper | fetch_error
+    code: str = "ok"  # machine: ok | need_pdf | too_short | not_a_paper | fetch_error
     source_url: str = ""  # final resolved URL/path actually extracted
 
 
@@ -103,10 +105,10 @@ def _web_source(url: str) -> FetchResult:
     if "arxiv.org/abs/" in url:
         url = url.replace("arxiv.org/abs/", "arxiv.org/pdf/")
 
-    resp = _get(url)
-    if resp is None:
-        return FetchResult(False, reason=f"could not fetch {url}", code="fetch_error",
-                           source_url=url)
+    try:
+        resp = _get(url)
+    except httpx.HTTPError as exc:
+        return _http_failure(exc, url)
 
     final_url = str(resp.url)
     if _looks_like_pdf(resp):
@@ -115,7 +117,10 @@ def _web_source(url: str) -> FetchResult:
     # HTML: prefer the full-text PDF advertised by the publisher, if any.
     pdf_url = _citation_pdf_url(resp.text, final_url)
     if pdf_url and pdf_url != final_url:
-        pdf_resp = _get(pdf_url)
+        try:
+            pdf_resp = _get(pdf_url)
+        except httpx.HTTPError:
+            pdf_resp = None
         if pdf_resp is not None and _looks_like_pdf(pdf_resp):
             return _assess(_pdf_from_bytes(pdf_resp.content), str(pdf_resp.url))
 
@@ -126,26 +131,46 @@ def _web_source(url: str) -> FetchResult:
 def _pdf_source(source: str) -> FetchResult:
     """Extract text from a PDF given by local path or URL."""
     if source.startswith(("http://", "https://")):
-        resp = _get(source)
-        if resp is None:
-            return FetchResult(False, reason=f"could not fetch {source}",
-                               code="fetch_error", source_url=source)
+        try:
+            resp = _get(source)
+        except httpx.HTTPError as exc:
+            return _http_failure(exc, source)
         return _assess(_pdf_from_bytes(resp.content), str(resp.url))
 
     data = Path(source).read_bytes()
     return _assess(_pdf_from_bytes(data), source)
 
 
-def _get(url: str) -> httpx.Response | None:
-    """GET a URL following redirects; return None on any HTTP error."""
-    try:
-        resp = httpx.get(
-            url, headers=_HEADERS, follow_redirects=True, timeout=_HTTP_TIMEOUT
+def _get(url: str) -> httpx.Response:
+    """GET a URL following redirects, raising httpx.HTTPError on failure."""
+    resp = httpx.get(
+        url, headers=_HEADERS, follow_redirects=True, timeout=_HTTP_TIMEOUT
+    )
+    resp.raise_for_status()
+    return resp
+
+
+# Access-restriction statuses: the source exists, but we are not allowed to
+# read it (auth / payment / paywall) — the human should supply the PDF.
+_ACCESS_BLOCKED_STATUSES = frozenset({401, 402, 403, 451})
+
+
+def _http_failure(exc: httpx.HTTPError, url: str) -> FetchResult:
+    """Classify an HTTP failure as a paywall (need_pdf) vs. unreachable link."""
+    if (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response.status_code in _ACCESS_BLOCKED_STATUSES
+    ):
+        return FetchResult(
+            False,
+            reason=f"access blocked (HTTP {exc.response.status_code}) — likely a "
+            "publisher paywall; provide the PDF",
+            code="need_pdf",
+            source_url=url,
         )
-        resp.raise_for_status()
-        return resp
-    except httpx.HTTPError:
-        return None
+    return FetchResult(
+        False, reason=f"could not fetch {url}", code="fetch_error", source_url=url
+    )
 
 
 def _looks_like_pdf(resp: httpx.Response) -> bool:

@@ -162,6 +162,22 @@ def test_http_error_is_fetch_error(monkeypatch):
     assert result.code == "fetch_error"
 
 
+def test_paywall_403_requests_pdf(monkeypatch):
+    """A publisher block (HTTP 403) asks the human for the PDF, not a hard error."""
+    def forbidden(url, *a, **k):
+        resp = _fake_response(b"<html>Access Denied</html>", "text/html", url=str(url))
+        resp.status_code = 403
+        return resp
+
+    monkeypatch.setattr(fetch.httpx, "get", forbidden)
+
+    result = fetch_source("https://www.cell.com/neuron/fulltext/S0896-6273", "url")
+
+    assert not result.ok
+    assert result.code == "need_pdf"
+    assert "PDF" in result.reason
+
+
 def test_unknown_source_type_raises():
     with pytest.raises(ValueError):
         fetch_source("whatever", "ftp")
