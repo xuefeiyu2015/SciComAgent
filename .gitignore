@@ -1,0 +1,35 @@
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Config secrets (never commit real tokens/keys)
+config/*.yaml
+!config/config.example.yaml
+.env
+.env.*
+!.env.example
+
+# Python build/test artifacts
+build/
+dist/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs / local data
+*.log
+
+# OS
+.DS_Store

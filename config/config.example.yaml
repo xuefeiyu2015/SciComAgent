@@ -1,0 +1,26 @@
+# config.example.yaml — copy to config/config.yaml and fill in.
+# NEVER commit real tokens/keys. config/*.yaml is gitignored (this example is not).
+# Models are referenced by ROLE; drafter and reviewer MUST differ.
+
+models:
+  extractor:
+    provider: ""       # e.g. anthropic / openai / google
+    name: ""           # cheap model
+  drafter:
+    provider: ""
+    name: ""
+  reviewer:
+    provider: ""
+    name: ""           # strong model, different from drafter
+
+# API keys read from environment, not stored here.
+keys:
+  anthropic_api_key_env: ANTHROPIC_API_KEY
+  openai_api_key_env: OPENAI_API_KEY
+
+# Draft parameters (not separate files): language / audience / liveliness / variety
+defaults:
+  language: ""
+  audience: ""
+  liveliness: 0
+  variety: 0

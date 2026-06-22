@@ -1,0 +1,24 @@
+# agent.yaml — Turing Planet MCP agent manifest (placeholder, no logic)
+# Fill in real values as the agent takes shape.
+
+name: scicomm-agent
+version: 0.1.0
+owner: ""              # TODO: owner/team
+
+# MCP tools exposed by /mcp (thin wrappers over /api)
+tools: []              # TODO: e.g. run_pipeline
+
+# Routing intents that map user requests to this agent
+routing_intents: []    # TODO
+
+# Models are declared by ROLE; concrete names live in config, never here.
+model_requirements:
+  extractor: {}        # cheap   — fetch/extract + claim ledger
+  drafter: {}          # writing — per-platform draft
+  reviewer: {}         # strong  — faithfulness check (different model than drafter)
+
+# Schema describing the agent's configurable settings (see config/).
+config_schema: {}      # TODO
+
+# Health/readiness probe
+health: {}             # TODO
