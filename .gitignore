@@ -31,5 +31,8 @@ htmlcov/
 # Logs / local data
 *.log
 
+# Local extraction/run artifacts (review only, not source)
+outputs/
+
 # OS
 .DS_Store

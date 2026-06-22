@@ -7,6 +7,8 @@ config (config/config.yaml) with an environment fallback — NEVER hardcoded
 
 The model layer is LangChain's ``init_chat_model``; API keys are read from
 the environment by the underlying provider client (byo_key), never stored.
+A repo-root ``.env`` is auto-loaded on import (an exported shell var wins),
+so dropping a key into ``.env`` is enough — no manual ``export`` needed.
 
 Resolution per role/field (provider, model):
     - missing / empty / the literal "env"  -> default env var for that
@@ -23,12 +25,19 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 
 # Roles this agent declares (mirror agent.yaml model_requirements).
 ROLES = ("extractor", "drafter", "reviewer")
 
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_CONFIG_PATH = _REPO_ROOT / "config" / "config.yaml"
+_ENV_PATH = _REPO_ROOT / ".env"
+
+# Auto-load the repo .env once at import. override=False: an already-exported
+# shell var wins; .env only fills gaps. Missing .env is a harmless no-op.
+load_dotenv(_ENV_PATH)
 
 
 @lru_cache(maxsize=1)
