@@ -1,26 +1,27 @@
 # config.example.yaml — copy to config/config.yaml and fill in.
 # NEVER commit real tokens/keys. config/*.yaml is gitignored (this example is not).
-# Models are referenced by ROLE; drafter and reviewer MUST differ.
+#
+# Models are referenced by ROLE; concrete names live here (or in env), never in code:
+#   extractor  cheap   — fetch/extract + claim ledger
+#   drafter    low-cost — per-platform draft
+#   reviewer   strong  — faithfulness check (MUST differ from drafter)
+#
+# Each provider/model value may be:
+#   - a literal string            -> "anthropic", "claude-haiku-4-5-20251001"
+#   - the placeholder "env"       -> read the default env var for that role/field
+#                                    (e.g. EXTRACTOR_PROVIDER, EXTRACTOR_MODEL)
+#   - "env:SOME_VAR"              -> read that specific env var
+# Placeholders below resolve from the environment so this example ships no names.
+
+byo_key: true   # API keys are brought by the operator via environment, never stored here.
 
 models:
   extractor:
-    provider: ""       # e.g. anthropic / openai / google
-    name: ""           # cheap model
+    provider: env   # -> EXTRACTOR_PROVIDER   (e.g. anthropic / openai / google)
+    model: env      # -> EXTRACTOR_MODEL      (cheap model)
   drafter:
-    provider: ""
-    name: ""
+    provider: env   # -> DRAFTER_PROVIDER
+    model: env      # -> DRAFTER_MODEL        (low-cost writing model)
   reviewer:
-    provider: ""
-    name: ""           # strong model, different from drafter
-
-# API keys read from environment, not stored here.
-keys:
-  anthropic_api_key_env: ANTHROPIC_API_KEY
-  openai_api_key_env: OPENAI_API_KEY
-
-# Draft parameters (not separate files): language / audience / liveliness / variety
-defaults:
-  language: ""
-  audience: ""
-  liveliness: 0
-  variety: 0
+    provider: env   # -> REVIEWER_PROVIDER
+    model: env      # -> REVIEWER_MODEL       (strong model, MUST differ from drafter)
