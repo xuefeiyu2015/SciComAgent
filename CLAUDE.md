@@ -12,7 +12,8 @@ with source provenance and overstatement flags. It plugs into the Turing Planet 
 ## Directory contract
 
 - `/api`      single source of truth for business logic (the whole pipeline)
-- `/mcp`      a THIN wrapper over `/api` exposing MCP tools; NO business logic
+- `/mcp_server`  a THIN wrapper over `/api` exposing MCP tools; NO business logic
+              (named `mcp_server`, not `mcp`, to avoid shadowing the PyPI `mcp` SDK)
 - `agent.yaml`  manifest: name/version/owner, tools, routing intents, model_requirements, config_schema, health
 - `/config`   config.example.yaml; models/keys configurable; NEVER hardcode real tokens
 - `/tests`    tests + faithfulness regression
@@ -32,7 +33,7 @@ fetch+extract  ->  claim ledger  ->  per-platform draft  ->  faithfulness check
 ## Engineering conventions
 
 - Python. Declare models by ROLE (extractor=cheap, reviewer=strong); read names from config, never hardcode.
-- Keep `/api` and `/mcp` strictly separate; `/api` must not import `/mcp`.
+- Keep `/api` and `/mcp_server` strictly separate; `/api` must not import `/mcp_server`.
 - Style differs by platform (structure), controlled by `api/styles/*.md`.
 - Language / audience / liveliness / variety are PARAMETERS, not separate files.
 
