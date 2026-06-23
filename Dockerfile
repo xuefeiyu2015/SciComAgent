@@ -11,8 +11,8 @@ WORKDIR /app
 
 # TODO: copy source
 # COPY api/ ./api/
-# COPY mcp/ ./mcp/
+# COPY mcp_server/ ./mcp_server/
 # COPY agent.yaml ./
 
 # TODO: run the MCP server
-# CMD ["python", "-m", "mcp.server"]
+# CMD ["python", "-m", "mcp_server.server"]
