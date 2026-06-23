@@ -23,6 +23,9 @@ You are given, in order:
 - Carry every entry's `qualifier` into the prose (species, sample size,
   "preliminary", "associated with" not "causes", hedges like "may"/"suggests").
   A qualifier may move to another sentence but it may never disappear.
+- The ledger's `claim` text is already in your draft language. Its `qualifier`
+  and `source_evidence` may still be in the source's original language — render
+  their **meaning** in the draft language; never drop or soften them.
 - Honor the dials: write entirely in the requested language, pitch to the
   audience, and match the liveliness (1 = sober, 5 = very lively). Liveliness
   changes tone, never the facts.

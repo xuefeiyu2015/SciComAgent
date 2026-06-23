@@ -23,11 +23,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from api.config_loader import get_model
 from api.jsonio import invoke_json
+from api.lang import language_label
 from api.schema import (
     AgentInput,
     Claim,
     ConfidenceLevel,
-    Language,
     Platform,
     PlatformOutput,
 )
@@ -39,8 +39,6 @@ _RED_LINES_PATH = _API_DIR / "rules" / "red_lines.md"
 
 # Slightly above 0 so repeated drafts vary; still low enough to stay faithful.
 _DRAFT_TEMPERATURE = 0.4
-
-_LANGUAGE_NAMES = {Language.zh: "Chinese (中文)", Language.en: "English"}
 
 # Confidence levels that earn an inline ledger-id marker ("not so sure").
 _HEDGED = frozenset({ConfidenceLevel.medium, ConfidenceLevel.low})
@@ -118,7 +116,7 @@ def _system_prompt(platform: Platform, inp: AgentInput) -> str:
 
 def _dials(inp: AgentInput) -> str:
     """Render the language/audience/liveliness parameters for this draft."""
-    language = _LANGUAGE_NAMES.get(inp.language, inp.language.value)
+    language = language_label(inp.language)
     return (
         "# Dials (parameters for this draft)\n\n"
         f"- Language: write entirely in {language}.\n"

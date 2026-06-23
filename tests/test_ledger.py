@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage
 
 from api import ledger
 from api.ledger import _parse_ledger, build_ledger
-from api.schema import Claim, ConfidenceLevel
+from api.schema import Claim, ConfidenceLevel, Language
 
 # Two entries: one well-sourced, one with empty evidence (must be dropped).
 _LEDGER_JSON = """{"claims": [
@@ -49,7 +49,7 @@ def test_build_ledger_drops_unsourced_and_assigns_ids(monkeypatch):
     stub = _StubModel(_LEDGER_JSON)
     monkeypatch.setattr(ledger, "get_model", lambda role, temperature=0.0: stub)
 
-    claims = build_ledger(_CARD)
+    claims = build_ledger(_CARD, Language.zh)
 
     assert all(isinstance(c, Claim) for c in claims)
     assert len(claims) == 1  # empty-evidence entry dropped by the guardrail
@@ -58,8 +58,9 @@ def test_build_ledger_drops_unsourced_and_assigns_ids(monkeypatch):
     assert "preliminary" in only.qualifier  # qualifier survives
     assert only.confidence is ConfidenceLevel.high
 
-    # system prompt then the card JSON was sent to the model
-    assert stub.seen[0].content == ledger._prompt()
+    # system prompt (base + language directive) then the card JSON was sent
+    assert stub.seen[0].content == ledger._system_prompt(Language.zh)
+    assert "Chinese" in stub.seen[0].content  # language directive injected
     assert json.loads(stub.seen[1].content) == _CARD
 
 
@@ -68,7 +69,7 @@ def test_build_ledger_tolerates_code_fences_and_prose(monkeypatch):
     stub = _StubModel(raw)
     monkeypatch.setattr(ledger, "get_model", lambda role, temperature=0.0: stub)
 
-    claims = build_ledger(_CARD)
+    claims = build_ledger(_CARD, Language.zh)
     assert len(claims) == 1  # empty-evidence entry still dropped
     assert claims[0].id == "c1"
 
