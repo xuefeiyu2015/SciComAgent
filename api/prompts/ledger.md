@@ -26,6 +26,10 @@ careful archivist, not a writer — you record only what the card supports.
    - `high` — an explicit, clearly-stated result or number in the card;
    - `medium` — stated but hedged ("may", "suggests", "preliminary");
    - `low` — implied or uncertain.
+6. **Language split.** A language directive follows. Write each `claim` in the
+   requested language as a faithful translation (strengthen nothing), but keep
+   `source_evidence` and `qualifier` **verbatim in the card's original
+   language** so they stay checkable against the source.
 
 ## Output
 

@@ -119,6 +119,24 @@ class OverreachFlag(BaseModel):
     )
 
 
+class CheckFlag(BaseModel):
+    """One faithfulness flag from check.py: a draft statement that breaks a hard rule."""
+
+    claim_id: str = Field(
+        default="",
+        description="Ledger id the flagged statement maps to; '' when the claim is not in the ledger.",
+    )
+    quote: str = Field(
+        default="",
+        description="The exact offending sentence, copied verbatim from the draft (draft language).",
+    )
+    issue: str = Field(
+        description="What is wrong (correlation-as-causation, dropped qualifier, minor finding as "
+        "main conclusion, or claim not in the ledger)."
+    )
+    suggestion: str = Field(description="Concrete faithful fix.")
+
+
 class Notice(BaseModel):
     """A non-draft message from the pipeline (e.g. why fetch failed).
 
