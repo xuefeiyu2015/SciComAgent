@@ -21,7 +21,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from api.config_loader import get_model
-from api.jsonio import as_text, json_object_slice
+from api.jsonio import invoke_json
 from api.schema import Claim, ConfidenceLevel
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "ledger.md"
@@ -44,20 +44,18 @@ def build_ledger(card: dict[str, Any]) -> list[Claim]:
         evidence are dropped by the guardrail.
     """
     model = get_model("extractor", temperature=0.0)
-    response = model.invoke(
+    data = invoke_json(
+        model,
         [
             SystemMessage(content=_prompt()),
             HumanMessage(content=json.dumps(card, ensure_ascii=False)),
-        ]
+        ],
     )
-    return _parse_ledger(response.content)
+    return _parse_ledger(data)
 
 
-def _parse_ledger(raw: Any) -> list[Claim]:
-    """Parse a model response into a filtered, id-assigned list of Claims."""
-    data = json.loads(json_object_slice(as_text(raw)))
-    if not isinstance(data, dict):
-        raise ValueError("ledger builder did not return a JSON object")
+def _parse_ledger(data: dict[str, Any]) -> list[Claim]:
+    """Filter and id-assign a parsed ledger dict into a list of Claims."""
     entries = data.get("claims", [])
     if not isinstance(entries, list):
         raise ValueError("ledger 'claims' must be a list")

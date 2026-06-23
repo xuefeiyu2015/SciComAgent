@@ -2,14 +2,14 @@
 
 The faithfulness rules (sourcing, qualifier preservation) live in the prompt;
 here we verify the call wiring, the empty-evidence guardrail, id assignment,
-confidence parsing, and robust JSON handling.
+and confidence parsing. Robust JSON parsing (fences, retries, non-object
+rejection) is exercised in test_jsonio.py.
 """
 
 from __future__ import annotations
 
 import json
 
-import pytest
 from langchain_core.messages import AIMessage
 
 from api import ledger
@@ -63,34 +63,32 @@ def test_build_ledger_drops_unsourced_and_assigns_ids(monkeypatch):
     assert json.loads(stub.seen[1].content) == _CARD
 
 
-def test_parse_tolerates_code_fences_and_prose():
+def test_build_ledger_tolerates_code_fences_and_prose(monkeypatch):
     raw = "Here is the ledger:\n```json\n" + _LEDGER_JSON + "\n```\nDone."
-    claims = _parse_ledger(raw)
-    assert len(claims) == 1
+    stub = _StubModel(raw)
+    monkeypatch.setattr(ledger, "get_model", lambda role, temperature=0.0: stub)
+
+    claims = build_ledger(_CARD)
+    assert len(claims) == 1  # empty-evidence entry still dropped
     assert claims[0].id == "c1"
 
 
 def test_parse_ids_are_contiguous_after_filtering():
-    raw = """{"claims": [
-      {"claim": "a", "source_evidence": "findings: a", "confidence": "medium"},
-      {"claim": "b", "source_evidence": "   ", "confidence": "low"},
-      {"claim": "c", "source_evidence": "methods: c", "confidence": "high"}
-    ]}"""
-    claims = _parse_ledger(raw)
+    data = {"claims": [
+        {"claim": "a", "source_evidence": "findings: a", "confidence": "medium"},
+        {"claim": "b", "source_evidence": "   ", "confidence": "low"},
+        {"claim": "c", "source_evidence": "methods: c", "confidence": "high"},
+    ]}
+    claims = _parse_ledger(data)
     assert [c.id for c in claims] == ["c1", "c2"]  # the blank-evidence one is gone
 
 
 def test_parse_defaults_invalid_confidence_to_low():
-    raw = '{"claims": [{"claim": "x", "source_evidence": "findings: x"}]}'
-    claims = _parse_ledger(raw)
+    data = {"claims": [{"claim": "x", "source_evidence": "findings: x"}]}
+    claims = _parse_ledger(data)
     assert claims[0].confidence is ConfidenceLevel.low
     assert claims[0].qualifier == ""
 
 
 def test_parse_empty_ledger():
-    assert _parse_ledger('{"claims": []}') == []
-
-
-def test_parse_rejects_non_object():
-    with pytest.raises(ValueError):
-        _parse_ledger("[1, 2, 3]")
+    assert _parse_ledger({"claims": []}) == []

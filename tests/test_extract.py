@@ -1,12 +1,12 @@
 """Tests for api.extract.extract_card — model is stubbed, no network/keys.
 
 The extractor's faithfulness (qualifier preservation) lives in the prompt;
-here we only verify the call wiring and robust JSON parsing/normalization.
+here we only verify the call wiring and card normalization. Robust JSON parsing
+(fences, retries, non-object rejection) is exercised in test_jsonio.py.
 """
 
 from __future__ import annotations
 
-import pytest
 from langchain_core.messages import AIMessage
 
 from api import extract
@@ -46,19 +46,17 @@ def test_extract_card_parses_and_passes_prompt(monkeypatch):
     assert stub.seen[1].content == "full paper text ..."
 
 
-def test_parse_tolerates_code_fences_and_prose():
+def test_extract_card_tolerates_code_fences_and_prose(monkeypatch):
     raw = "Here is the card:\n```json\n" + _CARD_JSON + "\n```\nDone."
-    card = _parse_card(raw)
+    stub = _StubModel(raw)
+    monkeypatch.setattr(extract, "get_model", lambda role, temperature=0.0: stub)
+
+    card = extract_card("full paper text ...")
     assert card["title"] == "A mouse study"
 
 
 def test_parse_normalizes_missing_sections():
-    card = _parse_card('{"title": "X"}')
+    card = _parse_card({"title": "X"})
     assert card["title"] == "X"
     assert card["findings"] == []
     assert card["key_figures"] == []
-
-
-def test_parse_rejects_non_object():
-    with pytest.raises(ValueError):
-        _parse_card("[1, 2, 3]")
