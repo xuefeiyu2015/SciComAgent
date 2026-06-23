@@ -12,7 +12,6 @@ text; it adds no claims of its own.
 
 from __future__ import annotations
 
-import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -20,7 +19,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from api.config_loader import get_model
-from api.jsonio import as_text, json_object_slice
+from api.jsonio import invoke_json
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "extract.md"
 
@@ -44,17 +43,14 @@ def extract_card(text: str) -> dict[str, Any]:
         normalized to "" (title) or [] (lists).
     """
     model = get_model("extractor", temperature=0.0)
-    response = model.invoke(
-        [SystemMessage(content=_prompt()), HumanMessage(content=text)]
+    data = invoke_json(
+        model, [SystemMessage(content=_prompt()), HumanMessage(content=text)]
     )
-    return _parse_card(response.content)
+    return _parse_card(data)
 
 
-def _parse_card(raw: Any) -> dict[str, Any]:
-    """Parse a model response into a normalized card dict."""
-    data = json.loads(json_object_slice(as_text(raw)))
-    if not isinstance(data, dict):
-        raise ValueError("extractor did not return a JSON object")
+def _parse_card(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a parsed card dict to the CARD_FIELDS shape."""
     card: dict[str, Any] = {}
     for field in CARD_FIELDS:
         default: Any = "" if field == "title" else []
