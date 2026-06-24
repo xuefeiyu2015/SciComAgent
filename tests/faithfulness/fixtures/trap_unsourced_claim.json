@@ -1,0 +1,25 @@
+{
+  "name": "claim not in ledger (fabricated number)",
+  "expect_issue": "claim-not-in-ledger",
+  "expect_keywords": ["ledger", "not in", "unsupported", "no source", "90", "账本", "出处", "无依据"],
+  "card": {
+    "title": "A New Battery Electrolyte Improves Cycle Retention",
+    "methods": "Lab cells, 500 charge cycles.",
+    "main_findings": "Capacity retention improved by 12% over the baseline electrolyte after 500 cycles.",
+    "limitations": "Lab-scale cells; not validated in commercial battery packs."
+  },
+  "ledger": [
+    {
+      "id": "c1",
+      "claim": "The new electrolyte improved capacity retention by 12% after 500 cycles.",
+      "source_evidence": "Capacity retention improved by 12% over the baseline electrolyte after 500 cycles.",
+      "qualifier": "lab-scale cells only",
+      "confidence": "medium"
+    }
+  ],
+  "draft": {
+    "platform": "wechat",
+    "title_options": ["全球首创电池技术，续航暴涨 90%"],
+    "body": "震撼登场！这款全球首创的新型电解液让电池续航直接提升了 90%，从此告别充电焦虑，手机一周一充不是梦。"
+  }
+}

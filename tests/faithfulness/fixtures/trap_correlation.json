@@ -1,0 +1,25 @@
+{
+  "name": "correlation -> causation",
+  "expect_issue": "correlation-stated-as-causation",
+  "expect_keywords": ["causation", "causal", "correlation", "因果", "相关"],
+  "card": {
+    "title": "Coffee Consumption and Longevity: An Observational Cohort",
+    "methods": "Observational cohort of 50,000 adults followed for 10 years. No intervention; associations only.",
+    "main_findings": "Higher self-reported coffee intake was associated with lower all-cause mortality.",
+    "limitations": "Observational design; cannot establish causation. Possible confounders (income, lifestyle)."
+  },
+  "ledger": [
+    {
+      "id": "c1",
+      "claim": "People who drank more coffee tended to live longer in this cohort.",
+      "source_evidence": "Higher coffee intake was associated with lower all-cause mortality.",
+      "qualifier": "correlational, observational, not causal",
+      "confidence": "medium"
+    }
+  ],
+  "draft": {
+    "platform": "wechat",
+    "title_options": ["每天喝咖啡，竟然能让你更长寿"],
+    "body": "好消息！最新研究证明，喝咖啡能让你活得更久。只要每天多喝几杯，咖啡就会延长你的寿命。"
+  }
+}

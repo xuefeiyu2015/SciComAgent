@@ -37,6 +37,7 @@ class Language(str, Enum):
 class Status(str, Enum):
     ok = "ok"
     needs_review = "needs_review"
+    no_claims = "no_claims"  # nothing sourced -> nothing may be written (rule #1)
     failed = "failed"
 
 
@@ -61,6 +62,7 @@ class NoticeCode(str, Enum):
     too_short = "too_short"      # reachable but too little text -> ask for PDF
     not_a_paper = "not_a_paper"  # not a research paper -> check the link
     fetch_error = "fetch_error"  # network failure / unreachable link
+    draft_error = "draft_error"  # pipeline-internal: one platform's draft crashed
 
 
 # --- input ------------------------------------------------------------------

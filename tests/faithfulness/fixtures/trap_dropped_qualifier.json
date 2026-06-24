@@ -1,0 +1,25 @@
+{
+  "name": "dropped qualifier (mice / preliminary)",
+  "expect_issue": "dropped-qualifier",
+  "expect_keywords": ["qualifier", "mice", "mouse", "preliminary", "小鼠", "初步", "限定"],
+  "card": {
+    "title": "Compound ZX-7 Reduces Tumor Volume in a Mouse Model (Preliminary)",
+    "methods": "30 mice, single dose, 4-week follow-up. Preliminary; no human trials.",
+    "main_findings": "ZX-7 reduced average tumor volume by ~20% versus control in mice.",
+    "limitations": "Animal model only; preliminary; not tested in humans."
+  },
+  "ledger": [
+    {
+      "id": "c1",
+      "claim": "ZX-7 shrank tumors by about 20% in a preliminary mouse study.",
+      "source_evidence": "ZX-7 reduced average tumor volume by ~20% versus control in mice.",
+      "qualifier": "in mice; preliminary; not tested in humans",
+      "confidence": "low"
+    }
+  ],
+  "draft": {
+    "platform": "wechat",
+    "title_options": ["抗癌新突破：新药 ZX-7 能缩小肿瘤"],
+    "body": "重大突破！新药 ZX-7 被证实可以缩小肿瘤，缩小幅度高达 20%。这意味着癌症患者很快就有了新的治疗选择。"
+  }
+}

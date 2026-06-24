@@ -66,10 +66,25 @@ def run(inp: AgentInput) -> AgentOutput:
     card = extract_card(res.text)
     ledger = build_ledger(card, inp.language)
 
+    # CLAUDE.md hard rule #1: if nothing is sourced, nothing may be written.
+    # Refuse to draft on an empty ledger rather than inventing claims.
+    if not ledger:
+        return AgentOutput(status=Status.no_claims, claim_ledger=ledger)
+
     platform_outputs: list[PlatformOutput] = []
     overreach_flags: list[OverreachFlag] = []
+    notices: list[Notice] = []
     for platform in inp.platforms:
-        draft, flags = _draft_one(platform, ledger, card, inp)
+        try:
+            draft, flags = _draft_one(platform, ledger, card, inp)
+        except Exception as err:  # one platform failing must not sink the others
+            notices.append(
+                Notice(
+                    code=NoticeCode.draft_error,
+                    message=f"{_platform_name(platform)}: drafting failed — {err}",
+                )
+            )
+            continue
         platform_outputs.append(draft)
         overreach_flags.extend(_to_overreach(flag, draft.platform) for flag in flags)
 
@@ -78,7 +93,13 @@ def run(inp: AgentInput) -> AgentOutput:
         platform_outputs=platform_outputs,
         claim_ledger=ledger,
         overreach_flags=overreach_flags,
+        notices=notices,
     )
+
+
+def _platform_name(platform: Platform | str) -> str:
+    """Display name for a platform, tolerant of enum or raw string."""
+    return platform.value if isinstance(platform, Platform) else str(platform)
 
 
 def _draft_one(
