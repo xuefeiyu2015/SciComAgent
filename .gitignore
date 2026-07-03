@@ -36,3 +36,6 @@ outputs/
 
 # OS
 .DS_Store
+
+#Architecture file
+diagrams/
