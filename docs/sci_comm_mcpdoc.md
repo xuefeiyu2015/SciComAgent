@@ -1,13 +1,25 @@
 # SciComm Agent — MCP Server
 
-A thin MCP wrapper (`/mcp_server`) that exposes the SciComm pipeline as a single
-tool for the Turing Planet MCP platform. It turns a research paper into
-public-facing drafts for **news / WeChat / Xiaohongshu**, with source provenance
-and overstatement flags — and **never auto-publishes**.
+A thin MCP wrapper (`/mcp_server`) that exposes the SciComm pipeline for the
+Turing Planet MCP platform. It turns a research paper into public-facing drafts
+for **news / WeChat / Xiaohongshu**, with source provenance and overstatement
+flags — and **never auto-publishes**.
 
-The server contains **no business logic**: it marshals parameters into an
-`AgentInput`, calls `api.pipeline.run`, and returns the `AgentOutput` unchanged.
-All logic lives in `/api`.
+The server contains **no business logic**: each tool marshals its parameters and
+delegates to a function in `/api`, returning the result unchanged. All logic
+lives in `/api`.
+
+## Tools at a glance
+
+| Tool | Purpose |
+|------|---------|
+| [`generate`](#tool-generate) | Full pipeline: paper → multi-platform drafts + provenance + flags |
+| [`extract_ledger`](#tool-extract_ledger) | Cheap provenance preview: paper → claim ledger only (no drafting) |
+| [`check_draft`](#tool-check_draft) | Re-check a (human-edited) draft against its claim ledger |
+| [`health`](#tool-health) | Report configured model roles, search sources, and key presence |
+
+A typical human-in-the-loop flow: **`extract_ledger`** to inspect/approve the
+facts → draft (via `generate`, or edit by hand) → **`check_draft`** to re-verify.
 
 ---
 
@@ -62,8 +74,9 @@ claude mcp list            # should show scicomm-agent
 claude mcp get scicomm-agent
 ```
 
-Inside a session, `/mcp` lists connected servers and their tools; the tool is
-exposed as `mcp__scicomm-agent__generate`.
+Inside a session, `/mcp` lists connected servers and their tools; they are
+exposed as `mcp__scicomm-agent__generate`, `…__extract_ledger`,
+`…__check_draft`, and `…__health`.
 
 #### Claude Desktop / generic MCP hosts
 
@@ -96,6 +109,7 @@ Set `cwd` to the repo root (or use the venv interpreter as `command`) so the
 
 ---
 
+<a id="tool-generate"></a>
 ## Tool: `generate`
 
 Turn a research paper into multi-platform sci-comm drafts + provenance +
@@ -111,6 +125,7 @@ overstatement flags.
 | `language`    | `zh` \| `en`                | ❌       | `zh`                       | Output language |
 | `audience`    | string                      | ❌       | `general_public`           | Intended reader |
 | `liveliness`  | int 1–5                     | ❌       | `3`                        | Tone liveliness |
+| `background`  | bool                        | ❌       | `true`                     | Gather external background materials (web / arXiv / scholarly APIs) as **framing context** for the drafts. Never a source of facts; failure degrades gracefully |
 
 ### Return value — `AgentOutput`
 
@@ -137,6 +152,15 @@ overstatement flags.
   "overreach_flags": [
     { "text": "flagged statement", "reason": "why it overstates", "platform": "xhs" }
   ],
+  "background_materials": [
+    {
+      "snippet": "external context excerpt/summary",
+      "source_title": "…",
+      "source_url": "https://…",
+      "kind": "web | arxiv | semantic_scholar | pubmed | crossref",
+      "relation": "why this helps frame the paper's story"
+    }
+  ],
   "notices": [
     { "code": "ok", "message": "…", "source_url": "…" }
   ],
@@ -150,6 +174,10 @@ overstatement flags.
   in a draft must map to a ledger entry, or it may not be written.
 - **`overreach_flags`** — statements that over-claim vs. the ledger, surfaced for
   a human reviewer.
+- **`background_materials`** — external context shown to the drafter for framing
+  **only** (never facts, never ledger entries); surfaced as an audit trail so a
+  reviewer can see exactly what the drafter was given. Empty when `background`
+  is off or nothing useful was found.
 - **`notices`** — non-draft messages (e.g. why fetch failed).
 - **`status`** — coarse outcome (see below).
 
@@ -172,6 +200,7 @@ overstatement flags.
 | `not_a_paper` | Content is not a research paper → check the link |
 | `fetch_error` | Network failure / unreachable link |
 | `draft_error` | One platform's draft crashed (pipeline-internal) |
+| `background_error` | Background search was skipped; drafts are produced without it (pipeline-internal) |
 
 The tool never crashes: on any exception it returns
 `status=failed` with a single `fetch_error` notice. For blocked sources
@@ -212,6 +241,123 @@ to **retry `generate` with `source_type='pdf'`** and a PDF link.
 
 ---
 
+<a id="tool-extract_ledger"></a>
+## Tool: `extract_ledger`
+
+Extract just the **claim ledger** from a paper, without drafting. A cheap
+provenance preview — only the `extractor` model runs — so a caller can inspect
+and approve the source-grounded facts before spending on a full `generate`.
+
+### Parameters
+
+| Name          | Type                    | Required | Default | Notes |
+|---------------|-------------------------|----------|---------|-------|
+| `source`      | string                  | ✅       | —       | PDF link / DOI / web URL of the paper |
+| `source_type` | `doi` \| `url` \| `pdf` | ✅       | —       | How to interpret `source` |
+| `language`    | `zh` \| `en`            | ❌       | `zh`    | Language for the ledger `claim` text |
+
+### Return value — `AgentOutput`
+
+Same contract as `generate`, but `platform_outputs` is empty and only the
+provenance fields are populated:
+
+- **`claim_ledger`** — the source-grounded claims (id, claim, source_evidence,
+  qualifier, confidence).
+- **`status`** — `ok` (ledger ready), `no_claims` (nothing could be sourced →
+  nothing may be written, rule #1), or `failed` (fetch failure — see the notice).
+- **`notices`** — blocked/short sources yield the same `need_pdf` / `too_short`
+  guidance as `generate`.
+
+```json
+{
+  "name": "extract_ledger",
+  "arguments": { "source": "https://arxiv.org/abs/1706.03762", "source_type": "url" }
+}
+```
+
+---
+
+<a id="tool-check_draft"></a>
+## Tool: `check_draft`
+
+Re-run the faithfulness check on a (possibly human-edited) draft against its
+claim ledger. Uses the `reviewer` role — a **different, strong model** than the
+drafter (rule #3: no grading your own work). Use it to re-verify after editing a
+draft by hand.
+
+### Parameters
+
+| Name       | Type                    | Required | Default | Notes |
+|------------|-------------------------|----------|---------|-------|
+| `draft`    | `PlatformOutput`        | ✅       | —       | Draft to audit: `{platform, title_options, cover_copy, body, hashtags}` |
+| `ledger`   | list of `Claim`         | ✅       | —       | Ledger the draft must stay within (e.g. `claim_ledger` from `extract_ledger`) |
+| `language` | `zh` \| `en`            | ❌       | `zh`    | Language of the draft & ledger `claim` text |
+
+### Return value — list of `CheckFlag`
+
+An **empty list means the draft is faithful.** Each flag:
+
+```jsonc
+[
+  {
+    "claim_id": "c1",                 // ledger id it maps to; "" if not in the ledger
+    "quote": "cures cancer",          // the offending sentence, verbatim
+    "issue": "dropped qualifier — 'in mice' removed",
+    "suggestion": "restore the species qualifier"
+  }
+]
+```
+
+Flags cover: correlation stated as causation, dropped qualifiers, a minor
+finding cast as the main conclusion, and claims not present in the ledger.
+
+```json
+{
+  "name": "check_draft",
+  "arguments": {
+    "draft": { "platform": "wechat", "body": "This drug cures cancer." },
+    "ledger": [
+      { "id": "c1", "claim": "The drug shrank tumors in mice (preliminary).",
+        "source_evidence": "…", "qualifier": "in mice; preliminary", "confidence": "low" }
+    ]
+  }
+}
+```
+
+---
+
+<a id="tool-health"></a>
+## Tool: `health`
+
+Report agent readiness for the MCP host / platform. **Booleans only — never key
+values** (`byo_key`). Implements the `/health` probe declared in `agent.yaml`.
+
+### Parameters
+
+None.
+
+### Return value
+
+```jsonc
+{
+  "roles": {                         // whether each role resolves to a model
+    "extractor": true,
+    "drafter": true,
+    "reviewer": true,
+    "researcher": false              // false is OK — it falls back to extractor
+  },
+  "search_sources": ["arxiv", "semantic_scholar", "pubmed", "crossref", "wikipedia", "ddgs"],
+  "optional_keys": {                 // presence only, never the value
+    "tavily": false,
+    "semantic_scholar": false,
+    "ncbi": false
+  },
+  "byo_key": true
+}
+```
+
+---
+
 ## Pipeline behind the tool
 
 ```
@@ -243,5 +389,6 @@ fetch + extract  →  claim ledger  →  per-platform draft  →  faithfulness c
   imports from `/api` only.
 - `/api` is the single source of truth and must **not** import `/mcp_server`.
 - The data contract (`AgentInput` / `AgentOutput` and enums) lives in
-  `api/schema.py`; the tool signature mirrors `agent.yaml`.
-- Health/readiness probe: `/health` (see `agent.yaml`).
+  `api/schema.py`; the tool signatures mirror `agent.yaml`.
+- Health/readiness: the `health` tool (backed by `api.config_loader.capabilities`)
+  reports configured roles, search sources, and key presence — see `agent.yaml`.

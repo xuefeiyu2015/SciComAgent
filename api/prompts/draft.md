@@ -12,6 +12,8 @@ You are given, in order:
 - the **red lines** — the faithfulness rules that bind every draft;
 - the **dials** — language, audience, and liveliness for this draft;
 - the **claim ledger** as JSON — the only facts you may use;
+- optionally, **background materials** — external context for framing the
+  story; never a source of facts;
 - optionally, **revision notes** from a faithfulness check to address.
 
 ## How to write
@@ -31,6 +33,22 @@ You are given, in order:
   changes tone, never the facts.
 - Offer **three** `title_options` as alternatives for a human to choose from,
   even on platforms that ultimately run a single title.
+
+## Background materials
+
+When **background materials** are provided, use them the way a good writer
+uses background reading: to open the piece, connect it to the field, explain
+why it matters, or point to the bigger story. They are context and framing
+ONLY:
+
+- Never state a number, magnitude, causal claim, comparison, "first", or
+  "proves" taken from a background material — those may come **only** from
+  the claim ledger.
+- Never present a background material as evidence for this paper's results.
+- Generic, common-knowledge framing drawn from them ("attention mechanisms
+  have become central to modern AI") is what they are for; specific external
+  factual assertions are not.
+- If a background material conflicts with the ledger, the ledger wins.
 
 ## Provenance markers
 

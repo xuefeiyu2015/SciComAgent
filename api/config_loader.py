@@ -1,7 +1,7 @@
 """Config-driven model factory.
 
-Single place that turns a ROLE (extractor / drafter / reviewer) into a
-ready-to-call chat model. Concrete provider/model names are read from
+Single place that turns a ROLE (extractor / drafter / reviewer / researcher)
+into a ready-to-call chat model. Concrete provider/model names are read from
 config (config/config.yaml) with an environment fallback — NEVER hardcoded
 (see CLAUDE.md: declare models by role, read names from config).
 
@@ -29,7 +29,9 @@ from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 
 # Roles this agent declares (mirror agent.yaml model_requirements).
-ROLES = ("extractor", "drafter", "reviewer")
+# "researcher" is optional at runtime: topic/background call it with
+# fallback="extractor", so an unconfigured researcher never breaks a run.
+ROLES = ("extractor", "drafter", "reviewer", "researcher")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config" / "config.yaml"
@@ -81,16 +83,82 @@ def resolve_role(role: str) -> tuple[str, str]:
     return provider, model
 
 
-def get_model(role: str, temperature: float = 0.0):
+def get_model(role: str, temperature: float = 0.0, fallback: str | None = None):
     """Build the chat model for a role.
 
     Args:
-        role: one of "extractor", "drafter", "reviewer".
+        role: one of "extractor", "drafter", "reviewer", "researcher".
         temperature: sampling temperature passed to the provider.
+        fallback: optional role to resolve instead when `role` is declared
+            but unconfigured (e.g. researcher -> extractor). An unknown
+            `role` still raises — the fallback never masks a typo.
 
     Returns:
         A LangChain chat model. API keys are read from the environment by
         the provider client (byo_key); none are stored in config.
     """
-    provider, model = resolve_role(role)
+    try:
+        provider, model = resolve_role(role)
+    except ValueError:
+        if fallback is None or role not in ROLES:
+            raise
+        provider, model = resolve_role(fallback)
     return init_chat_model(model, model_provider=provider, temperature=temperature)
+
+
+def capabilities() -> dict[str, Any]:
+    """Report agent readiness: configured model roles + enabled search sources.
+
+    Booleans only — never returns key values (byo_key). Backs the `health` MCP
+    tool and the `/health` probe declared in agent.yaml.
+
+    Returns a dict:
+        roles           {role: bool}  — whether each role resolves to a model
+                        (researcher False is fine; it falls back to extractor)
+        search_sources  list[str]     — enabled external search clients
+        optional_keys   {name: bool}  — presence of optional API keys (never values)
+        byo_key         True          — keys are brought via env, never stored
+    """
+    # Imported here to avoid an import cycle (api.sources imports this module).
+    from api.sources import enabled_sources
+
+    roles: dict[str, bool] = {}
+    for role in ROLES:
+        try:
+            resolve_role(role)
+            roles[role] = True
+        except ValueError:
+            roles[role] = False
+
+    return {
+        "roles": roles,
+        "search_sources": enabled_sources(),
+        "optional_keys": {
+            "tavily": bool(os.environ.get("TAVILY_API_KEY")),
+            "semantic_scholar": bool(os.environ.get("S2_API_KEY")),
+            "ncbi": bool(os.environ.get("NCBI_API_KEY")),
+        },
+        "byo_key": True,
+    }
+
+
+def resolve_setting(
+    path: tuple[str, ...], default_env: str, default: str = ""
+) -> str:
+    """Resolve a non-model setting from config with env indirection.
+
+    Walks `path` into config/config.yaml (e.g. ("search", "sources")) and
+    resolves the leaf with the same semantics as model fields: "env" / empty /
+    missing -> `default_env`, "env:VAR" -> that var, else literal. A YAML list
+    leaf is joined into a comma-separated string. Falls back to `default`
+    when nothing resolves — settings are optional, so this never raises.
+    """
+    node: Any = _load_config()
+    for key in path:
+        node = node.get(key) if isinstance(node, dict) else None
+    if isinstance(node, list):
+        node = ",".join(str(item) for item in node)
+    elif isinstance(node, dict):  # a mapping is not a leaf value
+        node = None
+    resolved = _resolve(node, default_env)
+    return resolved if resolved else default

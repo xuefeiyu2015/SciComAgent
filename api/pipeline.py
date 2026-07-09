@@ -3,6 +3,13 @@
 Wires the 4 steps end to end:
     fetch+extract -> claim ledger -> per-platform draft -> faithfulness check
 
+plus an optional background path between ledger and draft (inp.background):
+    topic abstraction -> external content search -> background materials
+
+Background materials are framing context for the drafter ONLY — never facts,
+never ledger entries — and the stage degrades gracefully: any failure yields a
+background_error Notice and the run drafts without background.
+
 A plain, linear `run(inp)` — no LangGraph. Model names come from config by ROLE
 inside each step; nothing is hardcoded here. The whole run stays in one language:
 `inp.language` threads through the ledger, every draft and every check.
@@ -14,6 +21,7 @@ draft + provenance (claim ledger) + overstatement flags for review.
 
 from __future__ import annotations
 
+from api.background import gather_background
 from api.check import check_faithfulness
 from api.draft import draft_platform
 from api.extract import extract_card
@@ -22,6 +30,7 @@ from api.ledger import build_ledger
 from api.schema import (
     AgentInput,
     AgentOutput,
+    BackgroundMaterial,
     CheckFlag,
     Claim,
     Notice,
@@ -31,6 +40,7 @@ from api.schema import (
     PlatformOutput,
     Status,
 )
+from api.topic import abstract_topic
 
 # Redraft attempts after the first draft, while faithfulness flags remain.
 MAX_REDRAFTS = 2
@@ -50,33 +60,20 @@ def run(inp: AgentInput) -> AgentOutput:
         platform, the claim ledger as provenance, and any overstatement flags.
         Never auto-publishes.
     """
-    res = fetch_source(inp.source, inp.source_type)
-    if not res.ok:
-        return AgentOutput(
-            status=Status.failed,
-            notices=[
-                Notice(
-                    code=NoticeCode(res.code),
-                    message=res.reason,
-                    source_url=res.source_url,
-                )
-            ],
-        )
+    card, ledger, early = _fetch_and_build_ledger(inp)
+    if early is not None:
+        return early
 
-    card = extract_card(res.text)
-    ledger = build_ledger(card, inp.language)
-
-    # CLAUDE.md hard rule #1: if nothing is sourced, nothing may be written.
-    # Refuse to draft on an empty ledger rather than inventing claims.
-    if not ledger:
-        return AgentOutput(status=Status.no_claims, claim_ledger=ledger)
+    notices: list[Notice] = []
+    background: list[BackgroundMaterial] = []
+    if inp.background:
+        background = _background_or_notice(card, inp, notices)
 
     platform_outputs: list[PlatformOutput] = []
     overreach_flags: list[OverreachFlag] = []
-    notices: list[Notice] = []
     for platform in inp.platforms:
         try:
-            draft, flags = _draft_one(platform, ledger, card, inp)
+            draft, flags = _draft_one(platform, ledger, card, inp, background)
         except Exception as err:  # one platform failing must not sink the others
             notices.append(
                 Notice(
@@ -93,8 +90,64 @@ def run(inp: AgentInput) -> AgentOutput:
         platform_outputs=platform_outputs,
         claim_ledger=ledger,
         overreach_flags=overreach_flags,
+        background_materials=background,
         notices=notices,
     )
+
+
+def _fetch_and_build_ledger(
+    inp: AgentInput,
+) -> tuple[dict | None, list[Claim], AgentOutput | None]:
+    """Shared prelude: fetch -> source card -> claim ledger.
+
+    Returns (card, ledger, early_output). `early_output` is a terminal
+    AgentOutput when the run cannot proceed — `status=failed` on a fetch
+    failure (never raises) or `status=no_claims` on an empty ledger (CLAUDE.md
+    hard rule #1: nothing sourced -> nothing written) — and None when drafting
+    should continue, in which case `card` and `ledger` are populated.
+    """
+    res = fetch_source(inp.source, inp.source_type)
+    if not res.ok:
+        return (
+            None,
+            [],
+            AgentOutput(
+                status=Status.failed,
+                notices=[
+                    Notice(
+                        code=NoticeCode(res.code),
+                        message=res.reason,
+                        source_url=res.source_url,
+                    )
+                ],
+            ),
+        )
+
+    card = extract_card(res.text)
+    ledger = build_ledger(card, inp.language)
+    if not ledger:
+        return card, [], AgentOutput(status=Status.no_claims, claim_ledger=[])
+    return card, ledger, None
+
+
+def extract_ledger_preview(inp: AgentInput) -> AgentOutput:
+    """Fetch + extract + build the claim ledger ONLY — no drafting.
+
+    A cheap provenance preview (extractor role only, no drafter/reviewer spend)
+    so a caller can inspect and approve the source-grounded claims before
+    committing to full generation. Reuses the same fetch-failure and
+    empty-ledger handling as `run` via `_fetch_and_build_ledger`.
+
+    Returns:
+        On failure/empty, the same terminal AgentOutput `run` would return
+        (`status=failed` / `no_claims`). On success, an AgentOutput with
+        `status=ok` and the populated `claim_ledger`; `platform_outputs` empty.
+        Never auto-publishes (there is nothing to publish).
+    """
+    _card, ledger, early = _fetch_and_build_ledger(inp)
+    if early is not None:
+        return early
+    return AgentOutput(status=Status.ok, claim_ledger=ledger)
 
 
 def _platform_name(platform: Platform | str) -> str:
@@ -102,26 +155,54 @@ def _platform_name(platform: Platform | str) -> str:
     return platform.value if isinstance(platform, Platform) else str(platform)
 
 
+def _background_or_notice(
+    card: dict, inp: AgentInput, notices: list[Notice]
+) -> list[BackgroundMaterial]:
+    """Run the background path; a failure must NOT sink the run.
+
+    Any exception (search stack down, researcher model misconfigured, ...)
+    degrades to no background plus one background_error Notice — the drafts
+    are still produced. No results is NOT an error: empty list, no Notice.
+    """
+    try:
+        topic = abstract_topic(card)
+        return gather_background(topic, card, inp.language)
+    except Exception as err:
+        notices.append(
+            Notice(
+                code=NoticeCode.background_error,
+                message=f"background search skipped — {err}",
+            )
+        )
+        return []
+
+
 def _draft_one(
     platform: Platform,
     ledger: list[Claim],
     card: dict,
     inp: AgentInput,
+    background: list[BackgroundMaterial],
 ) -> tuple[PlatformOutput, list[CheckFlag]]:
     """Draft one platform, then check + redraft until clean or out of attempts.
 
     Drafting and checking use DIFFERENT models and prompts (CLAUDE.md rule #3):
     `draft_platform` runs the drafter role, `check_faithfulness` the reviewer.
+    Background materials (framing only) go to every draft attempt, including
+    redrafts; the checker never sees them — it stays ledger-only, so a
+    background-derived overstatement is flagged like any other.
 
     Returns the final draft plus whatever flags remain after the last check —
     those become the human-facing overstatement flags.
     """
-    draft = draft_platform(platform, ledger, inp)
+    draft = draft_platform(platform, ledger, inp, background=background)
     flags = check_faithfulness(draft, ledger, card, inp.language)
     for _ in range(MAX_REDRAFTS):
         if not flags:
             break
-        draft = draft_platform(platform, ledger, inp, fix=_flags_to_fix(flags))
+        draft = draft_platform(
+            platform, ledger, inp, fix=_flags_to_fix(flags), background=background
+        )
         flags = check_faithfulness(draft, ledger, card, inp.language)
     return draft, flags
 
