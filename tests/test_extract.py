@@ -14,6 +14,7 @@ from api.extract import CARD_FIELDS, _parse_card, extract_card
 
 _CARD_JSON = """{
   "title": "A mouse study",
+  "contribution": "[finding] An experimental compound shrank tumors in mice, an early result",
   "findings": ["Treatment reduced tumor volume in mice (n=12), preliminary"],
   "methods": ["randomized, in vivo mouse model"],
   "key_numbers": ["23% reduction in tumor volume in mice (n=12)"],
@@ -40,6 +41,7 @@ def test_extract_card_parses_and_passes_prompt(monkeypatch):
 
     assert set(card) == set(CARD_FIELDS)
     assert card["title"] == "A mouse study"
+    assert card["contribution"].startswith("[finding]")  # angle field parsed
     assert "preliminary" in card["findings"][0]  # qualifier survives parsing
     # system prompt then the source text was sent to the model
     assert stub.seen[0].content == extract._prompt()
@@ -58,5 +60,6 @@ def test_extract_card_tolerates_code_fences_and_prose(monkeypatch):
 def test_parse_normalizes_missing_sections():
     card = _parse_card({"title": "X"})
     assert card["title"] == "X"
+    assert card["contribution"] == ""  # string field defaults to "", not []
     assert card["findings"] == []
     assert card["key_figures"] == []

@@ -188,20 +188,23 @@ def _draft_one(
 
     Drafting and checking use DIFFERENT models and prompts (CLAUDE.md rule #3):
     `draft_platform` runs the drafter role, `check_faithfulness` the reviewer.
-    Background materials (framing only) go to every draft attempt, including
-    redrafts; the checker never sees them — it stays ledger-only, so a
-    background-derived overstatement is flagged like any other.
+    The angle (the card's `contribution`) and background materials (framing only)
+    go to every draft attempt, including redrafts; the checker never sees them —
+    it stays ledger-only (plus the card for context), so a background- or
+    angle-derived overstatement is flagged like any other.
 
     Returns the final draft plus whatever flags remain after the last check —
     those become the human-facing overstatement flags.
     """
-    draft = draft_platform(platform, ledger, inp, background=background)
+    angle = str(card.get("contribution", "")) if card else ""
+    draft = draft_platform(platform, ledger, inp, background=background, angle=angle)
     flags = check_faithfulness(draft, ledger, card, inp.language)
     for _ in range(MAX_REDRAFTS):
         if not flags:
             break
         draft = draft_platform(
-            platform, ledger, inp, fix=_flags_to_fix(flags), background=background
+            platform, ledger, inp, fix=_flags_to_fix(flags),
+            background=background, angle=angle,
         )
         flags = check_faithfulness(draft, ledger, card, inp.language)
     return draft, flags

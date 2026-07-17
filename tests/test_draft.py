@@ -54,6 +54,29 @@ def test_payload_without_background_is_unchanged():
     assert _human_payload(_LEDGER, None) == _human_payload(_LEDGER, None, None)
     assert _human_payload(_LEDGER, None) == _human_payload(_LEDGER, None, [])
     assert "BACKGROUND MATERIALS" not in _human_payload(_LEDGER, None)
+    assert "ANGLE" not in _human_payload(_LEDGER, None)  # no angle block by default
+
+
+def test_payload_angle_block_present_and_labeled_framing():
+    payload = _human_payload(_LEDGER, None, None, "[method] a new optogenetic tool")
+    assert "ANGLE" in payload
+    assert "[method] a new optogenetic tool" in payload
+    assert "FRAMING" in payload  # explicitly marked not-a-fact
+    # angle sits after the ledger contract, never before it
+    assert payload.index("Claim ledger") < payload.index("ANGLE")
+
+
+def test_payload_blank_angle_adds_no_block():
+    assert _human_payload(_LEDGER, None, None, "   ") == _human_payload(_LEDGER, None)
+
+
+def test_payload_order_ledger_angle_background():
+    payload = _human_payload(_LEDGER, None, [_MATERIAL], "[method] tool")
+    assert (
+        payload.index("Claim ledger")
+        < payload.index("ANGLE")
+        < payload.index("BACKGROUND MATERIALS")
+    )
 
 
 def test_payload_background_block_labeled_context_only():

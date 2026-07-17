@@ -58,7 +58,7 @@ def _stub_steps(
 
     draft_calls: list[tuple[Platform, str | None, list | None]] = []
 
-    def fake_draft(platform, ledger, inp, fix=None, background=None):
+    def fake_draft(platform, ledger, inp, fix=None, background=None, angle=None):
         draft_calls.append((platform, fix, background))
         return PlatformOutput(platform=platform, body="draft", title_options=["t"])
 
@@ -150,6 +150,28 @@ def test_background_materials_reach_output_and_every_draft(monkeypatch):
     # initial draft AND the redraft both received the same background
     assert len(draft_calls) == 2
     assert all(background == _MATERIALS for _, _, background in draft_calls)
+
+
+def test_card_contribution_passed_as_angle_to_every_draft(monkeypatch):
+    # a card carrying a contribution -> that string reaches every draft attempt
+    flag = CheckFlag(claim_id="c1", quote="q", issue="i", suggestion="s")
+    _stub_steps(monkeypatch, flags_seq=[[flag], []])  # forces one redraft
+    monkeypatch.setattr(
+        pipeline, "extract_card",
+        lambda text: {"title": "t", "contribution": "[method] a new tool"},
+    )
+
+    angles: list[str | None] = []
+
+    def capture_draft(platform, ledger, inp, fix=None, background=None, angle=None):
+        angles.append(angle)
+        return PlatformOutput(platform=platform, body="d", title_options=["t"])
+
+    monkeypatch.setattr(pipeline, "draft_platform", capture_draft)
+
+    run(_input(platforms=[Platform.news]))
+
+    assert angles == ["[method] a new tool", "[method] a new tool"]  # draft + redraft
 
 
 def test_background_failure_degrades_with_notice(monkeypatch):

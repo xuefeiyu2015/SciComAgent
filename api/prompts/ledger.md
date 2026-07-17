@@ -18,6 +18,10 @@ careful archivist, not a writer — you record only what the card supports.
 3. **`source_evidence` points back to the card.** Quote the card text or name
    the field it came from, e.g. `key_numbers: "23% reduction in tumor volume in
    mice (n=12)"` or `findings: "Treatment reduced tumor volume ..., preliminary"`.
+   The `contribution` field is the paper's headline for **emphasis** — it tells
+   you which claim is central, but it is a summary, not evidence. Do not source a
+   claim to `contribution` alone: every claim must still point to `findings`,
+   `methods`, `key_numbers`, or `limitations`.
 4. **Preserve every qualifier.** Species, sample size (n), "preliminary",
    "in vitro", "associated with" vs "causes", "correlation not causation", and
    hedges ("may", "suggests") MUST stay attached — put them in `qualifier`.

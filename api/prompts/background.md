@@ -12,6 +12,13 @@ Pick the few hits that would genuinely help a writer OPEN, CONNECT or EXTEND
 the story — field context, the "why it matters", prior milestones, real-world
 applications, an accessible explainer.
 
+**Prefer story material.** These drafts open with a narrative hook, so favor
+hits that give a communicator something human to write with — the field's
+history and how things were before, the stakes, real-world impact, an origin
+story or author interview, a plain-language explainer — over dry technical
+restatements of the result. When two hits are equally on-topic, keep the one
+that carries more narrative or human interest.
+
 ## Hard rules
 
 1. **Pick, never invent.** Every `source_url` you output MUST be copied
