@@ -34,6 +34,11 @@ htmlcov/
 # Local extraction/run artifacts (review only, not source)
 outputs/
 
+# Learned-style example articles (local only; distilled into a StyleProfile)
+api/styles/examples/*
+!api/styles/examples/.gitkeep
+!api/styles/examples/README.md
+
 # OS
 .DS_Store
 

@@ -64,6 +64,7 @@ class NoticeCode(str, Enum):
     fetch_error = "fetch_error"  # network failure / unreachable link
     draft_error = "draft_error"  # pipeline-internal: one platform's draft crashed
     background_error = "background_error"  # background search skipped; drafts unaffected
+    style_error = "style_error"  # style distillation skipped; drafts fall back to default voice
 
 
 class SourceKind(str, Enum):
@@ -131,6 +132,50 @@ class BackgroundMaterial(BaseModel):
     )
     relation: str = Field(
         default="", description="Why this helps frame the paper's story."
+    )
+
+
+# --- learned writing style ----------------------------------------------------
+
+class StyleProfile(BaseModel):
+    """Distilled writing VOICE from local example articles — never facts.
+
+    Produced by api.style.load_style_profile from the articles in
+    api/styles/examples/. Carries only transferable craft (voice, rhythm,
+    openings, vocabulary, devices, things to avoid); all facts, numbers and
+    subject matter of the examples are stripped during distillation.
+
+    Layers on top of the platform blueprint in api/styles/*.md — it never
+    replaces it. Shown to the DRAFTER only: any number/causation/magnitude/
+    'first'/'proves' statement must still map to the claim ledger
+    (CLAUDE.md rule #1), and the reviewer (api.check) never sees this.
+    """
+
+    voice: str = Field(
+        default="", description="Overall persona and stance toward the reader."
+    )
+    rhythm: str = Field(
+        default="", description="Sentence/paragraph rhythm and pacing."
+    )
+    openings: list[str] = Field(
+        default_factory=list,
+        description="Abstract opening moves (patterns, not topic-bound sentences).",
+    )
+    vocabulary: list[str] = Field(
+        default_factory=list,
+        description="Diction traits: register, concreteness, metaphor sourcing.",
+    )
+    devices: list[str] = Field(
+        default_factory=list,
+        description="Recurring rhetorical/structural devices worth reusing.",
+    )
+    avoid: list[str] = Field(
+        default_factory=list,
+        description="Habits the examples steer clear of (clichés, hype, filler).",
+    )
+    sources: list[str] = Field(
+        default_factory=list,
+        description="Filenames the profile was distilled from (audit trail only).",
     )
 
 
@@ -213,6 +258,11 @@ class AgentOutput(BaseModel):
     background_materials: list[BackgroundMaterial] = Field(
         default_factory=list,
         description="External context shown to the drafter (framing only; audit trail).",
+    )
+    style_profile: StyleProfile | None = Field(
+        default=None,
+        description="Learned voice applied to the drafts (voice only; audit trail). "
+        "None when api/styles/examples/ is empty.",
     )
     notices: list[Notice] = Field(default_factory=list)
     status: Status = Status.needs_review
