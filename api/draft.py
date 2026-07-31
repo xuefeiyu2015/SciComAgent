@@ -31,6 +31,7 @@ from api.schema import (
     ConfidenceLevel,
     Platform,
     PlatformOutput,
+    StyleProfile,
 )
 
 _API_DIR = Path(__file__).resolve().parent
@@ -75,6 +76,7 @@ def draft_platform(
     fix: str | None = None,
     background: list[BackgroundMaterial] | None = None,
     angle: str | None = None,
+    style: StyleProfile | None = None,
 ) -> PlatformOutput:
     """Draft one platform's content from the claim ledger.
 
@@ -88,6 +90,9 @@ def draft_platform(
         angle: optional one-line statement of the paper's primary contribution
             (the card's `contribution`) to lead with — framing only, never a
             fact. Every number/causal claim still comes from the ledger.
+        style: optional learned voice (api.style) layered on top of the
+            platform style card — voice and structure only, never a source of
+            facts. None reproduces the default drafting behavior exactly.
 
     Returns:
         A PlatformOutput with three title_options, cover_copy, body and
@@ -100,7 +105,7 @@ def draft_platform(
     data = invoke_json(
         model,
         [
-            SystemMessage(content=_system_prompt(platform, inp)),
+            SystemMessage(content=_system_prompt(platform, inp, style)),
             HumanMessage(content=_human_payload(ledger, fix, background, angle)),
         ],
     )
@@ -110,15 +115,65 @@ def draft_platform(
     return _parse_draft(data, platform, markable)
 
 
-def _system_prompt(platform: Platform, inp: AgentInput) -> str:
-    """Assemble base prompt + style card + red lines + the injected dials."""
-    return "\n\n".join(
-        (
-            _base_prompt(),
-            "# Platform style card\n\n" + _style_card(platform.value),
-            "# Red lines\n\n" + _red_lines(),
-            _dials(inp),
-        )
+def _system_prompt(
+    platform: Platform, inp: AgentInput, style: StyleProfile | None = None
+) -> str:
+    """Assemble base prompt + style card + optional voice + red lines + dials.
+
+    The learned voice sits between the platform card and the red lines: it
+    refines HOW the platform structure is written, and the red lines still
+    have the last word. Without a profile (or with an empty one) the prompt is
+    byte-identical to the pre-style pipeline.
+    """
+    layers = [
+        _base_prompt(),
+        "# Platform style card\n\n" + _style_card(platform.value),
+    ]
+    voice = _voice_layer(style)
+    if voice:
+        layers.append(voice)
+    layers += ["# Red lines\n\n" + _red_lines(), _dials(inp)]
+    return "\n\n".join(layers)
+
+
+def _voice_layer(style: StyleProfile | None) -> str:
+    """Render the learned voice profile, or "" when there is nothing to say.
+
+    Voice guidance only: the fact boundary is stated inline so the drafter
+    cannot read the profile as permission to assert anything (CLAUDE.md rule
+    #1). The reviewer in api.check never receives this layer.
+    """
+    if style is None:
+        return ""
+
+    sections = [
+        ("Voice", style.voice),
+        ("Rhythm", style.rhythm),
+        ("Openings to reach for", style.openings),
+        ("Vocabulary", style.vocabulary),
+        ("Devices", style.devices),
+        ("Avoid", style.avoid),
+    ]
+    lines: list[str] = []
+    for label, value in sections:
+        if isinstance(value, str):
+            if value.strip():
+                lines.append(f"- {label}: {value.strip()}")
+        elif value:
+            lines.append(f"- {label}:")
+            lines += [f"  - {item}" for item in value]
+    if not lines:  # nothing usable distilled -> no layer at all
+        return ""
+
+    return (
+        "# Voice profile (voice & structure ONLY, not facts)\n\n"
+        "Distilled from example articles the operator likes. It governs HOW you "
+        "write — voice & structure ONLY, never a source of facts; every "
+        'number/causal/magnitude/"first"/"proves" claim still comes only from '
+        "the claim ledger. The profile carries no subject matter: do not infer "
+        "any topic, example, or fact from it. It layers on top of the platform "
+        "style card above (that card still owns the STRUCTURE) and the red "
+        "lines below always win.\n\n" + "\n".join(lines)
     )
 
 
