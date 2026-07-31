@@ -41,9 +41,14 @@ def _input(**kw) -> AgentInput:
 
 
 def _stub_steps(
-    monkeypatch, *, ok=True, code="ok", reason="", flags_seq=None, materials=None
+    monkeypatch, *, ok=True, code="ok", reason="", flags_seq=None, materials=None,
+    style=None,
 ):
-    """Stub every pipeline step; record (platform, fix, background) per draft."""
+    """Stub every pipeline step; record (platform, fix, background) per draft.
+
+    `load_style_profile` is stubbed too — without it the suite would read the
+    operator's real api/styles/examples/ folder and call live models.
+    """
     monkeypatch.setattr(
         pipeline, "fetch_source",
         lambda source, source_type: FetchResult(ok=ok, text="body", reason=reason, code=code),
@@ -55,10 +60,13 @@ def _stub_steps(
         pipeline, "gather_background",
         lambda topic, card, language: list(materials or []),
     )
+    monkeypatch.setattr(pipeline, "load_style_profile", lambda: style)
 
     draft_calls: list[tuple[Platform, str | None, list | None]] = []
 
-    def fake_draft(platform, ledger, inp, fix=None, background=None, angle=None):
+    def fake_draft(
+        platform, ledger, inp, fix=None, background=None, angle=None, style=None
+    ):
         draft_calls.append((platform, fix, background))
         return PlatformOutput(platform=platform, body="draft", title_options=["t"])
 
@@ -163,7 +171,9 @@ def test_card_contribution_passed_as_angle_to_every_draft(monkeypatch):
 
     angles: list[str | None] = []
 
-    def capture_draft(platform, ledger, inp, fix=None, background=None, angle=None):
+    def capture_draft(
+        platform, ledger, inp, fix=None, background=None, angle=None, style=None
+    ):
         angles.append(angle)
         return PlatformOutput(platform=platform, body="d", title_options=["t"])
 

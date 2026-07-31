@@ -10,6 +10,11 @@ Background materials are framing context for the drafter ONLY — never facts,
 never ledger entries — and the stage degrades gracefully: any failure yields a
 background_error Notice and the run drafts without background.
 
+An optional learned VOICE (api.style) is distilled once per run from the example
+articles in api/styles/examples/ and passed to every draft and redraft. Like
+background it is drafter-only and degrades gracefully (style_error Notice, no
+profile); the faithfulness checker never receives it.
+
 A plain, linear `run(inp)` — no LangGraph. Model names come from config by ROLE
 inside each step; nothing is hardcoded here. The whole run stays in one language:
 `inp.language` threads through the ledger, every draft and every check.
@@ -39,7 +44,9 @@ from api.schema import (
     Platform,
     PlatformOutput,
     Status,
+    StyleProfile,
 )
+from api.style import load_style_profile
 from api.topic import abstract_topic
 
 # Redraft attempts after the first draft, while faithfulness flags remain.
@@ -69,11 +76,14 @@ def run(inp: AgentInput) -> AgentOutput:
     if inp.background:
         background = _background_or_notice(card, inp, notices)
 
+    # Distilled ONCE per run, then shared by every platform's draft + redrafts.
+    style = _style_or_notice(notices)
+
     platform_outputs: list[PlatformOutput] = []
     overreach_flags: list[OverreachFlag] = []
     for platform in inp.platforms:
         try:
-            draft, flags = _draft_one(platform, ledger, card, inp, background)
+            draft, flags = _draft_one(platform, ledger, card, inp, background, style)
         except Exception as err:  # one platform failing must not sink the others
             notices.append(
                 Notice(
@@ -91,6 +101,7 @@ def run(inp: AgentInput) -> AgentOutput:
         claim_ledger=ledger,
         overreach_flags=overreach_flags,
         background_materials=background,
+        style_profile=style,
         notices=notices,
     )
 
@@ -177,34 +188,58 @@ def _background_or_notice(
         return []
 
 
+def _style_or_notice(notices: list[Notice]) -> StyleProfile | None:
+    """Distill the learned voice; a failure must NOT sink the run.
+
+    Any exception (stylist/reviewer model misconfigured, unreadable examples,
+    a failed style audit) degrades to no profile plus one style_error Notice —
+    the drafts are still produced, in the default voice. An empty examples
+    folder is NOT an error: None, no Notice.
+    """
+    try:
+        return load_style_profile()
+    except Exception as err:
+        notices.append(
+            Notice(
+                code=NoticeCode.style_error,
+                message=f"learned writing style skipped — {err}",
+            )
+        )
+        return None
+
+
 def _draft_one(
     platform: Platform,
     ledger: list[Claim],
     card: dict,
     inp: AgentInput,
     background: list[BackgroundMaterial],
+    style: StyleProfile | None = None,
 ) -> tuple[PlatformOutput, list[CheckFlag]]:
     """Draft one platform, then check + redraft until clean or out of attempts.
 
     Drafting and checking use DIFFERENT models and prompts (CLAUDE.md rule #3):
     `draft_platform` runs the drafter role, `check_faithfulness` the reviewer.
-    The angle (the card's `contribution`) and background materials (framing only)
-    go to every draft attempt, including redrafts; the checker never sees them —
-    it stays ledger-only (plus the card for context), so a background- or
-    angle-derived overstatement is flagged like any other.
+    The angle (the card's `contribution`), the background materials and the
+    learned voice profile (all framing/voice only) go to every draft attempt,
+    including redrafts; the checker never sees any of them — it stays
+    ledger-only (plus the card for context), so a background-, angle- or
+    style-derived overstatement is flagged like any other.
 
     Returns the final draft plus whatever flags remain after the last check —
     those become the human-facing overstatement flags.
     """
     angle = str(card.get("contribution", "")) if card else ""
-    draft = draft_platform(platform, ledger, inp, background=background, angle=angle)
+    draft = draft_platform(
+        platform, ledger, inp, background=background, angle=angle, style=style
+    )
     flags = check_faithfulness(draft, ledger, card, inp.language)
     for _ in range(MAX_REDRAFTS):
         if not flags:
             break
         draft = draft_platform(
             platform, ledger, inp, fix=_flags_to_fix(flags),
-            background=background, angle=angle,
+            background=background, angle=angle, style=style,
         )
         flags = check_faithfulness(draft, ledger, card, inp.language)
     return draft, flags
