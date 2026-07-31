@@ -14,17 +14,23 @@ import pytest
 
 from api import pipeline
 from api.schema import (
+    BackgroundMaterial,
     CheckFlag,
     Claim,
     NoticeCode,
     Platform,
     PlatformOutput,
     Status,
+    TopicAbstraction,
 )
 
 
-def fake_input(platforms=("wechat",), source="https://example.org/paper"):
-    """A stand-in for AgentInput (pipeline.run only reads attributes)."""
+def fake_input(platforms=("wechat",), source="https://example.org/paper", background=False):
+    """A stand-in for AgentInput (pipeline.run only reads attributes).
+
+    background defaults to False here: these tests pin the classic 4-step
+    contract; the background-specific guardrail wires its own stubs.
+    """
     return types.SimpleNamespace(
         source=source,
         source_type="url",
@@ -32,6 +38,7 @@ def fake_input(platforms=("wechat",), source="https://example.org/paper"):
         language="zh",
         audience="general_public",
         liveliness=3,
+        background=background,
     )
 
 
@@ -165,3 +172,42 @@ def test_platform_isolation(monkeypatch):
     assert wechat.body == "ok"
     failures = [n for n in out.notices if n.code == NoticeCode.draft_error]
     assert failures and "news" in failures[0].message    # the failure is surfaced
+
+
+# Rule 1 still binds WITH background materials: a striking external number in a
+# draft is "a claim not in the ledger" and must surface to the human ------------
+def test_background_does_not_weaken_the_ledger_contract(monkeypatch):
+    tempting = BackgroundMaterial(
+        snippet="A 90% accuracy jump was reported industry-wide.",
+        source_url="https://blog.example/hype",
+    )
+    monkeypatch.setattr(pipeline, "fetch_source", _ok_fetch)
+    monkeypatch.setattr(pipeline, "extract_card", lambda t: {"title": "x"})
+    monkeypatch.setattr(pipeline, "build_ledger", lambda c, lang: _one_claim())
+    monkeypatch.setattr(pipeline, "abstract_topic", lambda card: TopicAbstraction())
+    monkeypatch.setattr(
+        pipeline, "gather_background", lambda topic, card, lang: [tempting]
+    )
+    # the drafter (wrongly) writes the background number into the draft ...
+    monkeypatch.setattr(
+        pipeline, "draft_platform",
+        lambda platform, *a, **k: PlatformOutput(
+            platform=platform, body="Accuracy jumped 90% industry-wide."
+        ),
+    )
+    # ... and the ledger-only checker flags it, as it would any unsourced claim
+    monkeypatch.setattr(
+        pipeline, "check_faithfulness",
+        lambda *a, **k: [CheckFlag(
+            quote="Accuracy jumped 90% industry-wide.",
+            issue="claim not in the ledger",
+            suggestion="remove the external statistic",
+        )],
+    )
+
+    out = pipeline.run(fake_input(background=True))
+
+    assert out.status == Status.needs_review
+    assert out.background_materials == [tempting]         # audit trail intact
+    assert out.overreach_flags                             # the flag reaches a human
+    assert "not in the ledger" in out.overreach_flags[0].reason

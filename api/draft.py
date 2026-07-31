@@ -26,6 +26,7 @@ from api.jsonio import invoke_json
 from api.lang import language_label
 from api.schema import (
     AgentInput,
+    BackgroundMaterial,
     Claim,
     ConfidenceLevel,
     Platform,
@@ -72,6 +73,8 @@ def draft_platform(
     ledger: list[Claim],
     inp: AgentInput,
     fix: str | None = None,
+    background: list[BackgroundMaterial] | None = None,
+    angle: str | None = None,
 ) -> PlatformOutput:
     """Draft one platform's content from the claim ledger.
 
@@ -80,6 +83,11 @@ def draft_platform(
         ledger: the claim ledger — the ONLY facts the draft may use.
         inp: request carrying the dials (language, audience, liveliness).
         fix: optional faithfulness-check feedback to address in a redraft.
+        background: optional external materials (api.background) — framing
+            context only, never a source of facts.
+        angle: optional one-line statement of the paper's primary contribution
+            (the card's `contribution`) to lead with — framing only, never a
+            fact. Every number/causal claim still comes from the ledger.
 
     Returns:
         A PlatformOutput with three title_options, cover_copy, body and
@@ -93,7 +101,7 @@ def draft_platform(
         model,
         [
             SystemMessage(content=_system_prompt(platform, inp)),
-            HumanMessage(content=_human_payload(ledger, fix)),
+            HumanMessage(content=_human_payload(ledger, fix, background, angle)),
         ],
     )
     # The drafter tends to over-cite; keep markers only on the hedged claims so
@@ -126,12 +134,40 @@ def _dials(inp: AgentInput) -> str:
     )
 
 
-def _human_payload(ledger: list[Claim], fix: str | None) -> str:
-    """The ledger (the only facts) plus any revision notes, as the user turn."""
+def _human_payload(
+    ledger: list[Claim],
+    fix: str | None,
+    background: list[BackgroundMaterial] | None = None,
+    angle: str | None = None,
+) -> str:
+    """The ledger (the only facts), optional angle, background, revision notes.
+
+    With no angle, no background and no fix the payload is byte-identical to the
+    pre-background pipeline — redrafts and existing callers are unaffected.
+    """
     payload = (
         "Claim ledger (the ONLY facts you may use), as JSON:\n"
         + json.dumps([c.model_dump(mode="json") for c in ledger], ensure_ascii=False)
     )
+    if angle and angle.strip():
+        payload += (
+            "\n\nANGLE — the paper's primary contribution; LEAD the headline and "
+            "opening with this. It is FRAMING, not a fact: state every number, "
+            "magnitude, causal claim, and comparison ONLY from the ledger above, "
+            "and never quote the angle as evidence.\n" + angle.strip()
+        )
+    if background:
+        payload += (
+            "\n\nBACKGROUND MATERIALS — context and framing ONLY, NOT facts. "
+            "You may use these to open, connect, and enrich the story. You may "
+            'NOT state any number, causal claim, magnitude, "first", or '
+            '"proves" from them — every such statement must still come from '
+            "the claim ledger above. Never cite these as evidence for the "
+            "paper's results.\n"
+            + json.dumps(
+                [m.model_dump(mode="json") for m in background], ensure_ascii=False
+            )
+        )
     if fix and fix.strip():
         payload += (
             "\n\nRevision notes from the faithfulness check — fix these in this "

@@ -63,6 +63,18 @@ class NoticeCode(str, Enum):
     not_a_paper = "not_a_paper"  # not a research paper -> check the link
     fetch_error = "fetch_error"  # network failure / unreachable link
     draft_error = "draft_error"  # pipeline-internal: one platform's draft crashed
+    background_error = "background_error"  # background search skipped; drafts unaffected
+
+
+class SourceKind(str, Enum):
+    """Where a background-material hit came from."""
+
+    web = "web"                            # ddgs / wikipedia / tavily
+    arxiv = "arxiv"
+    semantic_scholar = "semantic_scholar"
+    pubmed = "pubmed"
+    crossref = "crossref"
+    reference = "reference"                # reserved: parsed from the paper's own refs
 
 
 # --- input ------------------------------------------------------------------
@@ -79,6 +91,47 @@ class AgentInput(BaseModel):
     language: Language = Field(default=Language.zh, description="Output language.")
     audience: str = Field(default="general_public", description="Intended reader.")
     liveliness: int = Field(default=3, ge=1, le=5, description="Tone liveliness, 1–5.")
+    background: bool = Field(
+        default=True,
+        description="Gather external background materials (web/arXiv/scholarly APIs) "
+        "as framing context for the drafter. Failure degrades gracefully.",
+    )
+
+
+# --- background research path -------------------------------------------------
+
+class TopicAbstraction(BaseModel):
+    """Distilled core of the paper, used to search for background materials."""
+
+    topic: str = Field(default="", description="One-sentence core topic of the paper.")
+    themes: list[str] = Field(
+        default_factory=list, description="Broader themes/fields the paper belongs to."
+    )
+    queries: list[str] = Field(
+        default_factory=list,
+        description="English search queries for external sources (capped at 4).",
+    )
+
+
+class BackgroundMaterial(BaseModel):
+    """One piece of external context shown to the drafter — framing ONLY.
+
+    Never a source of facts: any number/causation/magnitude/'first'/'proves'
+    statement in a draft must still map to the claim ledger (CLAUDE.md rule #1).
+    Surfaced in AgentOutput so a human can audit what the drafter saw.
+    """
+
+    snippet: str = Field(description="Short excerpt/summary of the material.")
+    source_title: str = Field(default="", description="Title of the external source.")
+    source_url: str = Field(
+        description="URL of the source; must match a retrieved search hit."
+    )
+    kind: SourceKind = Field(
+        default=SourceKind.web, description="Which source family it came from."
+    )
+    relation: str = Field(
+        default="", description="Why this helps frame the paper's story."
+    )
 
 
 # --- output -----------------------------------------------------------------
@@ -157,5 +210,9 @@ class AgentOutput(BaseModel):
     platform_outputs: list[PlatformOutput] = Field(default_factory=list)
     claim_ledger: list[Claim] = Field(default_factory=list)
     overreach_flags: list[OverreachFlag] = Field(default_factory=list)
+    background_materials: list[BackgroundMaterial] = Field(
+        default_factory=list,
+        description="External context shown to the drafter (framing only; audit trail).",
+    )
     notices: list[Notice] = Field(default_factory=list)
     status: Status = Status.needs_review

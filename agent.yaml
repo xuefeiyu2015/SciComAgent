@@ -1,4 +1,4 @@
-# agent.yaml — Turing Planet MCP agent manifest
+# agent.yaml —  MCP agent manifest
 # Models are declared by ROLE; concrete names live in config, never here.
 
 name: scicomm-agent
@@ -21,36 +21,85 @@ tools:
       language:   { required: false, default: zh, allowed: [zh, en] }
       audience:   { required: false, default: general_public }
       liveliness: { required: false, default: 3, min: 1, max: 5 }
+      background: { required: false, default: true, description: "Gather external background materials (web/arXiv/scholarly APIs) as framing context for the drafts" }
     # Return contract (see AgentOutput in api/schema.py). Never auto-published.
     output:
-      platform_outputs: "Per-platform drafts (title_options, cover_copy, body, hashtags)"
-      claim_ledger:     "Source-grounded claims with evidence + qualifier"
-      overreach_flags:  "Statements that over-claim vs. the ledger (for a human)"
-      status:           { allowed: [ok, needs_review, failed], description: "Coarse outcome" }
+      platform_outputs:     "Per-platform drafts (title_options, cover_copy, body, hashtags)"
+      claim_ledger:         "Source-grounded claims with evidence + qualifier"
+      overreach_flags:      "Statements that over-claim vs. the ledger (for a human)"
+      background_materials: "External context shown to the drafter (framing only, never facts; audit trail)"
+      status:               { allowed: [ok, needs_review, failed], description: "Coarse outcome" }
       # Non-draft messages (e.g. why fetch failed). On failure: status=failed + one notice.
       notices:
         item: { code: NoticeCode, message: "actionable, human-readable reason", source_url: "source the notice is about" }
         code_meanings:
-          ok:          "full text obtained"
-          need_pdf:    "source exists but access is blocked (paywall) -> ask the user for the PDF"
-          too_short:   "reachable but too little text (stub / scanned PDF) -> ask the user for the PDF"
-          not_a_paper: "content is not a research paper -> ask the user to double-check the link"
-          fetch_error: "network failure / unreachable link"
+          ok:               "full text obtained"
+          need_pdf:         "source exists but access is blocked (paywall) -> ask the user for the PDF"
+          too_short:        "reachable but too little text (stub / scanned PDF) -> ask the user for the PDF"
+          not_a_paper:      "content is not a research paper -> ask the user to double-check the link"
+          fetch_error:      "network failure / unreachable link"
+          background_error: "background search skipped (drafts unaffected, produced without background)"
+
+  - name: extract_ledger
+    description: Extract just the claim ledger (source-grounded facts) from a paper, without drafting — a cheap provenance preview
+    parameters:
+      source_type: { required: true, allowed: [doi, url, pdf], description: "How to interpret `source`" }
+      source:     { required: true,  description: "PDF link / DOI / web URL of the paper" }
+      language:   { required: false, default: zh, allowed: [zh, en] }
+    # Returns an AgentOutput with claim_ledger populated + platform_outputs empty.
+    output:
+      claim_ledger: "Source-grounded claims with evidence + qualifier"
+      notices:      "Non-draft messages (e.g. need_pdf / too_short guidance)"
+      status:       { allowed: [ok, no_claims, failed], description: "ok = ledger ready; no_claims = nothing sourced; failed = fetch error" }
+
+  - name: check_draft
+    description: Re-check a (possibly human-edited) draft against its claim ledger; returns overstatement flags. Never publishes
+    parameters:
+      draft:    { required: true, description: "Draft to audit (PlatformOutput: platform, title_options, cover_copy, body, hashtags)" }
+      ledger:   { required: true, description: "Claim ledger the draft must stay within (e.g. from extract_ledger)" }
+      language: { required: false, default: zh, allowed: [zh, en] }
+    # Uses the reviewer role (DIFFERENT model than the drafter). Empty list = clean.
+    output:
+      flags: "List of overstatement flags {claim_id, quote, issue, suggestion}; empty means faithful"
+
+  - name: render
+    description: Format a generate/extract_ledger result as human-readable Markdown (display only; never publishes)
+    parameters:
+      result:             { required: true, description: "The AgentOutput to render (from generate / extract_ledger)" }
+      platform:           { required: false, allowed: [news, wechat, xhs], description: "Render only this platform's draft; omit for all" }
+      include_provenance: { required: false, default: true, description: "true = review view (flags + draft + ledger + sources); false = publish-ready post only" }
+    output:
+      markdown: "A Markdown string for display"
+
+  - name: health
+    description: Report agent readiness — configured model roles, enabled search sources, and optional-key presence (booleans only, never values)
+    parameters: {}
+    output:
+      roles:          "Per-role resolvability {extractor, drafter, reviewer, researcher: bool}"
+      search_sources: "Enabled external search clients"
+      optional_keys:  "Presence of optional API keys {tavily, semantic_scholar, ncbi: bool}"
+      byo_key:        "Always true — keys are brought via env, never stored"
 
 # Models are declared by ROLE; concrete names live in config, never here.
 model_requirements:
-  - { role: extractor, tier: cheap }    # fetch/extract + claim ledger
-  - { role: drafter,   tier: writing }  # per-platform draft
-  - { role: reviewer,  tier: strong }   # faithfulness check (different model than drafter)
+  - { role: extractor,  tier: cheap }    # fetch/extract + claim ledger
+  - { role: drafter,    tier: writing }  # per-platform draft
+  - { role: reviewer,   tier: strong }   # faithfulness check (different model than drafter)
+  - { role: researcher, tier: cheap }    # topic abstraction + background search (falls back to extractor)
 
 # Schema describing the agent's configurable settings (see config/).
 config_schema:
   models:
-    extractor: { provider: env, model: env }
-    drafter:   { provider: env, model: env }
-    reviewer:  { provider: env, model: env }
+    extractor:  { provider: env, model: env }
+    drafter:    { provider: env, model: env }
+    reviewer:   { provider: env, model: env }
+    researcher: { provider: env, model: env }  # optional; unconfigured -> extractor
   byo_key: true
   platforms: [news, wechat, xhs]
+  # Background-materials search: which external sources to query (all keyless).
+  # tavily may be added when TAVILY_API_KEY is provided via env (byo_key).
+  search:
+    sources: [arxiv, semantic_scholar, pubmed, crossref, wikipedia, ddgs]
 
 # Health/readiness probe
 health: /health

@@ -13,7 +13,9 @@ You may write **only** what the claim ledger supports. Every number, magnitude,
 percentage, causal verb ("causes", "reduces", "leads to"), comparison, "first",
 or "proves" statement MUST trace to a ledger entry — its `claim` backed by
 `source_evidence`. **If it is not in the ledger, do not write it.** Do not add
-facts, figures, or implications from your own knowledge.
+facts, figures, or implications from your own knowledge. Background materials,
+when provided, are framing only: they are NOT ledger entries and never license
+a number, causal verb, magnitude, "first", or "proves" statement.
 
 ## 2. Keep every qualifier
 

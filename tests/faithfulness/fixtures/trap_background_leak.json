@@ -1,0 +1,25 @@
+{
+  "name": "background-derived stat leaked into the draft",
+  "expect_issue": "claim-not-in-ledger",
+  "expect_keywords": ["ledger", "not in", "unsupported", "no source", "market", "billion", "40", "账本", "出处", "无依据"],
+  "card": {
+    "title": "A Transformer Variant for On-Device Translation",
+    "methods": "Benchmarked on WMT 2014 English-to-German.",
+    "main_findings": "The model reached 28.4 BLEU on WMT 2014 English-to-German.",
+    "limitations": "Single benchmark; on-device latency not measured."
+  },
+  "ledger": [
+    {
+      "id": "c1",
+      "claim": "The model reached 28.4 BLEU on WMT 2014 English-to-German.",
+      "source_evidence": "The model reached 28.4 BLEU on WMT 2014 English-to-German.",
+      "qualifier": "single benchmark",
+      "confidence": "high"
+    }
+  ],
+  "draft": {
+    "platform": "wechat",
+    "title_options": ["翻译新突破，还撑起了一个 400 亿美元的大市场"],
+    "body": "这项翻译技术在 WMT 2014 英德测试上达到 28.4 BLEU（c1 对应的高置信结果）。更重要的是，它正推动一个规模高达 400 亿美元的机器翻译市场高速增长——未来每个人的手机里都会有它。"
+  }
+}

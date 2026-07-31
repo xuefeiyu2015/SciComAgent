@@ -23,8 +23,20 @@ from api.jsonio import invoke_json
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "extract.md"
 
-# Card shape (see api/prompts/extract.md). title is a string; the rest lists.
-CARD_FIELDS = ("title", "findings", "methods", "key_numbers", "limitations", "key_figures")
+# Card shape (see api/prompts/extract.md). title and contribution are strings
+# (contribution names the paper's primary angle); the rest are lists.
+CARD_FIELDS = (
+    "title",
+    "contribution",
+    "findings",
+    "methods",
+    "key_numbers",
+    "limitations",
+    "key_figures",
+)
+
+# Card fields that hold a single string (default ""); all others default to [].
+_STRING_FIELDS = frozenset({"title", "contribution"})
 
 
 @lru_cache(maxsize=1)
@@ -53,6 +65,6 @@ def _parse_card(data: dict[str, Any]) -> dict[str, Any]:
     """Normalize a parsed card dict to the CARD_FIELDS shape."""
     card: dict[str, Any] = {}
     for field in CARD_FIELDS:
-        default: Any = "" if field == "title" else []
+        default: Any = "" if field in _STRING_FIELDS else []
         card[field] = data.get(field, default)
     return card
