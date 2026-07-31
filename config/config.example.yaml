@@ -6,6 +6,7 @@
 #   drafter    low-cost — per-platform draft
 #   reviewer   strong  — faithfulness check (MUST differ from drafter)
 #   researcher cheap   — topic abstraction + background search (OPTIONAL: falls back to extractor)
+#   stylist    cheap   — distill example articles into a voice profile (OPTIONAL: falls back to extractor)
 #
 # Each provider/model value may be:
 #   - a literal string            -> "anthropic", "claude-haiku-4-5-20251001"
@@ -29,6 +30,18 @@ models:
   researcher:
     provider: env   # -> RESEARCHER_PROVIDER  (optional; unconfigured -> extractor)
     model: env      # -> RESEARCHER_MODEL
+  stylist:
+    provider: env   # -> STYLIST_PROVIDER     (optional; unconfigured -> extractor)
+    model: env      # -> STYLIST_MODEL
+
+# Learned writing style: drop popular-science articles you like into
+# api/styles/examples/ and they are distilled into a voice profile for the
+# drafter (voice only, never facts; layers on top of api/styles/*.md).
+# `enabled` uses the same "env" indirection (env var: STYLE_ENABLED).
+#   auto (default) — on whenever the examples folder is non-empty
+#   false          — off; drafts keep the default voice
+style:
+  enabled: auto
 
 # Background-materials search (framing context for the drafter, never facts).
 # `sources` picks which external clients to query; same "env" indirection as

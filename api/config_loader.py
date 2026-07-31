@@ -29,9 +29,10 @@ from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 
 # Roles this agent declares (mirror agent.yaml model_requirements).
-# "researcher" is optional at runtime: topic/background call it with
-# fallback="extractor", so an unconfigured researcher never breaks a run.
-ROLES = ("extractor", "drafter", "reviewer", "researcher")
+# "researcher" and "stylist" are optional at runtime: topic/background/style
+# call them with fallback="extractor", so leaving them unconfigured never
+# breaks a run.
+ROLES = ("extractor", "drafter", "reviewer", "researcher", "stylist")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config" / "config.yaml"
@@ -87,7 +88,7 @@ def get_model(role: str, temperature: float = 0.0, fallback: str | None = None):
     """Build the chat model for a role.
 
     Args:
-        role: one of "extractor", "drafter", "reviewer", "researcher".
+        role: one of ROLES.
         temperature: sampling temperature passed to the provider.
         fallback: optional role to resolve instead when `role` is declared
             but unconfigured (e.g. researcher -> extractor). An unknown

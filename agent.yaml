@@ -75,7 +75,7 @@ tools:
     description: Report agent readiness — configured model roles, enabled search sources, and optional-key presence (booleans only, never values)
     parameters: {}
     output:
-      roles:          "Per-role resolvability {extractor, drafter, reviewer, researcher: bool}"
+      roles:          "Per-role resolvability {extractor, drafter, reviewer, researcher, stylist: bool}"
       search_sources: "Enabled external search clients"
       optional_keys:  "Presence of optional API keys {tavily, semantic_scholar, ncbi: bool}"
       byo_key:        "Always true — keys are brought via env, never stored"
@@ -86,6 +86,7 @@ model_requirements:
   - { role: drafter,    tier: writing }  # per-platform draft
   - { role: reviewer,   tier: strong }   # faithfulness check (different model than drafter)
   - { role: researcher, tier: cheap }    # topic abstraction + background search (falls back to extractor)
+  - { role: stylist,    tier: cheap }    # distill example articles into a voice profile (falls back to extractor)
 
 # Schema describing the agent's configurable settings (see config/).
 config_schema:
@@ -94,7 +95,12 @@ config_schema:
     drafter:    { provider: env, model: env }
     reviewer:   { provider: env, model: env }
     researcher: { provider: env, model: env }  # optional; unconfigured -> extractor
+    stylist:    { provider: env, model: env }  # optional; unconfigured -> extractor
   byo_key: true
+  # Learned writing style distilled from api/styles/examples/ (voice only, never
+  # facts). auto = on whenever that folder is non-empty; false = default voice.
+  style:
+    enabled: auto
   platforms: [news, wechat, xhs]
   # Background-materials search: which external sources to query (all keyless).
   # tavily may be added when TAVILY_API_KEY is provided via env (byo_key).
