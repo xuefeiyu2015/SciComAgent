@@ -28,6 +28,7 @@ tools:
       claim_ledger:         "Source-grounded claims with evidence + qualifier"
       overreach_flags:      "Statements that over-claim vs. the ledger (for a human)"
       background_materials: "External context shown to the drafter (framing only, never facts; audit trail)"
+      style_profile:        "Learned voice distilled from api/styles/examples/ and applied to the drafts (voice & structure only, never facts; audit trail). Absent when the folder is empty"
       status:               { allowed: [ok, needs_review, failed], description: "Coarse outcome" }
       # Non-draft messages (e.g. why fetch failed). On failure: status=failed + one notice.
       notices:
@@ -38,7 +39,9 @@ tools:
           too_short:        "reachable but too little text (stub / scanned PDF) -> ask the user for the PDF"
           not_a_paper:      "content is not a research paper -> ask the user to double-check the link"
           fetch_error:      "network failure / unreachable link"
+          draft_error:      "one platform's draft failed (the other platforms are unaffected)"
           background_error: "background search skipped (drafts unaffected, produced without background)"
+          style_error:      "learned writing style skipped (drafts unaffected, produced in the default voice)"
 
   - name: extract_ledger
     description: Extract just the claim ledger (source-grounded facts) from a paper, without drafting — a cheap provenance preview
