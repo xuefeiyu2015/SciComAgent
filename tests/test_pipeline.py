@@ -23,6 +23,7 @@ from api.schema import (
     PlatformOutput,
     SourceType,
     Status,
+    StyleProfile,
     TopicAbstraction,
 )
 
@@ -215,6 +216,72 @@ def test_background_false_skips_the_stage_entirely(monkeypatch):
     out = run(_input(platforms=[Platform.news], background=False))
     assert out.background_materials == []
     assert out.notices == []
+
+
+# --- learned writing style wiring ----------------------------------------------
+
+def test_style_profile_reaches_every_draft_and_is_surfaced(monkeypatch):
+    profile = StyleProfile(voice="a curious peer", sources=["a.md"])
+    flag = CheckFlag(claim_id="c1", quote="q", issue="i", suggestion="s")
+    _stub_steps(monkeypatch, flags_seq=[[flag], []], style=profile)  # forces a redraft
+
+    styles: list[StyleProfile | None] = []
+
+    def capture_draft(
+        platform, ledger, inp, fix=None, background=None, angle=None, style=None
+    ):
+        styles.append(style)
+        return PlatformOutput(platform=platform, body="d", title_options=["t"])
+
+    monkeypatch.setattr(pipeline, "draft_platform", capture_draft)
+
+    out = pipeline.run(_input(platforms=[Platform.news]))
+
+    assert styles == [profile, profile]      # initial draft AND the redraft
+    assert out.style_profile is profile      # surfaced for human audit
+    assert out.notices == []
+
+
+def test_style_distilled_once_per_run_not_per_platform(monkeypatch):
+    calls = {"n": 0}
+
+    def counting():
+        calls["n"] += 1
+        return StyleProfile(voice="a curious peer")
+
+    _stub_steps(monkeypatch, flags_seq=[[], [], []])
+    monkeypatch.setattr(pipeline, "load_style_profile", counting)
+
+    pipeline.run(_input(platforms=[Platform.news, Platform.wechat, Platform.xhs]))
+
+    assert calls["n"] == 1  # distilling per platform would triple the cost
+
+
+def test_style_failure_degrades_with_notice(monkeypatch):
+    draft_calls = _stub_steps(monkeypatch, flags_seq=[[]])
+
+    def boom():
+        raise RuntimeError("stylist model misconfigured")
+
+    monkeypatch.setattr(pipeline, "load_style_profile", boom)
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert out.status == Status.needs_review      # the run survives
+    assert len(out.platform_outputs) == 1         # drafts still produced
+    assert out.style_profile is None
+    assert [n.code for n in out.notices] == [NoticeCode.style_error]
+    assert "stylist model misconfigured" in out.notices[0].message
+    assert len(draft_calls) == 1                  # drafted in the default voice
+
+
+def test_empty_examples_folder_adds_no_notice(monkeypatch):
+    _stub_steps(monkeypatch, style=None)  # None = nothing dropped in the folder
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert out.style_profile is None
+    assert out.notices == []  # an empty folder is not an error
 
 
 # --- extract_ledger_preview (provenance-only, no drafting) --------------------

@@ -4,13 +4,23 @@ The drafter over-cites; _filter_markers is the code-side guarantee that only
 medium/low confidence claims keep an inline (cN) marker so solid facts read
 clean. _human_payload tests pin that background materials enter as a clearly
 labeled context-only block and that without them the payload is unchanged.
+The system-prompt tests pin the learned-voice layer: absent by default, and
+when present carrying the fact boundary in the SYSTEM prompt only.
 (End-to-end drafting is covered by manual runs against the example ledger.)
 """
 
 from __future__ import annotations
 
-from api.draft import _filter_markers, _human_payload
-from api.schema import BackgroundMaterial, Claim, SourceKind
+from api.draft import _filter_markers, _human_payload, _system_prompt, _voice_layer
+from api.schema import (
+    AgentInput,
+    BackgroundMaterial,
+    Claim,
+    Platform,
+    SourceKind,
+    SourceType,
+    StyleProfile,
+)
 
 
 def test_keeps_markable_drops_others():
@@ -96,3 +106,82 @@ def test_payload_order_ledger_background_fix():
         < payload.index("BACKGROUND MATERIALS")
         < payload.index("Revision notes")
     )
+
+
+# --- learned voice layer -------------------------------------------------------
+
+_INPUT = AgentInput(source_type=SourceType.url, source="https://example.org/paper")
+
+_STYLE = StyleProfile(
+    voice="a curious peer thinking out loud",
+    rhythm="long build-up, then a short landing",
+    openings=["open inside a concrete physical scene"],
+    vocabulary=["plain register"],
+    devices=["an analogy carried through"],
+    avoid=["hype"],
+    sources=["favourite-essay.md"],
+)
+
+
+def test_no_style_keeps_the_prompt_byte_identical():
+    # existing callers and every redraft must be unaffected by the new param
+    base = _system_prompt(Platform.news, _INPUT)
+    assert _system_prompt(Platform.news, _INPUT, None) == base
+    assert "# Voice profile" not in base
+
+
+def test_empty_profile_adds_no_layer():
+    # a distillation that yielded nothing must not inject a bare header
+    base = _system_prompt(Platform.news, _INPUT)
+    assert _system_prompt(Platform.news, _INPUT, StyleProfile()) == base
+    assert _voice_layer(StyleProfile()) == ""
+    assert _voice_layer(None) == ""
+
+
+def test_style_layer_carries_the_fact_boundary():
+    prompt = _system_prompt(Platform.wechat, _INPUT, _STYLE)
+
+    assert "# Voice profile (voice & structure ONLY, not facts)" in prompt
+    assert "never a source of facts" in prompt
+    assert "still comes only from the claim ledger" in prompt
+    for marker in ("number", "causal", "magnitude", '"first"', '"proves"'):
+        assert marker in prompt
+
+
+def test_style_layer_renders_every_field():
+    prompt = _system_prompt(Platform.xhs, _INPUT, _STYLE)
+    for value in (
+        _STYLE.voice, _STYLE.rhythm, _STYLE.openings[0],
+        _STYLE.vocabulary[0], _STYLE.devices[0], _STYLE.avoid[0],
+    ):
+        assert value in prompt
+
+
+def test_style_layer_omits_empty_fields():
+    prompt = _voice_layer(StyleProfile(voice="warm", sources=["a.md"]))
+    assert "Voice: warm" in prompt
+    assert "Rhythm" not in prompt
+    assert "Openings" not in prompt
+
+
+def test_source_filenames_never_reach_the_prompt():
+    # `sources` is an audit trail; a filename can name the subject matter
+    prompt = _system_prompt(Platform.news, _INPUT, _STYLE)
+    assert "favourite-essay.md" not in prompt
+
+
+def test_style_layers_between_platform_card_and_red_lines():
+    # the platform card still owns STRUCTURE; the red lines still win
+    prompt = _system_prompt(Platform.news, _INPUT, _STYLE)
+    assert (
+        prompt.index("\n\n# Platform style card\n\n")
+        < prompt.index("\n\n# Voice profile ")
+        < prompt.index("\n\n# Red lines\n\n")
+        < prompt.index("\n\n# Dials ")
+    )
+
+
+def test_style_does_not_touch_the_facts_payload():
+    # the profile is SYSTEM-prompt voice guidance; the ledger contract is
+    # assembled separately and is unaware of it
+    assert "Voice profile" not in _human_payload(_LEDGER, None, [_MATERIAL], "angle")
