@@ -22,10 +22,18 @@ platforms pays for them once:
 
 Faithfulness: nothing produced here may enter a draft as fact. Every
 number/causation/magnitude/'first'/'proves' statement still comes only from the
-claim ledger (CLAUDE.md rule #1). Three defenses, weakest last: the distill
-prompt, the audit pass, and the _FACTLIKE regex in _clean_text. Only the regex
-is deterministic — it catches fact-shaped NUMBERS, not topic or entity leakage,
-which is what the audit pass is for.
+claim ledger (CLAUDE.md rule #1). Four defenses, each covering what the others
+cannot:
+
+    _clean_text   deterministic; fact-shaped NUMBERS (percentages, years, ...)
+    _drop_echoes  deterministic; entries quoting a distinctive span of the
+                  source articles verbatim
+    the audit     model-judged; topic/entity leakage that is PARAPHRASED, so it
+                  shares no span with the source and no pattern can find it
+    the prompt    the first line of defense; asks for craft, not content
+
+Only the first two are deterministic. Paraphrased leakage ultimately rests on
+the audit pass — which is why it fails closed.
 """
 
 from __future__ import annotations
@@ -80,6 +88,49 @@ _FACTLIKE = re.compile(
     r"|\b(?:19|20)\d{2}\b"      # years
     r"|\d{4,}"                  # large counts
 )
+
+# Echo detection: an entry that reproduces a distinctive multi-word span from
+# the example articles is quoting content, not describing craft. Craft language
+# is meta ("opens inside a concrete scene"); it does not reuse the article's own
+# phrases. Word n-grams need _MIN_CONTENT_WORDS non-stopwords so ordinary
+# connective phrases ("at the end of") never trip the check; CJK has no spaces,
+# so it is compared as character runs instead.
+_ECHO_WORD_NGRAM = 3
+_ECHO_CJK_NGRAM = 5
+_MIN_CONTENT_WORDS = 2
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+_CJK_RUN_RE = re.compile(r"[㐀-鿿]+")
+
+_STOPWORDS = frozenset("""
+a an the and or but if then than that this these those of in on at to from by
+with without for as is are was were be been being it its into over under about
+after before while during out up down off again more most some any each one two
+you your they their them we us our i he she his her not no so such own same too
+very can will just should now what when where which who whom how why there here
+""".split())
+
+
+def _echo_grams(text: str) -> frozenset[str]:
+    """Distinctive multi-word / multi-character spans of `text`.
+
+    Two spans matching across documents is strong evidence one was copied from
+    the other; a single shared word is not, so unigrams are never returned.
+    """
+    grams: set[str] = set()
+
+    words = _WORD_RE.findall(text.lower())
+    for i in range(len(words) - _ECHO_WORD_NGRAM + 1):
+        gram = words[i : i + _ECHO_WORD_NGRAM]
+        if sum(word not in _STOPWORDS for word in gram) >= _MIN_CONTENT_WORDS:
+            grams.add(" ".join(gram))
+
+    for run in _CJK_RUN_RE.findall(text):
+        grams.update(
+            run[i : i + _ECHO_CJK_NGRAM]
+            for i in range(len(run) - _ECHO_CJK_NGRAM + 1)
+        )
+    return frozenset(grams)
 
 
 @lru_cache(maxsize=1)
@@ -184,17 +235,42 @@ def _distill(examples: tuple[tuple[str, str], ...]) -> StyleProfile:
         ],
     )
     profile = _parse_profile(data, sources=[name for name, _ in examples])
+    profile = _drop_echoes(profile, examples)
     return _strip_content(profile)
+
+
+def _drop_echoes(
+    profile: StyleProfile, examples: tuple[tuple[str, str], ...]
+) -> StyleProfile:
+    """Drop entries that reproduce a distinctive span of an example article.
+
+    Deterministic complement to the audit pass: where _clean_text catches
+    fact-shaped NUMBERS and the auditor judges meaning, this catches an entry
+    quoting the source text verbatim — "returns to the black-hole metaphor"
+    when the articles are about black holes. Paraphrased topic leakage has no
+    shared span and is the audit's job, not this check's.
+    """
+    corpus: set[str] = set()
+    for _name, text in examples:
+        corpus |= _echo_grams(text)
+    if not corpus:
+        return profile
+    flagged = {
+        entry_id
+        for entry_id, text in _entry_map(profile).items()
+        if _echo_grams(text) & corpus
+    }
+    return _drop_entries(profile, flagged)
 
 
 def _strip_content(profile: StyleProfile) -> StyleProfile:
     """Drop every profile entry the audit pass calls content-bearing.
 
-    The regex in _clean_text only catches fact-shaped numbers; a phrase like
-    "speaks as a gut-microbiome researcher" is just as much a leak and no
-    pattern will find it. A second model — the REVIEWER role, a different model
-    and a different prompt than the distiller (CLAUDE.md rule #3) — reads the
-    profile back and names the offending entries.
+    The deterministic checks only see fact-shaped numbers and verbatim echoes;
+    a paraphrase like "speaks as a gut-microbiome researcher" leaks just as much
+    and no pattern will find it. A second model — the REVIEWER role, a different
+    model and a different prompt than the distiller (CLAUDE.md rule #3) — reads
+    the profile back and names the offending entries.
 
     Audit failures propagate: the pipeline turns them into a style_error notice
     and drafts with no profile, so a broken audit never ships an unaudited voice.

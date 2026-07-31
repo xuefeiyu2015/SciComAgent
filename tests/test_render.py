@@ -18,6 +18,15 @@ from api.schema import (
     Platform,
     PlatformOutput,
     Status,
+    StyleProfile,
+)
+
+_STYLE = StyleProfile(
+    voice="一个好奇的同行",
+    rhythm="长铺陈，短落点",
+    openings=["从具体场景开场"],
+    avoid=["浮夸"],
+    sources=["favourite-essay.md", "another.txt"],
 )
 
 
@@ -70,6 +79,39 @@ def test_review_view_orders_flags_then_ledger_then_sources():
     assert "背景文章" in md and "https://ex.org/a" in md     # sources
     # flags come before ledger which comes before sources
     assert md.index("过强的说法") < md.index("Claim ledger") < md.index("Background sources")
+
+
+def test_review_view_shows_the_learned_voice_and_its_examples():
+    md = render_markdown(_output(style_profile=_STYLE), include_provenance=True)
+
+    assert "Learned voice" in md
+    assert "一个好奇的同行" in md and "长铺陈，短落点" in md
+    assert "从具体场景开场" in md and "浮夸" in md
+    assert "favourite-essay.md, another.txt" in md          # which examples taught it
+    assert "not a source of facts" in md                    # boundary stated to the human
+    # voice comes last: drafts and their provenance stay at the top of the view
+    assert md.index("Claim ledger") < md.index("Learned voice")
+
+
+def test_learned_voice_absent_when_no_profile():
+    md = render_markdown(_output(), include_provenance=True)
+    assert "Learned voice" not in md
+
+
+def test_publish_view_hides_the_learned_voice():
+    md = render_markdown(_output(style_profile=_STYLE), include_provenance=False)
+    assert "Learned voice" not in md
+    assert "favourite-essay.md" not in md
+
+
+def test_learned_voice_omits_empty_fields():
+    md = render_markdown(
+        _output(style_profile=StyleProfile(voice="一个好奇的同行")),
+        include_provenance=True,
+    )
+    assert "一个好奇的同行" in md
+    assert "Rhythm" not in md
+    assert "Distilled from" not in md
 
 
 def test_clean_bill_line_when_no_flags():

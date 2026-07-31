@@ -284,6 +284,61 @@ def test_rhythm_guidance_with_small_numbers_survives(monkeypatch, tmp_path):
     assert load_style_profile().rhythm == "paragraphs of 100-150 words, then a short one"
 
 
+_ECHO_ARTICLE = """
+The morning the trial results came back, the lab went quiet. Researchers had
+spent a decade arguing about the gut-brain axis, and at the end of it all the
+answer arrived on a Tuesday. Nobody in the room said a word for a long moment.
+"""
+
+
+def test_verbatim_echoes_of_the_source_are_dropped(monkeypatch, tmp_path):
+    """An entry quoting the article is copying content, not describing craft."""
+    _write(tmp_path, "a.md", _ECHO_ARTICLE)
+    _stub_models(monkeypatch, profile=json.dumps({
+        "voice": "borrows the phrase the lab went quiet",
+        "rhythm": "long build-up, then a short landing",
+        "openings": ["open on the morning the trial results came back",
+                     "open inside a concrete physical scene"],
+        "vocabulary": ["returns to the gut-brain axis metaphor"],
+        "devices": ["an analogy carried through and paid off at the end"],
+    }))
+
+    profile = load_style_profile()
+
+    assert profile.voice == ""                              # quoted the article
+    assert profile.openings == ["open inside a concrete physical scene"]
+    assert profile.vocabulary == []                         # named the subject
+    # craft language survives, including a phrase sharing only stopwords
+    assert profile.rhythm == "long build-up, then a short landing"
+    assert profile.devices == ["an analogy carried through and paid off at the end"]
+
+
+def test_echo_check_handles_cjk(monkeypatch, tmp_path):
+    # CJK has no spaces, so echoes are compared as character runs
+    _write(tmp_path, "cn.md", "那天早上，实验室安静得出奇。研究者们争论了十年的肠脑轴问题。")
+    _stub_models(monkeypatch, profile=json.dumps({
+        "voice": "回到肠脑轴问题的比喻",
+        "rhythm": "先铺陈场景，再点明抽象概念",
+    }))
+
+    profile = load_style_profile()
+
+    assert profile.voice == ""                              # echoed the source
+    assert profile.rhythm == "先铺陈场景，再点明抽象概念"      # pure craft, kept
+
+
+def test_common_phrasing_is_not_treated_as_an_echo(monkeypatch, tmp_path):
+    """Connective phrases shared with any prose must not trip the check."""
+    _write(tmp_path, "a.md", _ECHO_ARTICLE)
+    _stub_models(monkeypatch, profile=json.dumps({
+        "devices": ["pays the analogy off at the end of it all"],
+    }))
+
+    # "at the end of it all" appears verbatim in the article but carries no
+    # content words — dropping this would cost real guidance for no safety gain
+    assert load_style_profile().devices == ["pays the analogy off at the end of it all"]
+
+
 def test_audit_drops_content_bearing_entries(monkeypatch, tmp_path):
     """Topic leakage no regex can see is removed by the reviewer audit."""
     _write(tmp_path, "a.md")

@@ -7,8 +7,9 @@ thin wrapper over `render_markdown` (see the directory contract in CLAUDE.md).
 
 Two views, chosen by `include_provenance`:
     True  (default) — the human-review layout: each draft, its overstatement
-                      flags, then a compact claim ledger and the background
-                      sources. Matches the agent's never-auto-publish stance.
+                      flags, then a compact claim ledger, the background
+                      sources and the learned voice that shaped the writing.
+                      Matches the agent's never-auto-publish stance.
     False           — the publish-ready post only (title options, cover copy,
                       body, hashtags).
 
@@ -27,6 +28,7 @@ from api.schema import (
     Platform,
     PlatformOutput,
     Status,
+    StyleProfile,
 )
 
 # Bilingual section labels — language-agnostic scaffolding around content that is
@@ -86,6 +88,8 @@ def render_markdown(
             parts.append(_render_ledger(out.claim_ledger))
         if out.background_materials:
             parts.append(_render_sources(out.background_materials))
+        if out.style_profile is not None:
+            parts.append(_render_style(out.style_profile))
         rest = _render_notices(out.notices, header="Notices")
         if rest:
             parts.append(rest)
@@ -143,6 +147,33 @@ def _render_sources(materials: list[BackgroundMaterial]) -> str:
             lines.append(f"- {title}")
         if m.relation.strip():
             lines.append(f"  - {m.relation.strip()}")
+    return "\n".join(lines)
+
+
+def _render_style(profile: StyleProfile) -> str:
+    """The learned voice that shaped the drafts, and which examples taught it.
+
+    Audit trail: without this the operator cannot see what a folder of example
+    articles actually distilled into. Voice only — the profile holds no facts,
+    so nothing here is provenance for a claim (that is the claim ledger's job).
+    """
+    lines = ["## 学到的文风 / Learned voice", "_（仅语气与结构，不是事实来源 / voice & structure only, not a source of facts）_"]
+    fields = [
+        ("语气 / Voice", profile.voice),
+        ("节奏 / Rhythm", profile.rhythm),
+        ("开头 / Openings", profile.openings),
+        ("用词 / Vocabulary", profile.vocabulary),
+        ("手法 / Devices", profile.devices),
+        ("避免 / Avoid", profile.avoid),
+    ]
+    for label, value in fields:
+        if isinstance(value, str):
+            if value.strip():
+                lines.append(f"- **{label}:** {value.strip()}")
+        elif value:
+            lines.append(f"- **{label}:** " + "; ".join(value))
+    if profile.sources:
+        lines.append(f"- **来源样本 / Distilled from:** {', '.join(profile.sources)}")
     return "\n".join(lines)
 
 
