@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 
 from mcp_server import server
-from mcp_server.server import check_draft, extract_ledger, generate, health
+from mcp_server.server import check_draft, extract_ledger, generate, health, render
 from api.schema import (
     AgentOutput,
     CheckFlag,
@@ -162,6 +162,27 @@ def test_check_draft_never_crashes(monkeypatch):
     assert flags == []
 
 
+# --- render -------------------------------------------------------------------
+
+def test_render_returns_markdown_string():
+    out = AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[PlatformOutput(platform=Platform.news, title_options=["T"], body="正文")],
+    )
+    md = render(result=out)
+    assert isinstance(md, str)
+    assert "正文" in md
+
+
+def test_render_never_crashes(monkeypatch):
+    monkeypatch.setattr(
+        server, "render_markdown",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    md = render(result=AgentOutput())
+    assert isinstance(md, str) and "render failed" in md
+
+
 # --- health -------------------------------------------------------------------
 
 def test_health_delegates_to_capabilities(monkeypatch):
@@ -171,4 +192,4 @@ def test_health_delegates_to_capabilities(monkeypatch):
 
 def test_new_tools_are_registered():
     names = {t.name for t in asyncio.run(server.mcp.list_tools())}
-    assert {"generate", "extract_ledger", "check_draft", "health"} <= names
+    assert {"generate", "extract_ledger", "check_draft", "render", "health"} <= names

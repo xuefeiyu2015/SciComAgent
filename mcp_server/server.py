@@ -16,6 +16,7 @@ from mcp.server.fastmcp import FastMCP
 from api.check import check_faithfulness
 from api.config_loader import capabilities
 from api.pipeline import extract_ledger_preview, run
+from api.render import render_markdown
 from api.schema import (
     AgentInput,
     AgentOutput,
@@ -166,6 +167,35 @@ def check_draft(
         return check_faithfulness(draft, ledger, {}, language)
     except Exception:  # never crash the tool — an audit that errored found nothing
         return []
+
+
+@mcp.tool()
+def render(
+    result: AgentOutput,
+    platform: Platform | None = None,
+    include_provenance: bool = True,
+) -> str:
+    """Format a `generate` / `extract_ledger` result as human-readable Markdown.
+
+    A pure, deterministic view over what the pipeline already produced — no model
+    calls, invents nothing. Pass the AgentOutput a previous tool returned (or a
+    human-edited one) and get back Markdown for display.
+
+    Args:
+        result: the AgentOutput to render (from `generate` / `extract_ledger`).
+        platform: render only this platform's draft; omit to render all.
+        include_provenance: True (default) -> review view (overstatement flags +
+            draft + compact claim ledger + background sources); False -> the
+            publish-ready post only (titles, cover copy, body, hashtags).
+
+    Returns:
+        A Markdown string. Never crashes — on an unexpected error it returns a
+        short error line rather than raising.
+    """
+    try:
+        return render_markdown(result, platform=platform, include_provenance=include_provenance)
+    except Exception as exc:  # never crash the tool — surface as a short message
+        return f"render failed: {exc}"
 
 
 @mcp.tool()

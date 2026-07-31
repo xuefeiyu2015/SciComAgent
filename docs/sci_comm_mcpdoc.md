@@ -16,10 +16,12 @@ lives in `/api`.
 | [`generate`](#tool-generate) | Full pipeline: paper → multi-platform drafts + provenance + flags |
 | [`extract_ledger`](#tool-extract_ledger) | Cheap provenance preview: paper → claim ledger only (no drafting) |
 | [`check_draft`](#tool-check_draft) | Re-check a (human-edited) draft against its claim ledger |
+| [`render`](#tool-render) | Format a `generate`/`extract_ledger` result as human-readable Markdown |
 | [`health`](#tool-health) | Report configured model roles, search sources, and key presence |
 
 A typical human-in-the-loop flow: **`extract_ledger`** to inspect/approve the
-facts → draft (via `generate`, or edit by hand) → **`check_draft`** to re-verify.
+facts → draft (via `generate`, or edit by hand) → **`check_draft`** to re-verify
+→ **`render`** to view/publish.
 
 ---
 
@@ -76,7 +78,7 @@ claude mcp get scicomm-agent
 
 Inside a session, `/mcp` lists connected servers and their tools; they are
 exposed as `mcp__scicomm-agent__generate`, `…__extract_ledger`,
-`…__check_draft`, and `…__health`.
+`…__check_draft`, `…__render`, and `…__health`.
 
 #### Claude Desktop / generic MCP hosts
 
@@ -320,6 +322,41 @@ finding cast as the main conclusion, and claims not present in the ledger.
       { "id": "c1", "claim": "The drug shrank tumors in mice (preliminary).",
         "source_evidence": "…", "qualifier": "in mice; preliminary", "confidence": "low" }
     ]
+  }
+}
+```
+
+---
+
+<a id="tool-render"></a>
+## Tool: `render`
+
+Format a `generate` / `extract_ledger` result as human-readable **Markdown**.
+Pure and deterministic — no model calls, invents nothing; it only lays out what
+the pipeline already produced. Display only, never publishes.
+
+### Parameters
+
+| Name | Type | Required | Default | Meaning |
+|------|------|----------|---------|---------|
+| `result` | `AgentOutput` | ✅ | — | The result to render (from `generate` / `extract_ledger`) |
+| `platform` | `news` \| `wechat` \| `xhs` | — | all | Render only this platform's draft |
+| `include_provenance` | bool | — | `true` | `true` = review view (overstatement flags + draft + compact claim ledger + background sources); `false` = publish-ready post only (titles, cover copy, body, hashtags) |
+
+### Return value
+
+A Markdown **string**. Never crashes — on an unexpected error it returns a short
+`render failed: …` line instead of raising.
+
+### Example call
+
+```json
+{
+  "name": "render",
+  "arguments": {
+    "result": { "...": "the AgentOutput returned by generate" },
+    "platform": "wechat",
+    "include_provenance": false
   }
 }
 ```

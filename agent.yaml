@@ -62,6 +62,15 @@ tools:
     output:
       flags: "List of overstatement flags {claim_id, quote, issue, suggestion}; empty means faithful"
 
+  - name: render
+    description: Format a generate/extract_ledger result as human-readable Markdown (display only; never publishes)
+    parameters:
+      result:             { required: true, description: "The AgentOutput to render (from generate / extract_ledger)" }
+      platform:           { required: false, allowed: [news, wechat, xhs], description: "Render only this platform's draft; omit for all" }
+      include_provenance: { required: false, default: true, description: "true = review view (flags + draft + ledger + sources); false = publish-ready post only" }
+    output:
+      markdown: "A Markdown string for display"
+
   - name: health
     description: Report agent readiness — configured model roles, enabled search sources, and optional-key presence (booleans only, never values)
     parameters: {}
