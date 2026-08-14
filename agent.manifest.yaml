@@ -1,0 +1,29 @@
+# THE ANCHOR — this file's name (agent.manifest.yaml) + location (repo root) are the one
+# hardcoded thing in the whole system. Every tool is guaranteed to find the manifest here.
+#
+# ADOPTED repo: the platform seam was added around your existing code — nothing was
+# moved or rewritten. The review gate runs EXACTLY the commands below; edit them to
+# match your project. See MIGRATE.md in the agent-template repo for the runbook.
+
+apiVersion: v1
+profile: python-mcp
+
+toolchain:
+  language: python
+  packageManager: uv
+
+paths:
+  api: ./api
+  mcp: ./mcp_server          # runnable MCP server (stdio) wrapping your logic
+
+commands:                    # the review flow runs EXACTLY these
+  install: uv sync
+  test:    uv run pytest -q
+  lint:    uv run ruff check .
+  security: uv run bandit -q -r api
+
+# Platform-membership intent (RFC 001 §10). true = on your first push to GitHub,
+# the platform opens a members.yaml PR for you (an admin merges — nothing is
+# automatic beyond that). Flip anytime; the next push acts on the new value.
+fleet:
+  register: true

@@ -1,0 +1,37 @@
+# DEFERRED FLEET REGISTRATION (RFC 001 §10). Runs on pushes to main and asks the
+# platform to register this repo IF the manifest says fleet.register: true.
+# Sends ONLY the repo name (public metadata) — registration itself happens
+# platform-side and is inert until an admin merges the members.yaml PR.
+# Safe before the registrar exists: failures/404s exit quietly and retry on the
+# next push. Flip fleet.register in agent.manifest.yaml to change your mind.
+name: register
+on:
+  push:
+    branches: [main]
+permissions: {}
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ask the platform to register this repo (manifest-gated)
+        run: |
+          want=$(yq '.fleet.register // false' agent.manifest.yaml)
+          if [ "$want" != "true" ]; then
+            echo "fleet.register is not true — skipping."
+            exit 0
+          fi
+          resp=$(curl -s --max-time 30 -X POST \
+            https://fleet-services.agents.turingplanet.ai/api/register \
+            -H 'Content-Type: application/json' \
+            -d "{\"repo\":\"${{ github.repository }}\"}" \
+            || echo '{"status":"registrar unreachable — will retry on the next push"}')
+          echo "registrar says: $resp"
+          # Surface the outcome on the run's Summary page — no log-digging needed.
+          {
+            echo "### Fleet registration"
+            echo '```json'
+            echo "$resp"
+            echo '```'
+            echo "_pr_opened/pr_pending → an admin merges the linked PR · already_registered → done · app_not_installed → install the App and push again_"
+          } >> "$GITHUB_STEP_SUMMARY"

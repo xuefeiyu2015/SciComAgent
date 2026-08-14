@@ -1,0 +1,24 @@
+# PLATFORM AI REVIEW TRIGGER (RFC 002). Forwards /review comments on PRs to the
+# platform's reviewer service. Sends ONLY public metadata (repo, PR number,
+# comment id) — the review runs platform-side with the platform's credentials.
+# Advisory only: it can never block your PR; your gate decides.
+# Commands: /review [security|perf|general|help]  (security is the default),
+# and /register (alias /join) for self-service fleet registration.
+# Quota per repo per week is set in the fleet registry (members.yaml).
+name: platform-review
+on:
+  issue_comment:
+    types: [created]
+permissions: {}
+jobs:
+  forward:
+    if: github.event.issue.pull_request && (startsWith(github.event.comment.body, '/review') || startsWith(github.event.comment.body, '/register') || startsWith(github.event.comment.body, '/join'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Forward to the reviewer service
+        env:
+          URL: https://fleet-services.agents.turingplanet.ai/api/review
+        run: |
+          curl -s --max-time 30 -X POST "$URL" -H 'Content-Type: application/json' \
+            -d "{\"repo\":\"${{ github.repository }}\",\"pr_number\":${{ github.event.issue.number }},\"comment_id\":${{ github.event.comment.id }}}" \
+            || echo "reviewer service unreachable — skipping quietly"
