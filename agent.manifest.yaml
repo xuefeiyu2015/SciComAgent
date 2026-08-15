@@ -20,7 +20,7 @@ commands:                    # the review flow runs EXACTLY these
   install: uv sync
   test:    uv run pytest -q
   lint:    uv run ruff check .
-  security: uv run bandit -q -r api
+  security: uv run --with bandit bandit -q -r api
 
 # Platform-membership intent (RFC 001 §10). true = on your first push to GitHub,
 # the platform opens a members.yaml PR for you (an admin merges — nothing is
