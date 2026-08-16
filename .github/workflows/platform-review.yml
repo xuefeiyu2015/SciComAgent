@@ -3,6 +3,7 @@
 # comment id) — the review runs platform-side with the platform's credentials.
 # Advisory only: it can never block your PR; your gate decides.
 # Commands: /review [security|perf|general|help]  (security is the default),
+# /fix-suggestion (root-cause a failing check; alias: /review fix),
 # and /register (alias /join) for self-service fleet registration.
 # Quota per repo per week is set in the fleet registry (members.yaml).
 name: platform-review
@@ -12,7 +13,7 @@ on:
 permissions: {}
 jobs:
   forward:
-    if: github.event.issue.pull_request && (startsWith(github.event.comment.body, '/review') || startsWith(github.event.comment.body, '/register') || startsWith(github.event.comment.body, '/join'))
+    if: github.event.issue.pull_request && (startsWith(github.event.comment.body, '/review') || startsWith(github.event.comment.body, '/register') || startsWith(github.event.comment.body, '/join') || startsWith(github.event.comment.body, '/fix-suggestion'))
     runs-on: ubuntu-latest
     steps:
       - name: Forward to the reviewer service

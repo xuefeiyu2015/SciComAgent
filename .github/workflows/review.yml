@@ -9,10 +9,10 @@ permissions:
   pull-requests: write   # lets the advisory review agent post a PR comment
 jobs:
   review:
-    uses: turingplanet/policies/.github/workflows/review-reusable.yml@v0.0.8
+    uses: turingplanet/policies/.github/workflows/review-reusable.yml@v0.0.9
     with:
       contract: v1
-      policies_ref: v0.0.8   # MUST match the uses:@ref above — pins the policies schema + review agent
+      policies_ref: v0.0.9   # MUST match the uses:@ref above — pins the policies schema + review agent
                              # (GitHub can't expose the called workflow's own ref, so it's passed in)
     secrets:
       # Optional — set an ANTHROPIC_API_KEY repo/org secret to enable the AI review.
