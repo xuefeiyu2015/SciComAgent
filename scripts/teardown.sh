@@ -19,7 +19,7 @@ set -euo pipefail
 
 REGISTRAR="https://fleet-services.agents.turingplanet.ai/api/deregister"
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
-[ -n "$REPO" ] || { echo "✗ can't determine the GitHub repo (is gh authed? are you in the repo?)"; exit 1; }
+[ -n "$REPO" ] || { echo "✗ can't determine the GitHub repo — this folder has no GitHub remote (or gh isn't authed). Nothing to tear down on the platform side."; exit 1; }
 
 DELETE=n; UNREG=n; YES=n
 for a in "$@"; do case "$a" in
