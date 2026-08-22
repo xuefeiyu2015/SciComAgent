@@ -74,6 +74,13 @@ tools:
     output:
       markdown: "A Markdown string for display"
 
+  - name: ping
+    description: Dummy connectivity check — returns one sentence; no models, no network, no pipeline
+    parameters:
+      name: { required: false, default: world, description: "Who to greet in the returned sentence" }
+    output:
+      message: "A single greeting sentence confirming the server is reachable"
+
   - name: health
     description: Report agent readiness — configured model roles, enabled search sources, and optional-key presence (booleans only, never values)
     parameters: {}

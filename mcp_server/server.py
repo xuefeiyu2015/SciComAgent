@@ -199,6 +199,20 @@ def render(
 
 
 @mcp.tool()
+def ping(name: str = "world") -> str:
+    """Dummy connectivity check — returns one sentence, no pipeline involved.
+
+    Touches no models, no network and no /api code, so a caller (or the MCP
+    host) can confirm the server is reachable and its tools are callable
+    without spending anything.
+
+    Args:
+        name: who to greet in the returned sentence.
+    """
+    return f"Hello, {name} — scicomm-agent's MCP server is alive and answering."
+
+
+@mcp.tool()
 def health() -> dict:
     """Report agent readiness for the MCP host / platform.
 
