@@ -6,18 +6,40 @@ just marshals its parameters into an AgentInput, runs the pipeline, and returns
 the AgentOutput (see api/schema.py). Imports from /api only.
 
 The package is named `mcp_server` so it doesn't shadow the PyPI `mcp` SDK we
-import below. Run with: `python -m mcp_server.server` (stdio transport).
+import below.
+
+Two transports, chosen by config.py (repo root):
+    stdio            local — Claude Code launches this process itself (default)
+    streamable-http  deployed — the platform injects $PORT, we listen on /mcp
+
+Run with `python -m mcp_server.server` or `python mcp_server/server.py`; both
+work, and the platform (railpack.json) uses the latter.
 """
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+import importlib
+import sys
+from pathlib import Path
 
-from api.check import check_faithfulness
-from api.config_loader import capabilities
-from api.pipeline import extract_ledger_preview, run
-from api.render import render_markdown
-from api.schema import (
+# Run as a SCRIPT (`python mcp_server/server.py`, railpack.json's startCommand),
+# sys.path[0] is this file's directory — not the repo root — so `from api...`
+# below would raise ModuleNotFoundError and crash-loop the deployment. Put the
+# root back first. A no-op under `python -m mcp_server.server`.
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+import config  # noqa: E402  (repo root; resolves ahead of the config/ YAML dir)
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
+
+from api.check import check_faithfulness  # noqa: E402
+from api.config_loader import capabilities  # noqa: E402
+from api.pipeline import extract_ledger_preview, run  # noqa: E402
+from api.render import render_markdown  # noqa: E402
+from api.schema import (  # noqa: E402
     AgentInput,
     AgentOutput,
     CheckFlag,
@@ -223,5 +245,48 @@ def health() -> dict:
     return capabilities()
 
 
+@mcp.custom_route("/api/health", methods=["GET"])
+@mcp.custom_route("/health", methods=["GET"])
+async def health_route(request: Request) -> JSONResponse:
+    """HTTP readiness probe — the platform curls /api/health, agent.yaml says /health.
+
+    Same payload as the `health` tool (booleans only, never key values), plus the
+    `ok`/`agent` fields the platform's smoke test looks for. Only reachable under
+    the streamable-http transport; harmless under stdio.
+    """
+    return JSONResponse({"ok": True, "agent": config.AGENT_NAME, **capabilities()})
+
+
+def main(transport: str | None = None) -> None:
+    """Start the server on the transport this deployment calls for.
+
+    Args:
+        transport: force a transport; None (the default) asks config.py, which
+            reads $MCP_TRANSPORT and falls back to "streamable-http" whenever
+            the platform has injected a $PORT.
+    """
+    # config.py reads the environment at import time, and this module may have
+    # been imported before the platform's env was in place — re-read it here so
+    # process start, not import order, decides the transport.
+    importlib.reload(config)
+
+    if transport is None:
+        transport = config.MCP_TRANSPORT
+
+    if transport != "streamable-http":
+        mcp.run()  # stdio transport (FastMCP default)
+        return
+
+    mcp.settings.host = config.HOST
+    mcp.settings.port = config.PORT
+    # Behind the platform gateway every call is a fresh proxied request, and we
+    # report progress by polling (job_status), never by server->client
+    # notifications — so stateless costs nothing and drops session affinity,
+    # while json_response avoids SSE streams that buffering proxies mangle.
+    mcp.settings.stateless_http = True
+    mcp.settings.json_response = True
+    mcp.run(transport="streamable-http")
+
+
 if __name__ == "__main__":
-    mcp.run()  # stdio transport (FastMCP default)
+    main()
