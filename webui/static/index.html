@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SciComm 审稿台 · Review Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/board.css">
+</head>
+<body>
+
+<!-- ── sidebar: the instrument panel ─────────────────────────────────── -->
+<aside id="sidebar" aria-label="Agent settings">
+  <header class="masthead">
+    <span class="masthead-mark">SC</span>
+    <span class="masthead-name">审稿台<em>Review Board</em></span>
+  </header>
+
+  <div id="rule3" class="alarm" hidden>
+    起草与审校用了同一个模型，审校无法给自己打分。
+    <em>Drafting and checking are set to the same model — pick a different reviewer.</em>
+  </div>
+
+  <section class="panel">
+    <h2>模型分工 <em>Model roles</em></h2>
+    <p class="note">起草与审校必须不同 · drafter and reviewer must differ</p>
+    <div id="roles"></div>
+    <div class="panel-actions">
+      <button id="save-models" class="btn">保存 Save</button>
+      <button id="verify-models" class="btn btn-quiet">验证 Verify</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>API 密钥 <em>API keys</em></h2>
+    <p class="note">写入本机 .env，永不回显 · stored in .env, never shown back</p>
+    <div id="keys"></div>
+  </section>
+
+  <section class="panel">
+    <h2>背景检索 <em>Background search</em></h2>
+    <p class="note">仅作行文背景，不是事实来源 · framing only, never facts</p>
+    <div id="sources" class="checkrow"></div>
+  </section>
+</aside>
+
+<!-- ── main: submission slip, then manuscript ────────────────────────── -->
+<main id="main">
+  <section id="dialog" aria-live="polite"></section>
+
+  <form id="composer" autocomplete="off">
+    <input id="entry" type="text" placeholder="粘贴论文链接、DOI，或把 PDF 拖进来 · Paste a link or DOI, or drop a PDF">
+    <button class="btn btn-solid" type="submit">发送 Send</button>
+  </form>
+
+  <section id="board" hidden></section>
+</main>
+
+<!-- ── apparatus: the ledger this draft is tethered to ───────────────── -->
+<aside id="apparatus" aria-label="Claim ledger and sources" hidden></aside>
+
+<!-- the signature: a hairline from a flagged sentence to its ledger entry -->
+<svg id="tether" aria-hidden="true"></svg>
+
+<div id="popover" role="dialog" aria-label="Flag" hidden></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="/static/board.js"></script>
+</body>
+</html>
