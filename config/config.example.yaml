@@ -52,3 +52,9 @@ style:
 #   NCBI_API_KEY    — PubMed rate-limit boost (works without)
 search:
   sources: [arxiv, semantic_scholar, pubmed, crossref, wikipedia, ddgs]
+
+# Pipeline concurrency. Platform drafts are independent, so they run in
+# parallel; each one is its own drafter + reviewer chain. Lower this (1 =
+# serial) if your provider rate-limits the burst. Env var: DRAFT_WORKERS.
+pipeline:
+  draft_workers: 3

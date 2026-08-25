@@ -15,9 +15,12 @@ articles in api/styles/examples/ and passed to every draft and redraft. Like
 background it is drafter-only and degrades gracefully (style_error Notice, no
 profile); the faithfulness checker never receives it.
 
-A plain, linear `run(inp)` — no LangGraph. Model names come from config by ROLE
-inside each step; nothing is hardcoded here. The whole run stays in one language:
-`inp.language` threads through the ledger, every draft and every check.
+`run(inp)` stays plain and linear — no LangGraph — with two seams for long runs:
+an optional `on_event` callback that reports each milestone (and hands over
+partial results as they land), and a thread pool over the per-platform drafts,
+since those are fully independent of one another. Model names come from config
+by ROLE inside each step; nothing is hardcoded here. The whole run stays in one
+language: `inp.language` threads through the ledger, every draft and every check.
 
 Hard rules (CLAUDE.md): faithfulness flags surface to a human, and we NEVER
 auto-publish — a successful run always returns `status=needs_review` with the
@@ -26,7 +29,11 @@ draft + provenance (claim ledger) + overstatement flags for review.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from api.background import gather_background
+from api.config_loader import resolve_setting
 from api.check import check_faithfulness
 from api.draft import draft_platform
 from api.extract import extract_card
@@ -42,6 +49,7 @@ from api.schema import (
     NoticeCode,
     OverreachFlag,
     Platform,
+    ProgressEvent,
     PlatformOutput,
     Status,
     StyleProfile,
@@ -52,13 +60,47 @@ from api.topic import abstract_topic
 # Redraft attempts after the first draft, while faithfulness flags remain.
 MAX_REDRAFTS = 2
 
+# Platform drafts run concurrently; each is an independent chain of drafter and
+# reviewer calls. Override with config `pipeline.draft_workers` or $DRAFT_WORKERS
+# (1 = serial, for tight provider rate limits).
+_DEFAULT_DRAFT_WORKERS = 3
 
-def run(inp: AgentInput) -> AgentOutput:
+# A callback invoked at each pipeline milestone. Optional: `run` behaves
+# identically without one.
+EventSink = Callable[[ProgressEvent], None]
+
+
+def _draft_workers() -> int:
+    """How many platform drafts may run at once."""
+    raw = resolve_setting(
+        ("pipeline", "draft_workers"), "DRAFT_WORKERS", str(_DEFAULT_DRAFT_WORKERS)
+    )
+    try:
+        return max(1, int(raw))
+    except ValueError:  # a malformed setting must not break a run
+        return _DEFAULT_DRAFT_WORKERS
+
+
+def _emit(on_event: EventSink | None, event: ProgressEvent) -> None:
+    """Report a milestone; a broken listener must never sink the run."""
+    if on_event is None:
+        return
+    try:
+        on_event(event)
+    except Exception:
+        pass
+
+
+def run(inp: AgentInput, on_event: EventSink | None = None) -> AgentOutput:
     """Run the full pipeline for one request.
 
     Args:
         inp: the request — source, source_type, platforms and the dials
             (language, audience, liveliness).
+        on_event: optional milestone callback. Receives a ProgressEvent after
+            the ledger, background and style stages and after each platform's
+            draft, carrying that partial result so a long run can be surfaced
+            while it is still going. Omitting it changes nothing else.
 
     Returns:
         On a fetch failure, an AgentOutput with `status=failed` and one Notice
@@ -70,31 +112,40 @@ def run(inp: AgentInput) -> AgentOutput:
     card, ledger, early = _fetch_and_build_ledger(inp)
     if early is not None:
         return early
+    _emit(on_event, ProgressEvent(
+        stage="ledger", message=f"{len(ledger)} claims sourced", ledger=ledger
+    ))
 
     notices: list[Notice] = []
     background: list[BackgroundMaterial] = []
     if inp.background:
         background = _background_or_notice(card, inp, notices)
+    _emit(on_event, ProgressEvent(
+        stage="background", message=f"{len(background)} background materials"
+    ))
 
     # Distilled ONCE per run, then shared by every platform's draft + redrafts.
     style = _style_or_notice(notices)
+    _emit(on_event, ProgressEvent(
+        stage="style", message="voice ready" if style else "default voice"
+    ))
 
+    drafted = _draft_all(inp, ledger, card, background, style, notices, on_event)
+
+    # Reassembled in the order the caller asked for — completion order, which
+    # the thread pool decides, must never leak into the result.
     platform_outputs: list[PlatformOutput] = []
     overreach_flags: list[OverreachFlag] = []
     for platform in inp.platforms:
-        try:
-            draft, flags = _draft_one(platform, ledger, card, inp, background, style)
-        except Exception as err:  # one platform failing must not sink the others
-            notices.append(
-                Notice(
-                    code=NoticeCode.draft_error,
-                    message=f"{_platform_name(platform)}: drafting failed — {err}",
-                )
-            )
+        if platform not in drafted:
             continue
+        draft, flags = drafted[platform]
         platform_outputs.append(draft)
         overreach_flags.extend(_to_overreach(flag, draft.platform) for flag in flags)
 
+    _emit(on_event, ProgressEvent(
+        stage="done", message=f"{len(platform_outputs)} drafts ready"
+    ))
     return AgentOutput(
         status=Status.needs_review,
         platform_outputs=platform_outputs,
@@ -104,6 +155,54 @@ def run(inp: AgentInput) -> AgentOutput:
         style_profile=style,
         notices=notices,
     )
+
+
+def _draft_all(
+    inp: AgentInput,
+    ledger: list[Claim],
+    card: dict,
+    background: list[BackgroundMaterial],
+    style: StyleProfile | None,
+    notices: list[Notice],
+    on_event: EventSink | None,
+) -> dict[Platform, tuple[PlatformOutput, list[CheckFlag]]]:
+    """Draft every platform concurrently; one failure must not sink the others.
+
+    Each platform is an independent draft/check/redraft chain over shared
+    read-only inputs (ledger, card, background, style), so they parallelize
+    cleanly. `notices` is only ever appended to from this thread — the
+    `as_completed` loop — so it needs no lock of its own.
+    """
+    drafted: dict[Platform, tuple[PlatformOutput, list[CheckFlag]]] = {}
+    workers = max(1, min(len(inp.platforms), _draft_workers()))
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="draft") as pool:
+        futures = {
+            pool.submit(_draft_one, platform, ledger, card, inp, background, style):
+                platform
+            for platform in inp.platforms
+        }
+        for future in as_completed(futures):
+            platform = futures[future]
+            try:
+                draft, flags = future.result()
+            except Exception as err:  # one platform failing must not sink the others
+                notices.append(
+                    Notice(
+                        code=NoticeCode.draft_error,
+                        message=f"{_platform_name(platform)}: drafting failed — {err}",
+                    )
+                )
+                continue
+            drafted[platform] = (draft, flags)
+            _emit(on_event, ProgressEvent(
+                stage=f"draft:{_platform_name(platform)}",
+                message=f"{_platform_name(platform)} draft ready",
+                platform=platform,
+                draft=draft,
+                flags=[_to_overreach(flag, draft.platform) for flag in flags],
+            ))
+    return drafted
 
 
 def _fetch_and_build_ledger(

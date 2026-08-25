@@ -35,15 +35,18 @@ from mcp.server.fastmcp import FastMCP  # noqa: E402
 from starlette.requests import Request  # noqa: E402
 from starlette.responses import JSONResponse  # noqa: E402
 
+from api import jobs  # noqa: E402
 from api.check import check_faithfulness  # noqa: E402
 from api.config_loader import capabilities  # noqa: E402
-from api.pipeline import extract_ledger_preview, run  # noqa: E402
+from api.pipeline import extract_ledger_preview  # noqa: E402
 from api.render import render_markdown  # noqa: E402
 from api.schema import (  # noqa: E402
     AgentInput,
     AgentOutput,
     CheckFlag,
     Claim,
+    JobProgress,
+    JobState,
     Language,
     Notice,
     NoticeCode,
@@ -55,6 +58,12 @@ from api.schema import (  # noqa: E402
 
 # `wechat` is an alias for `xhs` (one shared style card) — see AgentInput.
 _DEFAULT_PLATFORMS = [Platform.news, Platform.xhs]
+
+# How long `generate` may hold the call open waiting for a fast run to finish.
+# Capped well inside the platform gateway's own timeout: exceeding it would
+# recreate the hung tool call this whole async path exists to avoid.
+_DEFAULT_WAIT_S = 10
+_MAX_WAIT_S = 25
 
 # Server name mirrors agent.yaml.
 mcp = FastMCP("scicomm-agent")
@@ -69,27 +78,32 @@ def generate(
     audience: str = "general_public",
     liveliness: int = 3,
     background: bool = True,
+    wait_seconds: int = _DEFAULT_WAIT_S,
 ) -> AgentOutput:
     """Turn a research paper into multi-platform sci-comm drafts.
 
-    Delegates to api.pipeline.run and returns its AgentOutput unchanged
-    (drafts + claim ledger + overstatement flags + background materials).
-    NEVER auto-publishes.
+    A full run is minutes of model calls — longer than a tool call can stay
+    open — so the work starts in the background and this returns as soon as it
+    can. If the run finishes within `wait_seconds` you get the complete
+    AgentOutput exactly as before (this is the common case for fast failures
+    like a paywalled source). Otherwise you get `status='running'` with a
+    `session_id`: poll `job_status(session_id)` and then `job_result(session_id)`.
 
-    If the source can't be read in full (e.g. a paywall -> need_pdf), returns a
-    clear, actionable result asking for a PDF link instead of crashing, so the
-    caller can call `generate` again with `source_type='pdf'`.
+    NEVER auto-publishes.
 
     Args:
         source: PDF link / DOI / web URL of the paper.
         source_type: how to interpret `source` (doi / url / pdf).
-        platforms: target platforms; defaults to news + wechat + xhs.
+        platforms: target platforms; defaults to news + xhs. `wechat` is an
+            alias for `xhs` — they share one style card and are drafted once.
         language: output language (zh / en).
         audience: intended reader.
         liveliness: tone liveliness, 1–5.
         background: gather external background materials (web/arXiv/scholarly
             APIs) as framing context for the drafts; failure degrades to a
             background_error notice, never sinks the run.
+        wait_seconds: how long to wait for the result before handing back a
+            session_id instead. Clamped to 0–25 seconds.
     """
     try:
         inp = AgentInput(
@@ -101,7 +115,7 @@ def generate(
             liveliness=liveliness,
             background=background,
         )
-        out = run(inp)
+        session_id = jobs.start(inp)
     except Exception as exc:  # never crash the tool — surface as a failed result
         return AgentOutput(
             status=Status.failed,
@@ -109,7 +123,95 @@ def generate(
                 Notice(code=NoticeCode.fetch_error, message=f"generate failed: {exc}")
             ],
         )
-    return _clarify_need_pdf(out)
+
+    if jobs.wait(session_id, _clamp_wait(wait_seconds)):
+        return _clarify_need_pdf(job_result(session_id))
+
+    return AgentOutput(
+        status=Status.running,
+        session_id=session_id,
+        notices=[
+            Notice(
+                code=NoticeCode.running,
+                message=(
+                    "Drafting started and is still running. Poll "
+                    f"`job_status` with session_id={session_id!r}, then call "
+                    "`job_result` with the same id once state is 'done'."
+                ),
+            )
+        ],
+    )
+
+
+def _clamp_wait(wait_seconds: int) -> float:
+    """Keep the grace wait inside the gateway's tolerance."""
+    try:
+        return float(max(0, min(int(wait_seconds), _MAX_WAIT_S)))
+    except (TypeError, ValueError):
+        return float(_DEFAULT_WAIT_S)
+
+
+@mcp.tool()
+def job_status(session_id: str) -> JobProgress:
+    """Check how a background `generate` run is doing. Cheap; safe to poll.
+
+    Returns which stage the run is on, how many steps are done, which platforms
+    already have a draft, and how long it has been going. No drafts or ledger
+    come back here — call `job_result` for content.
+
+    An id this server cannot account for (expired, or issued before a restart /
+    by another instance) reports `state='lost'` with a message saying which,
+    rather than pretending the job might still appear.
+
+    Args:
+        session_id: the id returned by `generate`.
+    """
+    try:
+        return jobs.status(session_id)
+    except Exception as exc:  # never crash the tool
+        return JobProgress(
+            session_id=session_id,
+            state=JobState.lost,
+            message=f"status unavailable: {exc}",
+        )
+
+
+@mcp.tool()
+def job_result(session_id: str) -> AgentOutput:
+    """Fetch a background run's output — partial while it is still running.
+
+    While the run is in flight this returns what already exists (the claim
+    ledger, plus each platform's draft as it lands) with `status='running'`, so
+    you can read the first draft while the rest are still being written. A
+    partial NEVER carries a finished status, so it cannot be mistaken for a
+    reviewed result.
+
+    Args:
+        session_id: the id returned by `generate`.
+    """
+    try:
+        out = jobs.result(session_id)
+    except Exception as exc:  # never crash the tool
+        out = None
+        reason = f"result unavailable: {exc}"
+    else:
+        reason = "No result for that session_id."
+
+    if out is None:
+        return AgentOutput(
+            status=Status.failed,
+            session_id=session_id,
+            notices=[
+                Notice(
+                    code=NoticeCode.unknown_session,
+                    message=(
+                        f"{reason} The job expired, or was started by another "
+                        "server instance / before a restart. Call `generate` again."
+                    ),
+                )
+            ],
+        )
+    return out
 
 
 def _clarify_need_pdf(out: AgentOutput) -> AgentOutput:

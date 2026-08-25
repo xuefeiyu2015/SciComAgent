@@ -91,16 +91,16 @@ def test_retries_transient_503_then_succeeds():
 
     assert invoke_json(model, [], sleep=slept.append) == {"ok": True}
     assert model.calls == 3
-    assert slept == [1.0, 2.0]  # exponential backoff between attempts
+    assert slept == [2.0, 4.0]  # exponential backoff between attempts
 
 
 def test_gives_up_after_transient_budget_and_reraises():
-    model = _FlakyModel(*[_unavailable()] * 9)
+    model = _FlakyModel(*[_unavailable()] * 12)
 
     with pytest.raises(RuntimeError, match="503"):
         invoke_json(model, [], sleep=lambda _s: None)
 
-    assert model.calls == 4  # first try + 3 transient retries
+    assert model.calls == 6  # first try + 5 transient retries
 
 
 def test_permanent_error_is_not_retried():

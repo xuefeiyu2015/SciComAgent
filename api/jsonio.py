@@ -42,9 +42,14 @@ _TRANSIENT_WORDS = (
 )
 
 # Extra attempts after the first when the provider is transiently unhappy, and
-# the base for the exponential backoff between them (1s, 2s, 4s).
-_TRANSIENT_RETRIES = 3
-_BACKOFF_BASE_S = 1.0
+# the base for the exponential backoff between them (2s, 4s, 8s, 16s, 32s).
+#
+# Sized from a real outage: a saturated gemini-flash-latest answered 34 requests
+# with 503 against 20 successes, and the provider SDK's own internal retries had
+# already been exhausted underneath us each time. A short budget just converts a
+# temporary outage into a lost draft. Waiting is cheap now that runs are async.
+_TRANSIENT_RETRIES = 5
+_BACKOFF_BASE_S = 2.0
 
 
 def is_transient(err: Exception) -> bool:

@@ -39,6 +39,7 @@ class Status(str, Enum):
     needs_review = "needs_review"
     no_claims = "no_claims"  # nothing sourced -> nothing may be written (rule #1)
     failed = "failed"
+    running = "running"      # async job still working; poll job_status
 
 
 class ConfidenceLevel(str, Enum):
@@ -65,6 +66,8 @@ class NoticeCode(str, Enum):
     draft_error = "draft_error"  # pipeline-internal: one platform's draft crashed
     background_error = "background_error"  # background search skipped; drafts unaffected
     style_error = "style_error"  # style distillation skipped; drafts fall back to default voice
+    running = "running"          # async job accepted; result not ready yet
+    unknown_session = "unknown_session"  # no job for that session_id (expired/lost)
 
 
 class SourceKind(str, Enum):
@@ -284,3 +287,65 @@ class AgentOutput(BaseModel):
     )
     notices: list[Notice] = Field(default_factory=list)
     status: Status = Status.needs_review
+    session_id: str = Field(
+        default="",
+        description="Async job handle. Present on a `running` result and carried "
+        "through to the partial and final results so a caller can keep polling.",
+    )
+
+
+# --- async jobs ---------------------------------------------------------------
+
+class JobState(str, Enum):
+    """Lifecycle of one background `generate` run."""
+
+    queued = "queued"    # accepted, not started
+    running = "running"  # a worker is on it
+    done = "done"        # finished; result available
+    failed = "failed"    # crashed; the failure is in the result's notices
+    lost = "lost"        # unknown id: expired, or the process/instance restarted
+
+
+class JobProgress(BaseModel):
+    """Cheap, pollable status for one job — no drafts, no ledger.
+
+    Returned by the `job_status` tool. Deliberately small so polling through
+    the platform gateway stays fast and cheap; call `job_result` for content.
+    """
+
+    session_id: str
+    state: JobState = JobState.queued
+    stage: str = Field(
+        default="",
+        description="Current step: fetch | ledger | background | style | "
+        "draft:<platform> | done.",
+    )
+    steps_done: int = 0
+    steps_total: int = 0
+    platforms_ready: list[Platform] = Field(
+        default_factory=list,
+        description="Platforms whose draft is already available from job_result.",
+    )
+    started_at: float = Field(default=0.0, description="Unix epoch seconds.")
+    updated_at: float = Field(default=0.0, description="Unix epoch seconds.")
+    elapsed_s: float = 0.0
+    message: str = Field(default="", description="Human-readable status line.")
+    result_available: bool = Field(
+        default=False, description="Whether job_result has anything to return."
+    )
+
+
+class ProgressEvent(BaseModel):
+    """One pipeline milestone, handed to `run`'s optional `on_event` callback.
+
+    Carries partial data (the ledger, a finished platform draft) so a caller
+    can surface results before the whole run ends. The pipeline itself knows
+    nothing about jobs — this is the only seam.
+    """
+
+    stage: str
+    message: str = ""
+    platform: Platform | None = None
+    draft: PlatformOutput | None = None
+    flags: list[OverreachFlag] = Field(default_factory=list)
+    ledger: list[Claim] = Field(default_factory=list)
