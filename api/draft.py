@@ -57,7 +57,12 @@ def _base_prompt() -> str:
 
 
 @lru_cache(maxsize=1)
-def _red_lines() -> str:
+def red_lines() -> str:
+    """The faithfulness red lines every writing step must obey.
+
+    Public because api.revise rewrites drafted prose and must be bound by
+    the same rules as the original draft — one copy, one path.
+    """
     return _RED_LINES_PATH.read_text(encoding="utf-8")
 
 
@@ -144,7 +149,7 @@ def _system_prompt(
     voice = _voice_layer(style)
     if voice:
         layers.append(voice)
-    layers += ["# Red lines\n\n" + _red_lines(), _dials(inp)]
+    layers += ["# Red lines\n\n" + red_lines(), _dials(inp)]
     return "\n\n".join(layers)
 
 
