@@ -258,6 +258,25 @@ class CheckFlag(BaseModel):
     suggestion: str = Field(description="Concrete faithful fix.")
 
 
+class FlagSpan(BaseModel):
+    """Where one overstatement flag's quote sits inside a draft's text.
+
+    Produced by api.highlight.locate_flags so a reviewer UI can paint the exact
+    offending run of characters without re-deriving it from the quote. Offsets
+    index the ORIGINAL field text (never a normalized copy), so
+    `text[start:end]` always slices back to real draft content.
+    """
+
+    start: int = Field(description="Inclusive character offset into the field's text.")
+    end: int = Field(description="Exclusive character offset into the field's text.")
+    flag_index: int = Field(
+        description="Index of the flag in the list this span was located for."
+    )
+    field: str = Field(
+        description="Which part of the draft: 'body', 'cover_copy', or 'title:<n>'."
+    )
+
+
 class Notice(BaseModel):
     """A non-draft message from the pipeline (e.g. why fetch failed).
 
