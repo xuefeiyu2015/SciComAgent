@@ -131,7 +131,7 @@ caution:
   `…may yield more interpretable models (c17).`
 - **Do not** mark **high**-confidence claims. Solid facts (settled numbers,
   counts, names) read clean and need no marker.
-- Apply this **identically on every platform** (news, wechat, xhs) — the marker
+- Apply this **identically on every platform** (news, xhs) — the marker
   rule does not change with format or length.
 - If one sentence rests on several hedged claims, group their ids:
   `(c77, c78)`.

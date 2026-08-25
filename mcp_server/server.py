@@ -53,7 +53,8 @@ from api.schema import (  # noqa: E402
     Status,
 )
 
-_DEFAULT_PLATFORMS = [Platform.news, Platform.wechat, Platform.xhs]
+# `wechat` is an alias for `xhs` (one shared style card) — see AgentInput.
+_DEFAULT_PLATFORMS = [Platform.news, Platform.xhs]
 
 # Server name mirrors agent.yaml.
 mcp = FastMCP("scicomm-agent")

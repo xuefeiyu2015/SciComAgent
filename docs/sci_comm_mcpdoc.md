@@ -123,7 +123,7 @@ overstatement flags.
 |---------------|-----------------------------|----------|----------------------------|-------|
 | `source`      | string                      | ✅       | —                          | PDF link / DOI / web URL of the paper |
 | `source_type` | `doi` \| `url` \| `pdf`     | ✅       | —                          | How to interpret `source` |
-| `platforms`   | list of `news`/`wechat`/`xhs` | ❌     | `[news, wechat, xhs]`      | Target platforms to draft for |
+| `platforms`   | list of `news`/`wechat`/`xhs` | ❌     | `[news, xhs]`      | Target platforms to draft for. `wechat` is an alias for `xhs`: one shared style card, drafted once, labelled `xhs` |
 | `language`    | `zh` \| `en`                | ❌       | `zh`                       | Output language |
 | `audience`    | string                      | ❌       | `general_public`           | Intended reader |
 | `liveliness`  | int 1–5                     | ❌       | `3`                        | Tone liveliness |
@@ -404,7 +404,7 @@ fetch + extract  →  claim ledger  →  per-platform draft  →  faithfulness c
 1. **fetch + extract** — pull the paper text (`extractor`, cheap model).
 2. **claim ledger** — bind each claim to source evidence + qualifier (`extractor`).
 3. **per-platform draft** — write per platform style (`drafter`, writing model);
-   structure controlled by `api/styles/{news,wechat,xhs}.md`.
+   structure controlled by `api/styles/{news,xhs}.md`.
 4. **faithfulness check** — a **different** model (`reviewer`, strong) checks the
    drafts against the ledger and emits overstatement flags. Never grades its own
    output (rule #3).

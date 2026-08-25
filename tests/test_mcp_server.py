@@ -41,8 +41,8 @@ def test_happy_path_returns_output_and_defaults_platforms(monkeypatch):
 
     assert out.status == Status.needs_review
     assert [p.platform for p in out.platform_outputs] == [Platform.news]
-    # platforms defaulted to all three; other dials passed through
-    assert captured["inp"].platforms == [Platform.news, Platform.wechat, Platform.xhs]
+    # platforms defaulted to news + xhs (wechat aliases to xhs); dials passed through
+    assert captured["inp"].platforms == [Platform.news, Platform.xhs]
     assert captured["inp"].source == "http://paper"
     assert captured["inp"].background is True  # background on by default
 

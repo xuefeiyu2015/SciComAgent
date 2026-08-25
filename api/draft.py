@@ -61,6 +61,18 @@ def _red_lines() -> str:
     return _RED_LINES_PATH.read_text(encoding="utf-8")
 
 
+# `wechat` and `xhs` share ONE style card (the long-form narrative voice that
+# used to be wechat.md, now xhs.md). AgentInput already collapses them, but
+# draft_platform is callable on its own — resolve here too so a direct call
+# can't ask for a style card that no longer exists.
+_STYLE_ALIASES = {Platform.wechat: Platform.xhs}
+
+
+def _resolve_platform(platform: Platform) -> Platform:
+    """Map an aliased platform onto the one that owns the style card."""
+    return _STYLE_ALIASES.get(platform, platform)
+
+
 @lru_cache(maxsize=None)
 def _style_card(platform: str) -> str:
     path = _STYLES_DIR / f"{platform}.md"
@@ -100,7 +112,7 @@ def draft_platform(
         Ledger-id markers in the body are kept only for medium/low confidence
         claims (see _filter_markers).
     """
-    platform = Platform(platform)
+    platform = _resolve_platform(Platform(platform))
     model = get_model("drafter", temperature=_DRAFT_TEMPERATURE)
     data = invoke_json(
         model,
@@ -127,7 +139,7 @@ def _system_prompt(
     """
     layers = [
         _base_prompt(),
-        "# Platform style card\n\n" + _style_card(platform.value),
+        "# Platform style card\n\n" + _style_card(_resolve_platform(platform).value),
     ]
     voice = _voice_layer(style)
     if voice:

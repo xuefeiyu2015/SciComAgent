@@ -96,18 +96,20 @@ def test_fetch_failure_returns_status_failed_with_notice(monkeypatch):
 
 
 def test_happy_path_one_draft_per_platform_no_flags(monkeypatch):
+    # `wechat` aliases to `xhs`, so asking for all three drafts only two.
     platforms = [Platform.news, Platform.wechat, Platform.xhs]
-    # one clean check per platform
-    draft_calls = _stub_steps(monkeypatch, flags_seq=[[], [], []])
+    expected = [Platform.news, Platform.xhs]
+    # one clean check per drafted platform
+    draft_calls = _stub_steps(monkeypatch, flags_seq=[[], []])
 
     out = run(_input(platforms=platforms, language=Language.en))
 
     assert out.status == Status.needs_review
-    assert [p.platform for p in out.platform_outputs] == platforms
+    assert [p.platform for p in out.platform_outputs] == expected
     assert out.claim_ledger == _LEDGER
     assert out.overreach_flags == []
-    # drafted exactly once per platform, first draft has no fix notes
-    assert draft_calls == [(p, None, []) for p in platforms]
+    # drafted exactly once per resolved platform, first draft has no fix notes
+    assert draft_calls == [(p, None, []) for p in expected]
 
 
 def test_persistent_flags_redraft_then_surface_as_overreach(monkeypatch):

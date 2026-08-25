@@ -17,7 +17,7 @@ tools:
     parameters:
       source_type: { required: true, allowed: [doi, url, pdf], description: "How to interpret `source`" }
       source:     { required: true,  description: "PDF link / DOI / web URL of the paper" }
-      platforms:  { required: false, default: [news, wechat, xhs], allowed: [news, wechat, xhs] }
+      platforms:  { required: false, default: [news, xhs], allowed: [news, wechat, xhs], description: "`wechat` is an ALIAS for `xhs` — they share one style card and are drafted once; the output is labelled `xhs`" }
       language:   { required: false, default: zh, allowed: [zh, en] }
       audience:   { required: false, default: general_public }
       liveliness: { required: false, default: 3, min: 1, max: 5 }
@@ -111,7 +111,8 @@ config_schema:
   # facts). auto = on whenever that folder is non-empty; false = default voice.
   style:
     enabled: auto
-  platforms: [news, wechat, xhs]
+  # `wechat` is an alias for `xhs` (one shared style card, drafted once).
+  platforms: [news, xhs]
   # Background-materials search: which external sources to query (all keyless).
   # tavily may be added when TAVILY_API_KEY is provided via env (byo_key).
   search:

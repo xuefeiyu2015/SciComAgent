@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- enums (allowed values from agent.yaml) ---------------------------------
@@ -86,8 +86,9 @@ class AgentInput(BaseModel):
     source_type: SourceType = Field(description="How to interpret `source`.")
     source: str = Field(description="PDF link / DOI / web URL of the paper.")
     platforms: list[Platform] = Field(
-        default=[Platform.news, Platform.wechat, Platform.xhs],
-        description="Target platforms to draft for.",
+        default=[Platform.news, Platform.xhs],
+        description="Target platforms to draft for. `wechat` is an alias for "
+        "`xhs` — both share one style card and are drafted once.",
     )
     language: Language = Field(default=Language.zh, description="Output language.")
     audience: str = Field(default="general_public", description="Intended reader.")
@@ -97,6 +98,23 @@ class AgentInput(BaseModel):
         description="Gather external background materials (web/arXiv/scholarly APIs) "
         "as framing context for the drafter. Failure degrades gracefully.",
     )
+
+    @field_validator("platforms")
+    @classmethod
+    def _collapse_wechat_into_xhs(cls, platforms: list[Platform]) -> list[Platform]:
+        """Map `wechat` onto `xhs` and drop the duplicate it creates.
+
+        The two platforms shared a style card once they were merged, so drafting
+        both would spend the drafter twice for identical output. `wechat` stays
+        a valid input for backward compatibility; it just resolves to `xhs`, and
+        the returned PlatformOutput is labelled `xhs`. First-seen order is kept.
+        """
+        seen: list[Platform] = []
+        for platform in platforms:
+            resolved = Platform.xhs if platform is Platform.wechat else platform
+            if resolved not in seen:
+                seen.append(resolved)
+        return seen
 
 
 # --- background research path -------------------------------------------------
