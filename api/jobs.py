@@ -27,6 +27,7 @@ Two honesty guarantees, since in-process state can always be lost:
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import uuid
@@ -46,6 +47,8 @@ from api.schema import (
     ProgressEvent,
     Status,
 )
+
+_log = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _JOBS_DIR = _REPO_ROOT / "outputs" / "jobs"
@@ -326,8 +329,12 @@ def _mirror_safely(session_id: str, output: AgentOutput) -> None:
     """Mirror, but never let a filesystem problem sink a completed job."""
     try:
         _mirror_to_disk(session_id, output)
-    except Exception:  # read-only / ephemeral FS: the in-memory result stands
-        pass
+    except Exception as err:  # read-only / ephemeral FS: the in-memory result stands
+        _log.warning(
+            "job %s finished but could not be mirrored to disk (%s); the result "
+            "is still served from memory until this process restarts",
+            session_id, err,
+        )
 
 
 def _read_mirror(session_id: str) -> AgentOutput | None:
@@ -339,7 +346,8 @@ def _read_mirror(session_id: str) -> AgentOutput | None:
         if not path.exists():
             return None
         return AgentOutput.model_validate_json(path.read_text(encoding="utf-8"))
-    except Exception:  # corrupt or unreadable mirror is the same as absent
+    except Exception as err:  # corrupt or unreadable mirror is the same as absent
+        _log.debug("job %s: unreadable mirror (%s)", session_id, err)
         return None
 
 

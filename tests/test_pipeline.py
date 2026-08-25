@@ -426,3 +426,16 @@ def test_draft_workers_setting_can_force_serial(monkeypatch):
     out = run(_input(platforms=[Platform.news, Platform.xhs]))
 
     assert [p.platform for p in out.platform_outputs] == [Platform.news, Platform.xhs]
+
+
+def test_broken_progress_listener_does_not_sink_the_run(monkeypatch):
+    """A caller's callback is not allowed to kill the pipeline."""
+    _stub_steps(monkeypatch, flags_seq=[[]])
+
+    def hostile(_event):
+        raise RuntimeError("listener exploded")
+
+    out = run(_input(platforms=[Platform.news]), on_event=hostile)
+
+    assert out.status == Status.needs_review
+    assert [p.platform for p in out.platform_outputs] == [Platform.news]

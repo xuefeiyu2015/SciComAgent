@@ -29,6 +29,7 @@ draft + provenance (claim ledger) + overstatement flags for review.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -56,6 +57,8 @@ from api.schema import (
 )
 from api.style import load_style_profile
 from api.topic import abstract_topic
+
+_log = logging.getLogger(__name__)
 
 # Redraft attempts after the first draft, while faithfulness flags remain.
 MAX_REDRAFTS = 2
@@ -87,8 +90,11 @@ def _emit(on_event: EventSink | None, event: ProgressEvent) -> None:
         return
     try:
         on_event(event)
-    except Exception:
-        pass
+    except Exception as err:
+        _log.warning(
+            "progress listener raised on stage %r (%s); continuing the run",
+            event.stage, err,
+        )
 
 
 def run(inp: AgentInput, on_event: EventSink | None = None) -> AgentOutput:
