@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- enums (allowed values from agent.yaml) ---------------------------------
@@ -39,6 +39,7 @@ class Status(str, Enum):
     needs_review = "needs_review"
     no_claims = "no_claims"  # nothing sourced -> nothing may be written (rule #1)
     failed = "failed"
+    running = "running"      # async job still working; poll job_status
 
 
 class ConfidenceLevel(str, Enum):
@@ -65,6 +66,8 @@ class NoticeCode(str, Enum):
     draft_error = "draft_error"  # pipeline-internal: one platform's draft crashed
     background_error = "background_error"  # background search skipped; drafts unaffected
     style_error = "style_error"  # style distillation skipped; drafts fall back to default voice
+    running = "running"          # async job accepted; result not ready yet
+    unknown_session = "unknown_session"  # no job for that session_id (expired/lost)
 
 
 class SourceKind(str, Enum):
@@ -86,8 +89,9 @@ class AgentInput(BaseModel):
     source_type: SourceType = Field(description="How to interpret `source`.")
     source: str = Field(description="PDF link / DOI / web URL of the paper.")
     platforms: list[Platform] = Field(
-        default=[Platform.news, Platform.wechat, Platform.xhs],
-        description="Target platforms to draft for.",
+        default=[Platform.news, Platform.xhs],
+        description="Target platforms to draft for. `wechat` is an alias for "
+        "`xhs` — both share one style card and are drafted once.",
     )
     language: Language = Field(default=Language.zh, description="Output language.")
     audience: str = Field(default="general_public", description="Intended reader.")
@@ -97,6 +101,23 @@ class AgentInput(BaseModel):
         description="Gather external background materials (web/arXiv/scholarly APIs) "
         "as framing context for the drafter. Failure degrades gracefully.",
     )
+
+    @field_validator("platforms")
+    @classmethod
+    def _collapse_wechat_into_xhs(cls, platforms: list[Platform]) -> list[Platform]:
+        """Map `wechat` onto `xhs` and drop the duplicate it creates.
+
+        The two platforms shared a style card once they were merged, so drafting
+        both would spend the drafter twice for identical output. `wechat` stays
+        a valid input for backward compatibility; it just resolves to `xhs`, and
+        the returned PlatformOutput is labelled `xhs`. First-seen order is kept.
+        """
+        seen: list[Platform] = []
+        for platform in platforms:
+            resolved = Platform.xhs if platform is Platform.wechat else platform
+            if resolved not in seen:
+                seen.append(resolved)
+        return seen
 
 
 # --- background research path -------------------------------------------------
@@ -266,3 +287,65 @@ class AgentOutput(BaseModel):
     )
     notices: list[Notice] = Field(default_factory=list)
     status: Status = Status.needs_review
+    session_id: str = Field(
+        default="",
+        description="Async job handle. Present on a `running` result and carried "
+        "through to the partial and final results so a caller can keep polling.",
+    )
+
+
+# --- async jobs ---------------------------------------------------------------
+
+class JobState(str, Enum):
+    """Lifecycle of one background `generate` run."""
+
+    queued = "queued"    # accepted, not started
+    running = "running"  # a worker is on it
+    done = "done"        # finished; result available
+    failed = "failed"    # crashed; the failure is in the result's notices
+    lost = "lost"        # unknown id: expired, or the process/instance restarted
+
+
+class JobProgress(BaseModel):
+    """Cheap, pollable status for one job — no drafts, no ledger.
+
+    Returned by the `job_status` tool. Deliberately small so polling through
+    the platform gateway stays fast and cheap; call `job_result` for content.
+    """
+
+    session_id: str
+    state: JobState = JobState.queued
+    stage: str = Field(
+        default="",
+        description="Current step: fetch | ledger | background | style | "
+        "draft:<platform> | done.",
+    )
+    steps_done: int = 0
+    steps_total: int = 0
+    platforms_ready: list[Platform] = Field(
+        default_factory=list,
+        description="Platforms whose draft is already available from job_result.",
+    )
+    started_at: float = Field(default=0.0, description="Unix epoch seconds.")
+    updated_at: float = Field(default=0.0, description="Unix epoch seconds.")
+    elapsed_s: float = 0.0
+    message: str = Field(default="", description="Human-readable status line.")
+    result_available: bool = Field(
+        default=False, description="Whether job_result has anything to return."
+    )
+
+
+class ProgressEvent(BaseModel):
+    """One pipeline milestone, handed to `run`'s optional `on_event` callback.
+
+    Carries partial data (the ledger, a finished platform draft) so a caller
+    can surface results before the whole run ends. The pipeline itself knows
+    nothing about jobs — this is the only seam.
+    """
+
+    stage: str
+    message: str = ""
+    platform: Platform | None = None
+    draft: PlatformOutput | None = None
+    flags: list[OverreachFlag] = Field(default_factory=list)
+    ledger: list[Claim] = Field(default_factory=list)

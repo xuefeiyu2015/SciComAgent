@@ -54,3 +54,90 @@ def test_rejects_content_with_no_json_object():
     model = _ScriptedModel("[1, 2, 3]", "[1, 2, 3]", "[1, 2, 3]")
     with pytest.raises(ValueError):
         invoke_json(model, [], retries=2)
+
+
+# --- transient provider failures --------------------------------------------
+
+class _FlakyModel:
+    """Raises a scripted exception per call until the script runs out.
+
+    A `None` entry means "this call succeeds" and returns `content`.
+    """
+
+    def __init__(self, *errors, content='{"ok": true}'):
+        self._errors = list(errors)
+        self._content = content
+        self.calls = 0
+
+    def invoke(self, messages):
+        self.calls += 1
+        err = self._errors.pop(0) if self._errors else None
+        if err is not None:
+            raise err
+        return AIMessage(content=self._content)
+
+
+def _unavailable():
+    """What Gemini raises when the model is saturated."""
+    return RuntimeError(
+        "503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is "
+        "currently experiencing high demand.', 'status': 'UNAVAILABLE'}}"
+    )
+
+
+def test_retries_transient_503_then_succeeds():
+    model = _FlakyModel(_unavailable(), _unavailable())
+    slept = []
+
+    assert invoke_json(model, [], sleep=slept.append) == {"ok": True}
+    assert model.calls == 3
+    assert slept == [2.0, 4.0]  # exponential backoff between attempts
+
+
+def test_gives_up_after_transient_budget_and_reraises():
+    model = _FlakyModel(*[_unavailable()] * 12)
+
+    with pytest.raises(RuntimeError, match="503"):
+        invoke_json(model, [], sleep=lambda _s: None)
+
+    assert model.calls == 6  # first try + 5 transient retries
+
+
+def test_permanent_error_is_not_retried():
+    """A bad request must fail fast — retrying it just burns time."""
+    model = _FlakyModel(ValueError("400 INVALID_ARGUMENT: bad request"))
+
+    with pytest.raises(ValueError, match="400"):
+        invoke_json(model, [], sleep=lambda _s: None)
+
+    assert model.calls == 1
+
+
+def test_digits_inside_prose_do_not_look_transient():
+    """'500' inside a message must not be mistaken for a 500 status."""
+    model = _FlakyModel(ValueError("prompt exceeds 1500 tokens, reduce input"))
+
+    with pytest.raises(ValueError):
+        invoke_json(model, [], sleep=lambda _s: None)
+
+    assert model.calls == 1
+
+
+def test_transient_and_parse_backstops_compose():
+    """A 503, then an empty reply, then valid JSON — both retries still apply."""
+
+    class _Mixed:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                raise _unavailable()
+            if self.calls == 2:
+                return AIMessage(content="")  # provider returned an empty candidate
+            return AIMessage(content='{"ok": true}')
+
+    model = _Mixed()
+    assert invoke_json(model, [], sleep=lambda _s: None) == {"ok": True}
+    assert model.calls == 3

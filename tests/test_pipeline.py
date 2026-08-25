@@ -96,18 +96,20 @@ def test_fetch_failure_returns_status_failed_with_notice(monkeypatch):
 
 
 def test_happy_path_one_draft_per_platform_no_flags(monkeypatch):
+    # `wechat` aliases to `xhs`, so asking for all three drafts only two.
     platforms = [Platform.news, Platform.wechat, Platform.xhs]
-    # one clean check per platform
-    draft_calls = _stub_steps(monkeypatch, flags_seq=[[], [], []])
+    expected = [Platform.news, Platform.xhs]
+    # one clean check per drafted platform
+    draft_calls = _stub_steps(monkeypatch, flags_seq=[[], []])
 
     out = run(_input(platforms=platforms, language=Language.en))
 
     assert out.status == Status.needs_review
-    assert [p.platform for p in out.platform_outputs] == platforms
+    assert [p.platform for p in out.platform_outputs] == expected
     assert out.claim_ledger == _LEDGER
     assert out.overreach_flags == []
-    # drafted exactly once per platform, first draft has no fix notes
-    assert draft_calls == [(p, None, []) for p in platforms]
+    # drafted exactly once per resolved platform, first draft has no fix notes
+    assert draft_calls == [(p, None, []) for p in expected]
 
 
 def test_persistent_flags_redraft_then_surface_as_overreach(monkeypatch):
@@ -320,3 +322,120 @@ def test_extract_ledger_preview_empty_ledger_no_claims(monkeypatch):
 
     assert out.status == Status.no_claims
     assert out.claim_ledger == []
+
+
+# --- progress events + concurrent drafting ----------------------------------
+
+def test_on_event_reports_each_stage_and_carries_partials(monkeypatch):
+    _stub_steps(monkeypatch, materials=_MATERIALS, style=StyleProfile(voice="v"),
+                flags_seq=[[]])
+
+    events = []
+    run(_input(platforms=[Platform.news], background=True), on_event=events.append)
+
+    stages = [e.stage for e in events]
+    assert "ledger" in stages
+    assert "background" in stages
+    assert "style" in stages
+    assert any(s.startswith("draft") for s in stages)
+
+    ledger_event = next(e for e in events if e.stage == "ledger")
+    assert ledger_event.ledger == _LEDGER
+
+    draft_event = next(e for e in events if e.draft is not None)
+    assert draft_event.platform is Platform.news
+    assert draft_event.draft.body == "draft"
+
+
+def test_run_without_on_event_is_unchanged(monkeypatch):
+    """The hook is optional; omitting it must not alter the result."""
+    _stub_steps(monkeypatch, flags_seq=[[], []])
+
+    out = run(_input(platforms=[Platform.news, Platform.xhs]))
+
+    assert [p.platform for p in out.platform_outputs] == [Platform.news, Platform.xhs]
+
+
+def test_platforms_are_drafted_concurrently(monkeypatch):
+    """Each draft blocks until all of them have started — serial code deadlocks."""
+    import threading
+
+    platforms = [Platform.news, Platform.xhs]
+    barrier = threading.Barrier(len(platforms), timeout=5)
+    _stub_steps(monkeypatch, flags_seq=[[], []])
+
+    def blocking_draft(platform, ledger, inp, fix=None, background=None,
+                       angle=None, style=None):
+        barrier.wait()  # BrokenBarrierError if the others never arrive
+        return PlatformOutput(platform=platform, body="draft")
+
+    monkeypatch.setattr(pipeline, "draft_platform", blocking_draft)
+
+    out = run(_input(platforms=platforms))
+
+    assert [p.platform for p in out.platform_outputs] == platforms
+
+
+def test_output_order_follows_requested_platforms(monkeypatch):
+    """Completion order must not leak into the result."""
+    import threading
+
+    platforms = [Platform.news, Platform.xhs]
+    first_done = threading.Event()
+    _stub_steps(monkeypatch, flags_seq=[[], []])
+
+    def staggered(platform, ledger, inp, fix=None, background=None,
+                  angle=None, style=None):
+        if platform is Platform.xhs:      # finishes first
+            first_done.set()
+        else:
+            first_done.wait(5)            # news finishes last
+        return PlatformOutput(platform=platform, body="draft")
+
+    monkeypatch.setattr(pipeline, "draft_platform", staggered)
+
+    out = run(_input(platforms=platforms))
+
+    assert [p.platform for p in out.platform_outputs] == platforms
+
+
+def test_one_platform_failing_does_not_sink_the_others(monkeypatch):
+    _stub_steps(monkeypatch, flags_seq=[[], []])
+
+    def half_broken(platform, ledger, inp, fix=None, background=None,
+                    angle=None, style=None):
+        if platform is Platform.news:
+            raise RuntimeError("drafter exploded")
+        return PlatformOutput(platform=platform, body="draft")
+
+    monkeypatch.setattr(pipeline, "draft_platform", half_broken)
+
+    out = run(_input(platforms=[Platform.news, Platform.xhs]))
+
+    assert [p.platform for p in out.platform_outputs] == [Platform.xhs]
+    assert out.status == Status.needs_review
+    codes = [n.code for n in out.notices]
+    assert NoticeCode.draft_error in codes
+    assert "drafter exploded" in "".join(n.message for n in out.notices)
+
+
+def test_draft_workers_setting_can_force_serial(monkeypatch):
+    monkeypatch.setenv("DRAFT_WORKERS", "1")
+    _stub_steps(monkeypatch, flags_seq=[[], []])
+
+    out = run(_input(platforms=[Platform.news, Platform.xhs]))
+
+    assert [p.platform for p in out.platform_outputs] == [Platform.news, Platform.xhs]
+
+
+def test_broken_progress_listener_does_not_sink_the_run(monkeypatch):
+    """A caller's callback is not allowed to kill the pipeline."""
+    _stub_steps(monkeypatch, flags_seq=[[]])
+
+    def hostile(_event):
+        raise RuntimeError("listener exploded")
+
+    out = run(_input(platforms=[Platform.news]), on_event=hostile)
+
+    assert out.status == Status.needs_review
+    assert [p.platform for p in out.platform_outputs] == [Platform.news]

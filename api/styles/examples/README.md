@@ -9,7 +9,7 @@ never the raw articles.
 
 - Leave the folder empty to keep the current default drafting behavior.
 - The profile layers **on top of** the platform blueprints in
-  `api/styles/{news,wechat,xhs}.md`; it does not replace them.
+  `api/styles/{news,xhs}.md`; it does not replace them.
 - Voice only. Facts, numbers and subject matter are stripped during
   distillation: every number / causation / magnitude / "first" / "proves"
   statement in a draft still comes only from the claim ledger.
