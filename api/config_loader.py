@@ -52,6 +52,26 @@ def _load_config() -> dict[str, Any]:
         return yaml.safe_load(fh) or {}
 
 
+def reload_config() -> None:
+    """Forget the cached config so the next read sees the file on disk.
+
+    Needed because `_load_config` is memoized for the life of the process:
+    without this, saving models from the settings sidebar would not take effect
+    until a restart. Call it after any write to `config/config.yaml`.
+    """
+    _load_config.cache_clear()
+
+
+def config_path() -> Path:
+    """The config file this process reads. One source of truth for writers."""
+    return _CONFIG_PATH
+
+
+def env_path() -> Path:
+    """The `.env` file auto-loaded on import; where key writes must land."""
+    return _ENV_PATH
+
+
 def _resolve(value: Any, default_env: str) -> str | None:
     """Resolve a config value to a concrete string.
 
