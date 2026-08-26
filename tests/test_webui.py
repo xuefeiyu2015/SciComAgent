@@ -301,3 +301,32 @@ def test_revise_refuses_an_empty_instruction(client, monkeypatch):
 
     assert resp.status_code == 400
     assert called == []
+
+
+def test_job_result_marks_sentences_resting_on_hedged_evidence(client, monkeypatch):
+    """A clean draft can still need review when its evidence is shaky."""
+    from api.schema import ConfidenceLevel
+
+    hedged_claim = Claim(
+        id="c9", claim="推测的机制", source_evidence="discussion: may relate to",
+        qualifier="推测", confidence=ConfidenceLevel.low,
+    )
+    draft = PlatformOutput(
+        platform=Platform.news,
+        body="扎实的一句 (c1)。作者推测机制与T细胞有关 (c9)。",
+    )
+    clean = AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[draft],
+        claim_ledger=[_LEDGER[0], hedged_claim],
+        overreach_flags=[],
+    )
+    monkeypatch.setattr(webui.jobs, "result", lambda sid: clean)
+
+    pack = client.get("/api/job/j_test_1/result").json()["spans"]["news"]
+
+    assert pack["flags"] == []
+    assert len(pack["hedged"]) == 1
+    span = pack["hedged"][0]
+    assert draft.body[span["start"] : span["end"]] == "作者推测机制与T细胞有关 (c9)。"
+    assert span["claim_ids"] == ["c9"]

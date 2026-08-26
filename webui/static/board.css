@@ -617,3 +617,13 @@ textarea.rw-ask {
 .orphans li { margin-bottom: 8px; }
 .orphan-ack { font-size: 11px; padding: 3px 8px; border-color: var(--flag); color: var(--flag); }
 .orphan-done { font: 400 11px var(--mono); color: var(--muted); }
+
+/* A sentence whose evidence is itself uncertain. Amber and dashed — the
+   sentence is sourced correctly, so it must not read as an error; it is the
+   SOURCE that is shaky. Never the solid vermilion rule of an overstatement. */
+.hedged {
+  border-bottom: 1px dashed var(--hedged);
+  background: rgba(154, 107, 15, .07);
+  padding-bottom: 1px;
+}
+.hedged:hover { background: rgba(154, 107, 15, .14); }

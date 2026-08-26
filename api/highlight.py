@@ -18,9 +18,85 @@ logic — the web wrapper only marshals the result (see CLAUDE.md).
 
 from __future__ import annotations
 
-from api.schema import FlagSpan, OverreachFlag, PlatformOutput
+import re
+
+from api.markers import MARKER_RE, split_ids
+from api.schema import (
+    Claim,
+    ConfidenceLevel,
+    FlagSpan,
+    HedgedSpan,
+    OverreachFlag,
+    PlatformOutput,
+)
+
+# Confidence levels that make a claim shaky enough for a reviewer to look twice.
+_HEDGED = frozenset({ConfidenceLevel.medium, ConfidenceLevel.low})
+
+# End of a sentence. A bare "." only counts when whitespace or the end of the
+# text follows it, so "0.5 percentage points" stays one sentence — a wrongly
+# split sentence is visible here, because it becomes a wrongly drawn highlight.
+_SENTENCE_END_RE = re.compile(r"[。！？!?]+|\.(?=\s|$)|\n+")
 
 _Occurrence = tuple[str, int, int]  # (field, start, end)
+
+
+def locate_hedged(draft: PlatformOutput, ledger: list[Claim]) -> list[HedgedSpan]:
+    """Find the sentences resting on medium/low-confidence ledger entries.
+
+    These are not errors — the draft cited its evidence correctly, and the
+    evidence is simply uncertain. They are what a reviewer scans for when
+    deciding what to soften, so the board marks the whole sentence rather than
+    just its citation.
+
+    Args:
+        draft: the draft to scan.
+        ledger: the claim ledger, for each claim's confidence.
+
+    Returns:
+        One HedgedSpan per affected sentence, in reading order. A sentence
+        citing two hedged claims yields ONE span naming both. Citations to
+        unknown ids are ignored — `api.check` already flags those as dangling.
+    """
+    hedged = {c.id for c in ledger if c.confidence in _HEDGED}
+    if not hedged:
+        return []
+
+    spans: list[HedgedSpan] = []
+    for field, text in _searchable_fields(draft):
+        found: dict[tuple[int, int], list[str]] = {}
+        for match in MARKER_RE.finditer(text):
+            ids = [cid for cid in split_ids(match.group(1)) if cid in hedged]
+            if not ids:
+                continue
+            bounds = _sentence_bounds(text, match.start())
+            for cid in ids:
+                if cid not in found.setdefault(bounds, []):
+                    found[bounds].append(cid)
+        spans.extend(
+            HedgedSpan(start=start, end=end, field=field, claim_ids=ids)
+            for (start, end), ids in sorted(found.items())
+        )
+    return spans
+
+
+def _sentence_bounds(text: str, index: int) -> tuple[int, int]:
+    """The sentence containing `index`, as offsets into `text`.
+
+    The closing punctuation is included so the highlight ends where the
+    sentence does; leading whitespace is excluded so it does not begin in the
+    gap after the previous one.
+    """
+    start, end = 0, len(text)
+    for match in _SENTENCE_END_RE.finditer(text):
+        if match.end() <= index:
+            start = match.end()
+        else:
+            end = match.end()
+            break
+    while start < end and text[start].isspace():
+        start += 1
+    return start, end
 
 
 def locate_flags(

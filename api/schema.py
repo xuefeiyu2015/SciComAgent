@@ -277,6 +277,23 @@ class FlagSpan(BaseModel):
     )
 
 
+class HedgedSpan(BaseModel):
+    """A sentence whose evidence is itself uncertain.
+
+    Produced by api.highlight.locate_hedged for any sentence citing a ledger
+    entry of medium/low confidence. Distinct from an OverreachFlag: the
+    sentence is sourced CORRECTLY — it is the source that is shaky — so a
+    reviewer treats it differently, and the board colours it differently.
+    """
+
+    start: int = Field(description="Inclusive character offset into the field's text.")
+    end: int = Field(description="Exclusive character offset into the field's text.")
+    field: str = Field(description="'body', 'cover_copy', or 'title:<n>'.")
+    claim_ids: list[str] = Field(
+        default_factory=list, description="The hedged ledger ids this sentence rests on."
+    )
+
+
 class Notice(BaseModel):
     """A non-draft message from the pipeline (e.g. why fetch failed).
 

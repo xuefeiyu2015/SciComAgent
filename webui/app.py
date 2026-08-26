@@ -38,7 +38,7 @@ from starlette.staticfiles import StaticFiles  # noqa: E402
 from api import jobs, settings  # noqa: E402
 from api.check import check_faithfulness  # noqa: E402
 from api.config_loader import ROLES, capabilities  # noqa: E402
-from api.highlight import locate_flags  # noqa: E402
+from api.highlight import locate_flags, locate_hedged  # noqa: E402
 from api.render import render_text  # noqa: E402
 from api.revise import revise_sentence  # noqa: E402
 from api.schema import (  # noqa: E402
@@ -208,6 +208,14 @@ async def job_result(request: Request) -> JSONResponse:
     return JSONResponse(_with_spans(out))
 
 
+def _covered(hedged, flag_spans) -> bool:
+    """Whether a flagged span already covers this hedged sentence."""
+    return any(
+        span.field == hedged.field and span.start < hedged.end and hedged.start < span.end
+        for span in flag_spans
+    )
+
+
 def _with_spans(out: AgentOutput) -> dict[str, Any]:
     """Attach flag positions so the board can paint without re-deriving them.
 
@@ -221,10 +229,17 @@ def _with_spans(out: AgentOutput) -> dict[str, Any]:
     for draft in out.platform_outputs:
         flags = [f for f in out.overreach_flags if f.platform == draft.platform]
         located, unlocated = locate_flags(draft, flags)
+        # A flagged sentence is already the stronger signal; marking it hedged
+        # as well would stack two colours on one sentence and say less.
+        hedged = [
+            h for h in locate_hedged(draft, out.claim_ledger)
+            if not _covered(h, located)
+        ]
         spans[draft.platform.value] = {
             "flags": [f.model_dump(mode="json") for f in flags],
             "spans": [s.model_dump(mode="json") for s in located],
             "unlocated": unlocated,
+            "hedged": [h.model_dump(mode="json") for h in hedged],
         }
     payload = out.model_dump(mode="json")
     payload.pop("style_profile", None)

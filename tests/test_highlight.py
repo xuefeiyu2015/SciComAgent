@@ -7,8 +7,14 @@ draft text, and any flag that cannot be located is REPORTED rather than dropped.
 
 from __future__ import annotations
 
-from api.highlight import locate_flags
-from api.schema import OverreachFlag, Platform, PlatformOutput
+from api.highlight import locate_flags, locate_hedged
+from api.schema import (
+    Claim,
+    ConfidenceLevel,
+    OverreachFlag,
+    Platform,
+    PlatformOutput,
+)
 
 
 def _draft(body: str = "", cover_copy: str = "", titles: list[str] | None = None) -> PlatformOutput:
@@ -93,3 +99,61 @@ def test_cover_copy_and_titles_are_searched_too():
     assert draft.cover_copy[by_flag[0].start : by_flag[0].end] == "彻底治愈癌症！"
     assert by_flag[1].field == "title:1"
     assert draft.title_options[1][by_flag[1].start : by_flag[1].end] == "史上首次证明"
+
+
+# --- hedged evidence ----------------------------------------------------------
+
+def _claim(cid: str, confidence: ConfidenceLevel) -> Claim:
+    return Claim(id=cid, claim="c", source_evidence="e", qualifier="q", confidence=confidence)
+
+
+_HEDGED_LEDGER = [
+    _claim("c1", ConfidenceLevel.high),
+    _claim("c2", ConfidenceLevel.medium),
+    _claim("c3", ConfidenceLevel.low),
+]
+
+
+def test_marks_the_sentence_resting_on_a_hedged_claim():
+    body = "第一句很扎实 (c1)。第二句就没那么确定了 (c2)。第三句无关。"
+    spans = locate_hedged(_draft(body), _HEDGED_LEDGER)
+
+    assert len(spans) == 1
+    assert body[spans[0].start : spans[0].end] == "第二句就没那么确定了 (c2)。"
+    assert spans[0].claim_ids == ["c2"]
+
+
+def test_a_solid_claim_is_not_marked():
+    spans = locate_hedged(_draft("只有扎实的依据 (c1)。"), _HEDGED_LEDGER)
+
+    assert spans == []
+
+
+def test_two_hedged_citations_in_one_sentence_give_one_span():
+    body = "这句同时靠两条不确定的依据 (c2, c3)。"
+    spans = locate_hedged(_draft(body), _HEDGED_LEDGER)
+
+    assert len(spans) == 1
+    assert spans[0].claim_ids == ["c2", "c3"]
+
+
+def test_a_decimal_point_does_not_end_a_sentence():
+    body = "The effect was 0.5 percentage points, which is small (c3). Next."
+    spans = locate_hedged(_draft(body), _HEDGED_LEDGER)
+
+    assert body[spans[0].start : spans[0].end] == (
+        "The effect was 0.5 percentage points, which is small (c3)."
+    )
+
+
+def test_an_unknown_id_is_not_treated_as_hedged():
+    spans = locate_hedged(_draft("引用了不存在的条目 (c9)。"), _HEDGED_LEDGER)
+
+    assert spans == []
+
+
+def test_hedged_citations_in_cover_and_titles_are_found():
+    draft = _draft(body="正文扎实 (c1)。", cover_copy="封面不太确定 (c2)。", titles=["标题也不确定 (c3)"])
+    spans = locate_hedged(draft, _HEDGED_LEDGER)
+
+    assert {s.field for s in spans} == {"cover_copy", "title:0"}

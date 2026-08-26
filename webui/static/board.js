@@ -274,9 +274,16 @@ function renderBoard() {
     wrap.dataset.platform = platform;
 
     const head = el('header', 'manuscript-head');
-    const open = pack.flags.length - Object.keys(state.decisions).filter((k) => k.startsWith(`${platform}:`)).length;
+    const decided = Object.keys(state.decisions).filter((k) => k.startsWith(`${platform}:`)).length;
+    const open = pack.flags.length - decided;
+    const hedged = (pack.hedged || []).length;
+    // Two different things a reviewer looks for, so the header names both. A
+    // draft with no overstatements can still rest on shaky evidence, and a bare
+    // "0 处存疑" would read as "nothing to do here".
+    const counts = [`${pack.flags.length} 处存疑 · overstatements${open ? ` (${open} left)` : ''}`];
+    if (hedged) counts.push(`${hedged} 处依据不确定 · hedged`);
     head.innerHTML = `<h2>${esc(PLATFORM_LABEL[platform] || platform)}</h2>
-      <span class="count">${pack.flags.length} 处存疑 · ${open} left</span>`;
+      <span class="count">${counts.join('　·　')}</span>`;
     wrap.append(head);
 
     if (pack.unlocated.length) wrap.append(orphanStrip(pack, platform));
@@ -326,6 +333,12 @@ function renderBoard() {
   board.append(tallyBar());
   board.querySelectorAll('.mark').forEach(bindMark);
   board.querySelectorAll('.cite').forEach(bindCite);
+  board.querySelectorAll('.hedged').forEach((node) => {
+    node.addEventListener('mouseenter', () => {
+      const first = node.querySelector('sup.cite');
+      if (first) showCitation(first);
+    });
+  });
 }
 
 function fieldLabel(text) {
@@ -407,27 +420,45 @@ function citation(group, offset, length, confidence) {
   }).join('');
 }
 
-/* Paint one field: escape everything, then wrap the server-supplied spans. */
+/* Paint one field. Two kinds of span can be marked — a flag (this sentence
+   outran its source) and a hedged sentence (its source is itself uncertain).
+   The server keeps them disjoint, so they paint in one pass without nesting. */
 function paint(text, pack, platform, field, confidence) {
-  const spans = pack.spans
-    .filter((s) => s.field === field)
-    .sort((a, b) => a.start - b.start);
+  const marks = [
+    ...pack.spans.filter((s) => s.field === field).map((s) => ({ ...s, kind: 'flag' })),
+    ...(pack.hedged || []).filter((s) => s.field === field).map((s) => ({ ...s, kind: 'hedged' })),
+  ].sort((a, b) => a.start - b.start);
 
   let html = '';
   let cursor = 0;
-  spans.forEach((span) => {
-    if (span.start < cursor) return;   // never nest a mark inside another
-    const flag = pack.flags[span.flag_index];
-    const key = flagKey(platform, span.flag_index);
-    const decision = state.decisions[key] || '';
+  marks.forEach((span) => {
+    if (span.start < cursor) return;   // never nest one mark inside another
     html += renderRun(text, cursor, span.start, confidence);
-    html += `<span class="mark" tabindex="0" role="button" data-key="${esc(key)}"`
-         + ` data-state="${esc(decision)}" aria-label="存疑 flagged: ${esc(flag.reason)}">`
-         + renderRun(text, span.start, span.end, confidence)
-         + '<sup class="query" aria-hidden="true">?</sup></span>';
+    html += span.kind === 'flag'
+      ? flagMark(text, span, pack, platform, confidence)
+      : hedgedMark(text, span, confidence);
     cursor = span.end;
   });
   return html + renderRun(text, cursor, text.length, confidence);
+}
+
+function flagMark(text, span, pack, platform, confidence) {
+  const flag = pack.flags[span.flag_index];
+  const key = flagKey(platform, span.flag_index);
+  const decision = state.decisions[key] || '';
+  return `<span class="mark" tabindex="0" role="button" data-key="${esc(key)}"`
+    + ` data-state="${esc(decision)}" aria-label="存疑 flagged: ${esc(flag.reason)}">`
+    + renderRun(text, span.start, span.end, confidence)
+    + '<sup class="query" aria-hidden="true">?</sup></span>';
+}
+
+function hedgedMark(text, span, confidence) {
+  const ids = span.claim_ids.join(' ');
+  return `<span class="hedged" data-claims="${esc(ids)}"`
+    + ` title="依据不够确定 · rests on hedged evidence (${esc(ids)})"`
+    + ` aria-label="依据不够确定 rests on hedged evidence: ${esc(ids)}">`
+    + renderRun(text, span.start, span.end, confidence)
+    + '</span>';
 }
 
 function tallyBar() {
