@@ -220,7 +220,7 @@ def test_revise_returns_the_rewritten_sentence(client, monkeypatch):
         "/api/revise",
         json={
             "sentence": "该疗法治愈了癌症。",
-            "flag": {"text": "该疗法治愈了癌症。", "reason": "丢失限定词"},
+            "instruction": "丢失限定词",
             "ledger": [json.loads(_LEDGER[0].model_dump_json())],
             "platform": "news",
             "language": "zh",
@@ -241,7 +241,7 @@ def test_a_provider_failure_during_revise_is_a_message_not_a_crash(client, monke
         "/api/revise",
         json={
             "sentence": "s",
-            "flag": {"text": "s", "reason": "r"},
+            "instruction": "r",
             "ledger": [],
             "platform": "news",
             "language": "zh",
@@ -287,3 +287,17 @@ def test_the_learned_voice_never_reaches_the_browser(client, monkeypatch):
     assert "从一个具体场景开场" not in resp.text
     assert "favourite-essay.md" not in resp.text
     assert resp.json()["result"].get("style_profile") is None
+
+
+def test_revise_refuses_an_empty_instruction(client, monkeypatch):
+    """Without a request there is nothing to ask for — do not spend a call."""
+    called = []
+    monkeypatch.setattr(webui, "revise_sentence", lambda *a, **k: called.append(a) or "x")
+
+    resp = client.post(
+        "/api/revise",
+        json={"sentence": "s", "instruction": "   ", "ledger": [], "platform": "news"},
+    )
+
+    assert resp.status_code == 400
+    assert called == []

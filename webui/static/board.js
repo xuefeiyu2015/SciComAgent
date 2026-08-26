@@ -30,6 +30,7 @@ const state = {
   settings: null,
   polling: null,
   openKey: null,
+  rewriter: null,     // the passage currently being rewritten by hand
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -250,9 +251,19 @@ function reportTerminal(result) {
 
 function flagKey(platform, index) { return `${platform}:${index}`; }
 
+const HEDGED = new Set(['medium', 'low']);
+
+/* Confidence by ledger id, so a citation can show how solid its evidence is. */
+function confidenceById() {
+  const map = {};
+  (state.result.claim_ledger || []).forEach((c) => { map[c.id] = c.confidence; });
+  return map;
+}
+
 function renderBoard() {
   const board = $('#board');
   board.innerHTML = '';
+  const confidence = confidenceById();
 
   state.result.platform_outputs.forEach((original) => {
     const platform = original.platform;
@@ -268,14 +279,16 @@ function renderBoard() {
       <span class="count">${pack.flags.length} 处存疑 · ${open} left</span>`;
     wrap.append(head);
 
-    if (pack.unlocated.length) wrap.append(orphanStrip(pack));
+    if (pack.unlocated.length) wrap.append(orphanStrip(pack, platform));
 
     if (draft.title_options.length) {
       wrap.append(fieldLabel('标题选项 · Title options'));
       const list = el('ol', 'titles');
       draft.title_options.forEach((title, i) => {
         const li = el('li');
-        li.innerHTML = paint(title, pack, platform, `title:${i}`);
+        li.dataset.field = `title:${i}`;
+        li.dataset.platform = platform;
+        li.innerHTML = paint(title, pack, platform, `title:${i}`, confidence);
         list.append(li);
       });
       wrap.append(list);
@@ -283,12 +296,16 @@ function renderBoard() {
     if (draft.cover_copy) {
       wrap.append(fieldLabel('封面 · Cover'));
       const cover = el('p', 'cover');
-      cover.innerHTML = paint(draft.cover_copy, pack, platform, 'cover_copy');
+      cover.dataset.field = 'cover_copy';
+      cover.dataset.platform = platform;
+      cover.innerHTML = paint(draft.cover_copy, pack, platform, 'cover_copy', confidence);
       wrap.append(cover);
     }
     wrap.append(fieldLabel('正文 · Body'));
     const prose = el('div', 'prose');
-    prose.innerHTML = paint(draft.body, pack, platform, 'body');
+    prose.dataset.field = 'body';
+    prose.dataset.platform = platform;
+    prose.innerHTML = paint(draft.body, pack, platform, 'body', confidence);
     wrap.append(prose);
 
     if (draft.hashtags.length) {
@@ -317,14 +334,35 @@ function fieldLabel(text) {
   return node;
 }
 
-function orphanStrip(pack) {
+/* Flags whose sentence cannot be located — because the reviewer quoted text
+   that has since been edited away, or because a hand-rewrite cut across it.
+   They are shown in full and each still takes a decision: an answerable flag
+   that cannot be clicked in the prose would block the review forever. */
+function orphanStrip(pack, platform) {
   const node = el('div', 'orphans');
-  const items = pack.unlocated
-    .map((i) => `<li>${esc(pack.flags[i].text || '(未引用原句)')} — ${esc(pack.flags[i].reason)}</li>`).join('');
   node.innerHTML = `<h3>未定位的存疑 · flags without a matching sentence</h3>
-    <p>审校标出了这些问题，但对应的句子已经不在稿子里了，请自行核对。
-       <em>The reviewer raised these, but their sentence is no longer in the draft — check them by hand.</em></p>
-    <ul>${items}</ul>`;
+    <p>审校标出了这些问题，但稿子里已经找不到对应的句子了，请自行核对。
+       <em>The reviewer raised these, but their sentence is no longer in the draft — check them by hand.</em></p>`;
+  const list = el('ul');
+  pack.unlocated.forEach((index) => {
+    const flag = pack.flags[index];
+    const key = flagKey(platform, index);
+    const item = el('li');
+    item.innerHTML = `${esc(flag.text || '(未引用原句)')} — ${esc(flag.reason)} `;
+    if (state.decisions[key]) {
+      const done = el('span', 'orphan-done');
+      done.textContent = '已核对 · checked';
+      item.append(done);
+    } else {
+      const ack = el('button', 'btn orphan-ack');
+      ack.type = 'button';
+      ack.textContent = '我已核对 Checked by hand';
+      ack.onclick = () => decide(key, 'accepted');
+      item.append(ack);
+    }
+    list.append(item);
+  });
+  node.append(list);
   return node;
 }
 
@@ -333,17 +371,44 @@ function orphanStrip(pack) {
    parentheses are the wire format and are never shown. */
 const CITE_RE = /\s*[（(]\s*(c\d+(?:\s*[,，]\s*c\d+)*)\s*[）)]/g;
 
-function raiseCitations(escaped) {
-  return escaped.replace(CITE_RE, (_match, group) => {
-    const ids = group.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-    return ids.map((id) =>
-      `<sup class="cite" role="button" tabindex="0" data-claim="${id}"`
-      + ` aria-label="依据 ledger ${id}" title="依据 ledger · ${id}">${id}</sup>`).join('');
-  });
+/* Render one run of draft text, tagging every piece with the offset it came
+   from in the source field. Those offsets are what let a text selection in the
+   rendered page map back to an exact slice of the draft — the superscripts do
+   not have the same text as their source `(c1)`, so nothing else would line up. */
+function renderRun(text, from, to, confidence) {
+  const slice = text.slice(from, to);
+  let html = '';
+  let cursor = 0;
+  CITE_RE.lastIndex = 0;
+  let match;
+  while ((match = CITE_RE.exec(slice)) !== null) {
+    if (match.index > cursor) html += segment(slice.slice(cursor, match.index), from + cursor);
+    html += citation(match[1], from + match.index, match[0].length, confidence);
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < slice.length) html += segment(slice.slice(cursor), from + cursor);
+  return html;
+}
+
+function segment(text, offset) {
+  return `<span class="seg" data-off="${offset}">${esc(text)}</span>`;
+}
+
+/* Every id in one marker shares that marker's source range: `(c1, c2)` is a
+   single stretch of text, so a selection touching either superscript covers
+   the whole thing. */
+function citation(group, offset, length, confidence) {
+  return group.split(/[,，]/).map((s) => s.trim()).filter(Boolean).map((id) => {
+    const level = confidence[id] || '';
+    const caution = HEDGED.has(level) ? `（依据不够确定 · ${level} confidence）` : '';
+    return `<sup class="cite" role="button" tabindex="0" data-claim="${id}"`
+      + ` data-confidence="${esc(level)}" data-off="${offset}" data-len="${length}"`
+      + ` aria-label="依据 ledger ${id}${caution}" title="依据 ledger · ${id}${caution}">${id}</sup>`;
+  }).join('');
 }
 
 /* Paint one field: escape everything, then wrap the server-supplied spans. */
-function paint(text, pack, platform, field) {
+function paint(text, pack, platform, field, confidence) {
   const spans = pack.spans
     .filter((s) => s.field === field)
     .sort((a, b) => a.start - b.start);
@@ -355,14 +420,14 @@ function paint(text, pack, platform, field) {
     const flag = pack.flags[span.flag_index];
     const key = flagKey(platform, span.flag_index);
     const decision = state.decisions[key] || '';
-    html += raiseCitations(esc(text.slice(cursor, span.start)));
+    html += renderRun(text, cursor, span.start, confidence);
     html += `<span class="mark" tabindex="0" role="button" data-key="${esc(key)}"`
          + ` data-state="${esc(decision)}" aria-label="存疑 flagged: ${esc(flag.reason)}">`
-         + raiseCitations(esc(text.slice(span.start, span.end)))
+         + renderRun(text, span.start, span.end, confidence)
          + '<sup class="query" aria-hidden="true">?</sup></span>';
     cursor = span.end;
   });
-  return html + raiseCitations(esc(text.slice(cursor)));
+  return html + renderRun(text, cursor, text.length, confidence);
 }
 
 function tallyBar() {
@@ -494,7 +559,7 @@ async function proposeRewrite(key, mark, button) {
   try {
     const body = await postJSON('/api/revise', {
       sentence: currentText(mark),
-      flag,
+      instruction: flag.reason,
       ledger: state.result.claim_ledger,
       platform,
       language: state.slots.language || 'zh',
@@ -533,9 +598,54 @@ function currentText(mark) {
   return clone.textContent;
 }
 
-/* Splice the new sentence in and shift every later span in the same field.
-   Doing the arithmetic here avoids a round trip, and the offsets stay exactly
-   what the server computed for everything the edit did not touch. */
+/* ── editing a draft field ───────────────────────────────────────────── */
+
+function readField(platform, field) {
+  const draft = state.drafts[platform];
+  if (field === 'body') return draft.body;
+  if (field === 'cover_copy') return draft.cover_copy;
+  return draft.title_options[Number(field.split(':')[1])];
+}
+
+function writeField(platform, field, value) {
+  const draft = state.drafts[platform];
+  if (field === 'body') draft.body = value;
+  else if (field === 'cover_copy') draft.cover_copy = value;
+  else draft.title_options[Number(field.split(':')[1])] = value;
+}
+
+/* Replace [start, end) and move every span the edit displaced.
+   A span the edit CUTS INTO is not moved — it is retired to the unlocated
+   list, because after an arbitrary edit we can no longer honestly say where
+   that flag's sentence is. Silently keeping a stale offset would paint the
+   red mark over the wrong words. */
+function spliceField(platform, field, start, end, replacement) {
+  const text = readField(platform, field);
+  writeField(platform, field, text.slice(0, start) + replacement + text.slice(end));
+
+  const delta = replacement.length - (end - start);
+  const pack = state.spans[platform];
+  const kept = [];
+  pack.spans.forEach((span) => {
+    if (span.field !== field) { kept.push(span); return; }
+    if (span.start >= end) { span.start += delta; span.end += delta; kept.push(span); return; }
+    if (span.end <= start) { kept.push(span); return; }
+
+    if (span.start === start && span.end === end) {
+      // The edit replaced exactly the flagged sentence, so it IS that flag's
+      // rewrite — however the human got here. The flag has to follow its text,
+      // or the board keeps a red mark and a reason about words that are gone.
+      span.end = start + replacement.length;
+      pack.flags[span.flag_index].text = replacement;
+      state.decisions[flagKey(platform, span.flag_index)] = 'rewritten';
+      kept.push(span);
+      return;
+    }
+    if (!pack.unlocated.includes(span.flag_index)) pack.unlocated.push(span.flag_index);
+  });
+  pack.spans = kept;
+}
+
 function applyRewrite(key, replacement) {
   if (!replacement) { toast('改写不能是空的 · the rewrite cannot be empty', 'error'); return; }
   const [platform, indexText] = key.split(':');
@@ -544,28 +654,8 @@ function applyRewrite(key, replacement) {
   const span = pack.spans.find((s) => s.flag_index === index);
   if (!span) { toast('这处存疑没有位置，无法自动替换 · no position for this flag', 'error'); return; }
 
-  const draft = state.drafts[platform];
-  const field = span.field;
-  const read = () => (field === 'body' ? draft.body
-    : field === 'cover_copy' ? draft.cover_copy
-    : draft.title_options[Number(field.split(':')[1])]);
-  const write = (value) => {
-    if (field === 'body') draft.body = value;
-    else if (field === 'cover_copy') draft.cover_copy = value;
-    else draft.title_options[Number(field.split(':')[1])] = value;
-  };
-
-  const text = read();
-  write(text.slice(0, span.start) + replacement + text.slice(span.end));
-
-  const delta = replacement.length - (span.end - span.start);
-  pack.spans.forEach((other) => {
-    if (other.field !== field) return;
-    if (other.start > span.start) { other.start += delta; other.end += delta; }
-  });
-  span.end = span.start + replacement.length;
+  spliceField(platform, span.field, span.start, span.end, replacement);
   pack.flags[index].text = replacement;
-
   decide(key, 'rewritten');
 }
 
@@ -573,6 +663,173 @@ function decide(key, outcome) {
   state.decisions[key] = outcome;
   closeFlag();
   renderBoard();
+}
+
+/* ── selecting a passage to rewrite ──────────────────────────────────── */
+
+/* Map one edge of a DOM selection back to an offset in the source field.
+   `.seg` nodes carry the offset their text starts at; a citation superscript
+   is atomic, because its rendered text ("c1") is not its source text ("(c1)"). */
+function edgeOffset(node, offset, edge) {
+  const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+  if (!element) return null;
+  const holder = element.closest('.seg, sup.cite');
+  if (!holder) return null;
+  const host = holder.closest('[data-field]');
+  if (!host) return null;
+
+  let position;
+  if (holder.classList.contains('cite')) {
+    position = Number(holder.dataset.off) + (edge === 'end' ? Number(holder.dataset.len) : 0);
+  } else {
+    position = Number(holder.dataset.off)
+      + (node.nodeType === Node.TEXT_NODE ? offset : (edge === 'end' ? holder.textContent.length : 0));
+  }
+  return { position, field: host.dataset.field, platform: host.dataset.platform };
+}
+
+/* The current selection as an exact slice of one draft field, or null. */
+function selectedPassage() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+  const range = selection.getRangeAt(0);
+  if (!range.commonAncestorContainer.parentElement?.closest('#board')) return null;
+
+  const from = edgeOffset(range.startContainer, range.startOffset, 'start');
+  const to = edgeOffset(range.endContainer, range.endOffset, 'end');
+  if (!from || !to) return null;
+  // A selection spanning two fields has no single passage to replace.
+  if (from.field !== to.field || from.platform !== to.platform) return null;
+
+  const start = Math.min(from.position, to.position);
+  const end = Math.max(from.position, to.position);
+  if (end - start < 2) return null;
+
+  const text = readField(from.platform, from.field);
+  return { platform: from.platform, field: from.field, start, end, text: text.slice(start, end) };
+}
+
+function offerRewrite() {
+  const passage = selectedPassage();
+  if (!passage) { $('#pill').hidden = true; return; }
+
+  const rect = window.getSelection().getRangeAt(0).getBoundingClientRect();
+  const pill = $('#pill');
+  pill.hidden = false;
+  pill.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - pill.offsetWidth - 8))}px`;
+  pill.style.top = `${Math.max(8, rect.top - pill.offsetHeight - 8)}px`;
+  pill.onclick = () => openRewriter(passage);
+}
+
+/* ── the rewrite conversation ────────────────────────────────────────── */
+
+function openRewriter(passage) {
+  closeFlag();
+  $('#pill').hidden = true;
+  state.rewriter = { ...passage, proposal: '', turns: [] };
+  const panel = $('#rewriter');
+  panel.hidden = false;
+  panel.querySelector('.rw-target').textContent = passage.text;
+  panel.querySelector('.rw-thread').innerHTML = '';
+  const ask = panel.querySelector('textarea');
+  ask.value = '';
+  panel.querySelector('.rw-apply').disabled = true;
+  placeRewriter();
+  ask.focus();
+}
+
+function placeRewriter() {
+  const panel = $('#rewriter');
+  const rect = window.getSelection().rangeCount
+    ? window.getSelection().getRangeAt(0).getBoundingClientRect()
+    : { left: 120, bottom: 160 };
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - panel.offsetWidth - 8));
+  const top = Math.min(rect.bottom + 12, window.innerHeight - panel.offsetHeight - 12);
+  panel.style.left = `${left}px`;
+  panel.style.top = `${Math.max(8, top)}px`;
+}
+
+function rewriterTurn(who, text, editable = false) {
+  const thread = $('#rewriter .rw-thread');
+  const turn = el('div', `rw-turn rw-${who}`);
+  turn.innerHTML = `<span class="rw-who">${who === 'you' ? '你 · You' : '改写 · Rewrite'}</span>`;
+  if (editable) {
+    const area = el('textarea', 'rw-proposal');
+    area.value = text;
+    area.setAttribute('aria-label', '改写后的文字 revised text');
+    turn.append(area);
+  } else {
+    const body = el('div', 'rw-text');
+    body.textContent = text;
+    turn.append(body);
+  }
+  thread.append(turn);
+  thread.scrollTop = thread.scrollHeight;
+  return turn;
+}
+
+async function sendRewrite() {
+  const panel = $('#rewriter');
+  const ask = panel.querySelector('textarea.rw-ask');
+  const instruction = ask.value.trim();
+  if (!instruction) { toast('说一下想怎么改 · say how it should change'); return; }
+
+  const rw = state.rewriter;
+  // an earlier proposal the editor kept tweaking is what the next pass refines
+  const standing = panel.querySelector('.rw-proposal');
+  if (standing) rw.proposal = standing.value.trim();
+
+  rewriterTurn('you', instruction);
+  ask.value = '';
+  const send = panel.querySelector('.rw-send');
+  send.disabled = true;
+  send.textContent = '改写中… Rewriting';
+
+  try {
+    const body = await postJSON('/api/revise', {
+      sentence: rw.text,
+      instruction,
+      previous: rw.proposal,
+      ledger: state.result.claim_ledger,
+      platform: rw.platform,
+      language: state.slots.language || 'zh',
+      liveliness: state.slots.liveliness || 3,
+      context: readField(rw.platform, rw.field).slice(0, 1200),
+    });
+    panel.querySelectorAll('.rw-proposal').forEach((a) => {
+      const frozen = el('div', 'rw-text');
+      frozen.textContent = a.value;
+      a.replaceWith(frozen);
+    });
+    rw.proposal = body.sentence;
+    rewriterTurn('agent', body.sentence, true);
+    panel.querySelector('.rw-apply').disabled = false;
+  } catch (err) {
+    toast(err.message, 'error');
+  } finally {
+    send.disabled = false;
+    send.textContent = '发送 Send';
+  }
+}
+
+function applyRewriter() {
+  const panel = $('#rewriter');
+  const standing = panel.querySelector('.rw-proposal');
+  const replacement = (standing ? standing.value : state.rewriter.proposal).trim();
+  if (!replacement) { toast('改写不能是空的 · the rewrite cannot be empty', 'error'); return; }
+
+  const rw = state.rewriter;
+  spliceField(rw.platform, rw.field, rw.start, rw.end, replacement);
+  closeRewriter();
+  renderBoard();
+  toast('已应用，完成审阅时会复核 · applied; it is re-checked when you complete the review');
+}
+
+function closeRewriter() {
+  $('#rewriter').hidden = true;
+  $('#pill').hidden = true;
+  state.rewriter = null;
+  window.getSelection().removeAllRanges();
 }
 
 /* ── the tether: draw the provenance link ───────────────────────────── */
@@ -615,11 +872,22 @@ function renderApparatus() {
   const ledger = el('section');
   ledger.innerHTML = `<h2>依据清单 <em>Claim ledger</em></h2>
     <p class="note">点一条，看正文里哪句引用了它 · click one to find the sentences citing it</p>`;
+  const hedged = result.claim_ledger.filter((c) => HEDGED.has(c.confidence));
+  if (hedged.length) {
+    const banner = el('div', 'hedged-count');
+    banner.innerHTML = `${hedged.length} 条依据本身就不确定（${hedged.map((c) => esc(c.id)).join(' ')}）——`
+      + `引用它们的句子最值得改写。<br>${hedged.length} claims are hedged; the sentences resting on them `
+      + `are the ones worth rewriting.`;
+    ledger.append(banner);
+  }
   result.claim_ledger.forEach((claim) => {
     const node = el('div', 'claim');
     node.dataset.id = claim.id;
+    node.dataset.confidence = claim.confidence;
+    const caution = HEDGED.has(claim.confidence)
+      ? '<span class="claim-caution">依据不确定 · hedged</span> · ' : '';
     node.innerHTML = `<span class="claim-id">${esc(claim.id)}</span>${esc(claim.claim)}
-      <span class="claim-meta">${esc(claim.confidence)}${claim.qualifier ? ` · ${esc(claim.qualifier)}` : ''}</span>
+      <span class="claim-meta">${caution}${esc(claim.confidence)}${claim.qualifier ? ` · ${esc(claim.qualifier)}` : ''}</span>
       <details><summary>原文依据 evidence</summary><blockquote>${esc(claim.source_evidence)}</blockquote></details>`;
     node.tabIndex = 0;
     bindClaim(node);
@@ -896,11 +1164,29 @@ function init() {
     if (file) acceptFile(file);
   });
 
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFlag(); });
+  $('#rewriter .rw-send').onclick = sendRewrite;
+  $('#rewriter .rw-apply').onclick = applyRewriter;
+  $('#rewriter .rw-cancel').onclick = closeRewriter;
+  $('#rewriter .rw-ask').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendRewrite(); }
+  });
+
+  // a selection anywhere in a draft offers to rewrite it
+  ['mouseup', 'keyup'].forEach((type) =>
+    $('#board').addEventListener(type, () => {
+      if (!$('#rewriter').hidden) return;   // already in a rewrite
+      setTimeout(offerRewrite, 0);          // let the selection settle first
+    }));
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if ($('#rewriter').hidden) closeFlag(); else closeRewriter();
+  });
   document.addEventListener('click', (e) => {
     if (!state.openKey) return;
     if (e.target.closest('#popover') || e.target.closest('.mark')) return;
     if (e.target.closest('.cite') || e.target.closest('.claim')) return;
+    if (e.target.closest('#rewriter') || e.target.closest('#pill')) return;
     closeFlag();
   });
   window.addEventListener('resize', closeFlag);

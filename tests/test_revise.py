@@ -20,7 +20,6 @@ from api.schema import (
     Claim,
     ConfidenceLevel,
     Language,
-    OverreachFlag,
     Platform,
     SourceType,
 )
@@ -35,11 +34,7 @@ _LEDGER = [
     )
 ]
 
-_FLAG = OverreachFlag(
-    text="该疗法可以治愈癌症。",
-    reason="[c1] 丢失限定词：小鼠、n=12、初步 Suggestion: 恢复物种与样本量",
-    platform=Platform.news,
-)
+_FLAG = "[c1] 丢失限定词：小鼠、n=12、初步 Suggestion: 恢复物种与样本量"
 
 _INPUT = AgentInput(source="https://example.org/p", source_type=SourceType.url)
 
@@ -115,3 +110,33 @@ def test_language_and_liveliness_dials_reach_the_prompt(monkeypatch):
 
     assert "English" in stub.seen[0].content
     assert "5/5" in stub.seen[0].content
+
+
+def test_an_editor_instruction_drives_the_rewrite(monkeypatch):
+    """A selection rewrite is the same call: the request is just the editor's."""
+    stub = _stub(monkeypatch, '{"sentence": "x"}')
+
+    revise_sentence("该疗法可以治愈癌症。", "写短一点，别那么耸动", _LEDGER, _INPUT, Platform.news)
+
+    assert "写短一点，别那么耸动" in stub.seen[1].content
+
+
+def test_a_follow_up_refines_the_previous_attempt(monkeypatch):
+    stub = _stub(monkeypatch, '{"sentence": "x"}')
+
+    revise_sentence(
+        "该疗法可以治愈癌症。", "再短一点", _LEDGER, _INPUT, Platform.news,
+        previous="在小鼠中（n=12），该疗法初步将肿瘤体积缩小了23%。",
+    )
+
+    payload = stub.seen[1].content
+    assert "previous attempt" in payload
+    assert "在小鼠中（n=12），该疗法初步将肿瘤体积缩小了23%。" in payload
+
+
+def test_no_previous_attempt_leaves_the_payload_unchanged(monkeypatch):
+    stub = _stub(monkeypatch, '{"sentence": "x"}')
+
+    revise_sentence("s", "shorter", _LEDGER, _INPUT, Platform.news)
+
+    assert "previous attempt" not in stub.seen[1].content

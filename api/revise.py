@@ -1,9 +1,11 @@
-"""Rewrite ONE flagged sentence so it stops overstating the claim ledger.
+"""Rewrite ONE passage of a draft, bound by the claim ledger.
 
-The review board's "rewrite" action. A faithfulness flag names a single
-offending sentence and says what is wrong with it; this asks the DRAFTER role
-for a replacement bound by the ledger and the same red lines the original draft
-was written under (api.draft.red_lines).
+The review board's "rewrite" action, in both of its forms: a faithfulness flag
+saying what is wrong with a sentence, or an editor selecting a passage and
+saying how they want it changed. Both arrive here as a plain-language
+`instruction`, and both get a replacement from the DRAFTER role bound by the
+ledger and the same red lines the original draft was written under
+(api.draft.red_lines).
 
 Deliberately the drafter, never the reviewer: CLAUDE.md rule #3 says drafting
 and checking use different models and different prompts. The reviewer's job is
@@ -27,7 +29,7 @@ from api.config_loader import get_model
 from api.draft import red_lines
 from api.jsonio import invoke_json
 from api.lang import language_label
-from api.schema import AgentInput, Claim, OverreachFlag, Platform
+from api.schema import AgentInput, Claim, Platform
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "revise.md"
 
@@ -43,23 +45,28 @@ def _prompt() -> str:
 
 def revise_sentence(
     sentence: str,
-    flag: OverreachFlag,
+    instruction: str,
     ledger: list[Claim],
     inp: AgentInput,
     platform: Platform,
     context: str = "",
+    previous: str = "",
 ) -> str:
-    """Produce a faithful replacement for one flagged sentence.
+    """Produce a faithful replacement for one passage of a draft.
 
     Args:
-        sentence: the exact text to replace (the flag's quote as it currently
-            stands in the draft, which a human may already have edited).
-        flag: the overstatement flag explaining what is wrong with it.
+        sentence: the exact text to replace, as it currently stands in the
+            draft (a human may already have edited it).
+        instruction: what to change — a reviewer's faithfulness finding, or an
+            editor's own request ("shorter", "less dramatic", "lead with the
+            sample size"). Either way the ledger still bounds the result.
         ledger: the claim ledger — the ONLY facts the replacement may state.
         inp: the run's dials (language, audience, liveliness) so the rewrite
             matches the draft it is going back into.
-        platform: the platform whose draft this sentence belongs to.
+        platform: the platform whose draft this passage belongs to.
         context: optional surrounding paragraph, for voice and tense.
+        previous: an earlier attempt the editor is refining, so a follow-up
+            instruction reads as "change this again", not "start over".
 
     Returns:
         The replacement sentence, stripped. Never applied anywhere — the caller
@@ -75,7 +82,9 @@ def revise_sentence(
         model,
         [
             SystemMessage(content=_system_prompt(inp)),
-            HumanMessage(content=_human_payload(sentence, flag, ledger, platform, context)),
+            HumanMessage(content=_human_payload(
+                sentence, instruction, ledger, platform, context, previous
+            )),
         ],
     )
 
@@ -105,12 +114,13 @@ def _dials(inp: AgentInput) -> str:
 
 def _human_payload(
     sentence: str,
-    flag: OverreachFlag,
+    instruction: str,
     ledger: list[Claim],
     platform: Platform,
     context: str,
+    previous: str = "",
 ) -> str:
-    """The ledger (the contract), the sentence, why it was flagged, its context.
+    """The ledger (the contract), the passage, the request, and its context.
 
     `confidence` is kept here, unlike the reviewer's payload: the drafter uses
     it to decide whether a claim needs an inline ledger-id marker, whereas the
@@ -120,11 +130,16 @@ def _human_payload(
         "Claim ledger (the ONLY facts this article may state), as JSON:\n"
         + json.dumps([c.model_dump(mode="json") for c in ledger], ensure_ascii=False)
         + f"\n\nPlatform: {platform.value}"
-        + "\n\nFLAGGED SENTENCE — replace exactly this:\n"
+        + "\n\nPASSAGE — replace exactly this:\n"
         + sentence.strip()
-        + "\n\nWhy the reviewer flagged it:\n"
-        + flag.reason.strip()
+        + "\n\nREVISION REQUEST — what must change:\n"
+        + instruction.strip()
     )
+    if previous.strip():
+        payload += (
+            "\n\nYour previous attempt, which the editor is now refining — "
+            "revise THIS rather than starting over:\n" + previous.strip()
+        )
     if context.strip():
         payload += (
             "\n\nSurrounding text, for voice and tense ONLY — do not rewrite it "

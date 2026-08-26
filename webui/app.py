@@ -235,9 +235,16 @@ def _with_spans(out: AgentOutput) -> dict[str, Any]:
 
 @_endpoint
 async def revise(request: Request) -> JSONResponse:
-    """Rewrite one flagged sentence. Returns a PROPOSAL for a human to accept."""
+    """Rewrite one passage. Returns a PROPOSAL for a human to accept or edit.
+
+    Serves both rewrite paths: a flagged sentence (the instruction is the
+    reviewer's finding) and a passage the editor selected and asked to change
+    in their own words. Applying the result is always the human's move.
+    """
     body = await _json_body(request)
-    flag = _model(OverreachFlag, body.get("flag"), "flag")
+    instruction = str(body.get("instruction", "")).strip()
+    if not instruction:
+        raise _HttpError(400, "nothing to do: 'instruction' is empty")
     ledger = [_model(Claim, item, "claim") for item in body.get("ledger", [])]
     platform = _enum(Platform, body.get("platform"), "platform")
     inp = _model(
@@ -256,7 +263,13 @@ async def revise(request: Request) -> JSONResponse:
         raise _HttpError(400, "nothing to revise: 'sentence' is empty")
 
     revised = revise_sentence(
-        sentence, flag, ledger, inp, platform, context=str(body.get("context", ""))
+        sentence,
+        instruction,
+        ledger,
+        inp,
+        platform,
+        context=str(body.get("context", "")),
+        previous=str(body.get("previous", "")),
     )
     return JSONResponse({"sentence": revised})
 

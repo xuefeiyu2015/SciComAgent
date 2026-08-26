@@ -65,6 +65,23 @@
 <svg id="tether" aria-hidden="true"></svg>
 
 <div id="popover" role="dialog" aria-label="Flag" hidden></div>
+
+<!-- select any passage in a draft and ask for it to be changed -->
+<button id="pill" type="button" hidden>改写 Rewrite</button>
+
+<div id="rewriter" role="dialog" aria-label="改写 Rewrite" hidden>
+  <h3>改写这段 · Rewrite this</h3>
+  <blockquote class="rw-target"></blockquote>
+  <div class="rw-thread"></div>
+  <textarea class="rw-ask" rows="2" aria-label="想怎么改 how it should change"
+            placeholder="想怎么改？例如：写短一点／别那么耸动／先说样本量 · ⌘↵ 发送"></textarea>
+  <div class="rw-actions">
+    <button class="btn btn-solid rw-send" type="button">发送 Send</button>
+    <button class="btn rw-apply" type="button">应用 Apply</button>
+    <button class="btn btn-quiet rw-cancel" type="button">取消 Cancel</button>
+  </div>
+  <p class="rw-note">事实仍以依据清单为准，改写不会新增事实。<br>The ledger still bounds the result — a rewrite never adds a fact.</p>
+</div>
 <div id="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="/static/board.js"></script>

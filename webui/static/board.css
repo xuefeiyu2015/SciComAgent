@@ -22,6 +22,7 @@
 
   --flag:       #D6342C;   /* overstatement — nothing else */
   --verified:   #1B7A5A;   /* verified — nothing else */
+  --hedged:     #9A6B0F;   /* the evidence itself is uncertain — nothing else */
 
   --sans:  "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
   --serif: "Source Serif 4", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
@@ -342,6 +343,21 @@ sup.cite {
   border-bottom: 1px solid transparent;
 }
 sup.cite:hover, sup.cite[data-open="1"] { opacity: 1; border-bottom-color: var(--ink); }
+
+/* A citation whose ledger entry is itself hedged (medium/low confidence).
+   Amber, matching the sidebar's "resolves but unverified" dot: the sentence is
+   sourced correctly — it is the SOURCE that is uncertain. That is a different
+   thing from an overstatement, so it never borrows the vermilion. */
+sup.cite[data-confidence="medium"], sup.cite[data-confidence="low"] {
+  color: var(--hedged);
+  opacity: .95;
+  border-bottom: 1px dotted var(--hedged);
+}
+sup.cite[data-confidence="medium"]:hover, sup.cite[data-confidence="low"]:hover,
+sup.cite[data-confidence="medium"][data-open="1"], sup.cite[data-confidence="low"][data-open="1"] {
+  border-bottom-style: solid;
+  border-bottom-color: var(--hedged);
+}
 sup.cite:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
 sup.cite + sup.cite { padding-left: 0; }
 sup.cite + sup.cite::before { content: ","; opacity: .55; }
@@ -409,6 +425,26 @@ sup.cite + sup.cite::before { content: ","; opacity: .55; }
 }
 .claim:last-child { border-bottom: 1px solid var(--rule); }
 .claim[data-lit="1"] { background: rgba(15, 35, 64, .07); }
+
+/* Hedged evidence, marked in the margin so it can be scanned for. */
+.claim[data-confidence="medium"], .claim[data-confidence="low"] {
+  border-left: 2px solid var(--hedged);
+  padding-left: 9px;
+  margin-left: -11px;
+}
+.claim[data-confidence="medium"] .claim-meta,
+.claim[data-confidence="low"] .claim-meta { color: var(--hedged); }
+.claim-caution { color: var(--hedged); font-weight: 500; }
+
+.hedged-count {
+  display: block;
+  margin: 6px 0 10px;
+  font: 400 11px var(--mono);
+  color: var(--hedged);
+  border-left: 2px solid var(--hedged);
+  padding-left: 8px;
+  line-height: 1.5;
+}
 .claim-id { font: 500 11px var(--mono); color: var(--ink); margin-right: 6px; }
 .claim-meta { display: block; margin-top: 3px; font: 400 11px var(--mono); color: var(--muted); }
 .claim summary { cursor: pointer; font: 400 11px var(--mono); color: var(--muted); margin-top: 3px; }
@@ -497,3 +533,87 @@ sup.cite + sup.cite::before { content: ","; opacity: .55; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+
+/* ── select-to-rewrite ───────────────────────────────────────────────── */
+
+#pill {
+  position: fixed;
+  z-index: 55;
+  font: 500 12px var(--sans);
+  padding: 6px 12px;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  background: var(--ink);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(15, 35, 64, .22);
+}
+#pill:hover { background: var(--ink-raised); }
+#pill:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+#rewriter {
+  position: fixed;
+  z-index: 56;
+  width: 400px;
+  max-width: calc(100vw - 24px);
+  background: #fff;
+  border: 1px solid var(--ink);
+  box-shadow: 0 12px 34px rgba(15, 35, 64, .18);
+  padding: 14px 16px 13px;
+}
+#rewriter h3 {
+  margin: 0 0 9px;
+  font: 500 10px var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.rw-target {
+  margin: 0 0 11px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--rule);
+  background: var(--leaf);
+  font: 400 14px/1.6 var(--serif);
+  max-height: 6.6em;
+  overflow-y: auto;
+}
+.rw-thread { max-height: 240px; overflow-y: auto; margin-bottom: 10px; }
+.rw-thread:empty { margin-bottom: 0; }
+.rw-turn { margin-bottom: 10px; }
+.rw-who {
+  display: block;
+  font: 500 9px var(--mono);
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.rw-text { font: 400 14px/1.6 var(--serif); }
+.rw-you .rw-text { font: 400 12px/1.5 var(--mono); color: var(--muted); }
+textarea.rw-proposal {
+  width: 100%;
+  min-height: 76px;
+  font: 400 14px/1.6 var(--serif);
+  padding: 7px 8px;
+  border: 1px solid var(--verified);
+  background: rgba(27, 122, 90, .04);
+  resize: vertical;
+}
+textarea.rw-ask {
+  width: 100%;
+  font: 400 13px/1.5 var(--sans);
+  padding: 7px 8px;
+  border: 1px solid var(--rule);
+  resize: vertical;
+  margin-bottom: 9px;
+}
+#rewriter textarea:focus-visible { outline: 2px solid var(--ink); outline-offset: -1px; }
+.rw-actions { display: flex; gap: 7px; }
+.rw-actions .btn { border-color: var(--rule); }
+.rw-actions .btn-solid { border-color: var(--ink); }
+.rw-note { margin: 10px 0 0; font: 400 10px/1.5 var(--mono); color: var(--muted); }
+
+.orphans li { margin-bottom: 8px; }
+.orphan-ack { font-size: 11px; padding: 3px 8px; border-color: var(--flag); color: var(--flag); }
+.orphan-done { font: 400 11px var(--mono); color: var(--muted); }
