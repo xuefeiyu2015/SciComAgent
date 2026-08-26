@@ -5,7 +5,12 @@ Pure, deterministic presentation layer for the result of `api.pipeline.run`
 `api.schema`. Kept in /api as business logic; the /mcp_server `render` tool is a
 thin wrapper over `render_markdown` (see the directory contract in CLAUDE.md).
 
-Two views, chosen by `include_provenance`:
+Three views:
+
+`render_text` is the one a human saves — the reviewed post as plain prose,
+with the ledger citations stripped out and no markup at all.
+
+`render_markdown` has two views, chosen by `include_provenance`:
     True  (default) — the human-review layout: each draft, its overstatement
                       flags, then a compact claim ledger, the background
                       sources and the learned voice that shaped the writing.
@@ -19,6 +24,7 @@ already produced.
 
 from __future__ import annotations
 
+from api.markers import strip_markers
 from api.schema import (
     AgentOutput,
     BackgroundMaterial,
@@ -95,6 +101,54 @@ def render_markdown(
             parts.append(rest)
 
     return "\n\n".join(p for p in parts if p).strip()
+
+
+def render_text(out: AgentOutput, platform: Platform | None = None) -> str:
+    """The reviewed post as plain text — what a human saves and pastes out.
+
+    No provenance, no Markdown syntax, and no `(c17)` citations: those exist so
+    a sentence can be traced during review, and a finished post carries them no
+    further. Renders only what the pipeline produced, and never publishes.
+
+    Args:
+        out: the result to render (after any human edits).
+        platform: render only this platform's post; omit to render all, each
+            under a plain header.
+
+    Returns:
+        Plain text. A terminal failure renders its notice instead of a blank
+        page, matching `render_markdown`.
+    """
+    if out.status == Status.failed:
+        return _render_notices(out.notices) or "generate failed (no detail provided)."
+    if out.status == Status.no_claims:
+        return "没有找到可引用的来源声明 / no source-grounded claims."
+
+    drafts = out.platform_outputs
+    if platform is not None:
+        drafts = [d for d in drafts if d.platform == platform]
+        if not drafts:
+            return f"No draft for platform '{platform.value}' in this result."
+
+    blocks = [_render_draft_text(d, header=len(drafts) > 1) for d in drafts]
+    return "\n\n\n".join(blocks).strip()
+
+
+def _render_draft_text(draft: PlatformOutput, header: bool = False) -> str:
+    """One platform's post as plain prose."""
+    lines: list[str] = []
+    if header:
+        lines += [_PLATFORM_LABEL.get(draft.platform, draft.platform.value), ""]
+    if draft.title_options:
+        lines.extend(strip_markers(t) for t in draft.title_options)
+        lines.append("")
+    if draft.cover_copy.strip():
+        lines += [strip_markers(draft.cover_copy.strip()), ""]
+    if draft.body.strip():
+        lines += [strip_markers(draft.body.strip()), ""]
+    if draft.hashtags:
+        lines.append(" ".join(_as_tag(h) for h in draft.hashtags))
+    return "\n".join(lines).strip()
 
 
 def _render_draft(draft: PlatformOutput) -> str:

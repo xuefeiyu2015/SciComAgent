@@ -24,11 +24,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from api.config_loader import get_model
 from api.jsonio import invoke_json
 from api.lang import language_label
+from api.markers import MARKER_RE, split_ids
 from api.schema import (
     AgentInput,
     BackgroundMaterial,
     Claim,
-    ConfidenceLevel,
     Platform,
     PlatformOutput,
     StyleProfile,
@@ -42,13 +42,10 @@ _RED_LINES_PATH = _API_DIR / "rules" / "red_lines.md"
 # Slightly above 0 so repeated drafts vary; still low enough to stay faithful.
 _DRAFT_TEMPERATURE = 0.4
 
-# Confidence levels that earn an inline ledger-id marker ("not so sure").
-_HEDGED = frozenset({ConfidenceLevel.medium, ConfidenceLevel.low})
-
 # A ledger-id marker the drafter appends to a sentence, e.g. "(c17)" or
-# "(c77, c78)" — ASCII or full-width parens/commas. Used to drop markers on
-# claims we don't want flagged (see _filter_markers).
-_MARKER_RE = re.compile(r"\s*[（(]\s*(c\d+(?:\s*[,，]\s*c\d+)*)\s*[）)]")
+# "(c77, c78)". Shared with check.py and render.py via api.markers; the leading
+# whitespace is matched here so a removed marker leaves no gap.
+_MARKER_RE = re.compile(r"\s*" + MARKER_RE.pattern)
 
 
 @lru_cache(maxsize=1)
@@ -126,9 +123,12 @@ def draft_platform(
             HumanMessage(content=_human_payload(ledger, fix, background, angle)),
         ],
     )
-    # The drafter tends to over-cite; keep markers only on the hedged claims so
-    # solid facts read clean. Code is the guarantee — the prompt only nudges.
-    markable = {c.id for c in ledger if c.confidence in _HEDGED}
+    # Every claim a sentence rests on may keep its marker — that citation is
+    # what lets a human trace a sentence back to its evidence, and the review
+    # board draws the link from it. Only ids that are actually IN the ledger
+    # survive: code is the guarantee that a citation is never dangling, and
+    # the prompt only asks for the citation in the first place.
+    markable = {c.id for c in ledger}
     return _parse_draft(data, platform, markable)
 
 
@@ -273,8 +273,7 @@ def _filter_markers(body: str, markable: set[str]) -> str:
     ids are markable, the whole marker (and the space before it) is removed.
     """
     def repl(match: re.Match[str]) -> str:
-        ids = [i.strip() for i in re.split(r"[,，]", match.group(1))]
-        kept = [i for i in ids if i in markable]
+        kept = [i for i in split_ids(match.group(1)) if i in markable]
         return f" ({', '.join(kept)})" if kept else ""
 
     return _MARKER_RE.sub(repl, body)

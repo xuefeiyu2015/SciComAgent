@@ -308,6 +308,7 @@ function renderBoard() {
   }
   board.append(tallyBar());
   board.querySelectorAll('.mark').forEach(bindMark);
+  board.querySelectorAll('.cite').forEach(bindCite);
 }
 
 function fieldLabel(text) {
@@ -327,6 +328,20 @@ function orphanStrip(pack) {
   return node;
 }
 
+/* Raise "(c1)" / "(c77, c78)" into real superscripts, on already-escaped text.
+   This is the reader-facing form of the citation the drafter wrote; the
+   parentheses are the wire format and are never shown. */
+const CITE_RE = /\s*[（(]\s*(c\d+(?:\s*[,，]\s*c\d+)*)\s*[）)]/g;
+
+function raiseCitations(escaped) {
+  return escaped.replace(CITE_RE, (_match, group) => {
+    const ids = group.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    return ids.map((id) =>
+      `<sup class="cite" role="button" tabindex="0" data-claim="${id}"`
+      + ` aria-label="依据 ledger ${id}" title="依据 ledger · ${id}">${id}</sup>`).join('');
+  });
+}
+
 /* Paint one field: escape everything, then wrap the server-supplied spans. */
 function paint(text, pack, platform, field) {
   const spans = pack.spans
@@ -340,15 +355,14 @@ function paint(text, pack, platform, field) {
     const flag = pack.flags[span.flag_index];
     const key = flagKey(platform, span.flag_index);
     const decision = state.decisions[key] || '';
-    const cite = (flag.reason.match(/^\[(c\d+)\]/) || [])[1] || '?';
-    html += esc(text.slice(cursor, span.start));
+    html += raiseCitations(esc(text.slice(cursor, span.start)));
     html += `<span class="mark" tabindex="0" role="button" data-key="${esc(key)}"`
          + ` data-state="${esc(decision)}" aria-label="存疑 flagged: ${esc(flag.reason)}">`
-         + esc(text.slice(span.start, span.end))
-         + `<sup>${esc(cite)}</sup></span>`;
+         + raiseCitations(esc(text.slice(span.start, span.end)))
+         + '<sup class="query" aria-hidden="true">?</sup></span>';
     cursor = span.end;
   });
-  return html + esc(text.slice(cursor));
+  return html + raiseCitations(esc(text.slice(cursor)));
 }
 
 function tallyBar() {
@@ -375,6 +389,43 @@ function tallyBar() {
 
 /* ── flag popover ───────────────────────────────────────────────────── */
 
+/* A citation is the sentence -> ledger direction of the same link. */
+function bindCite(cite) {
+  const show = () => showCitation(cite);
+  cite.addEventListener('click', show);
+  cite.addEventListener('mouseenter', show);
+  cite.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); }
+  });
+}
+
+function showCitation(cite) {
+  closeFlag();
+  const claimId = cite.dataset.claim;
+  state.openKey = `cite:${claimId}`;
+  cite.dataset.open = '1';
+  drawTether(cite, claimId);
+}
+
+/* And the ledger -> sentence direction: every sentence resting on this claim. */
+function bindClaim(row) {
+  row.addEventListener('click', (event) => {
+    if (event.target.closest('details')) return;   // the evidence toggle is its own control
+    const claimId = row.dataset.id;
+    const citing = [...document.querySelectorAll(`.cite[data-claim="${CSS.escape(claimId)}"]`)];
+    document.querySelectorAll('.cite[data-open="1"]').forEach((c) => delete c.dataset.open);
+    if (!citing.length) {
+      toast(`正文里没有引用 ${claimId} · nothing in the draft cites ${claimId}`);
+      return;
+    }
+    closeFlag();
+    citing.forEach((c) => { c.dataset.open = '1'; });
+    citing[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    state.openKey = `cite:${claimId}`;
+    drawTether(citing[0], claimId);
+  });
+}
+
 function bindMark(mark) {
   const open = () => openFlag(mark);
   mark.addEventListener('click', open);
@@ -386,6 +437,7 @@ function closeFlag() {
   $('#popover').hidden = true;
   $('#tether').innerHTML = '';
   document.querySelectorAll('.mark[data-open="1"]').forEach((m) => delete m.dataset.open);
+  document.querySelectorAll('.cite[data-open="1"]').forEach((c) => delete c.dataset.open);
   document.querySelectorAll('.claim[data-lit="1"]').forEach((c) => delete c.dataset.lit);
   state.openKey = null;
 }
@@ -525,14 +577,15 @@ function decide(key, outcome) {
 
 /* ── the tether: draw the provenance link ───────────────────────────── */
 
-function drawTether(mark, claimId) {
+function drawTether(anchor, claimId) {
   const svg = $('#tether');
   svg.innerHTML = '';
   svg.classList.toggle('untethered', !claimId);
+  svg.classList.toggle('citation', anchor.classList.contains('cite'));
   if (window.innerWidth <= 1180) return;   // the apparatus is stacked, not beside
 
-  const from = mark.getBoundingClientRect();
-  const column = mark.closest('.manuscript').getBoundingClientRect();
+  const from = anchor.getBoundingClientRect();
+  const column = anchor.closest('.manuscript').getBoundingClientRect();
   const target = claimId ? document.querySelector(`.claim[data-id="${CSS.escape(claimId)}"]`) : null;
   const rail = $('#apparatus').getBoundingClientRect();
   if (target) target.dataset.lit = '1';
@@ -561,13 +614,15 @@ function renderApparatus() {
 
   const ledger = el('section');
   ledger.innerHTML = `<h2>依据清单 <em>Claim ledger</em></h2>
-    <p class="note">稿子里的事实只能来自这里 · the only facts a draft may state</p>`;
+    <p class="note">点一条，看正文里哪句引用了它 · click one to find the sentences citing it</p>`;
   result.claim_ledger.forEach((claim) => {
     const node = el('div', 'claim');
     node.dataset.id = claim.id;
     node.innerHTML = `<span class="claim-id">${esc(claim.id)}</span>${esc(claim.claim)}
       <span class="claim-meta">${esc(claim.confidence)}${claim.qualifier ? ` · ${esc(claim.qualifier)}` : ''}</span>
       <details><summary>原文依据 evidence</summary><blockquote>${esc(claim.source_evidence)}</blockquote></details>`;
+    node.tabIndex = 0;
+    bindClaim(node);
     ledger.append(node);
   });
   rail.append(ledger);
@@ -845,6 +900,7 @@ function init() {
   document.addEventListener('click', (e) => {
     if (!state.openKey) return;
     if (e.target.closest('#popover') || e.target.closest('.mark')) return;
+    if (e.target.closest('.cite') || e.target.closest('.claim')) return;
     closeFlag();
   });
   window.addEventListener('resize', closeFlag);

@@ -21,4 +21,9 @@ uv run python -m webui.app     # http://127.0.0.1:8080
 - Drafting will not start while the drafter and the reviewer resolve to the
   same model — a check cannot grade its own work.
 - Nothing is ever published. "Complete review" re-audits your edits, then
-  offers to save to `outputs/reviews/`.
+  offers to save to `outputs/reviews/` — one clean `.txt` per platform,
+  carrying your edits with the ledger citations stripped out.
+- Every factual sentence cites the ledger entry it rests on. The citation is
+  written `(c17)` in the draft, shown as a superscript on the board, and
+  written `^c17` in plain text. Click a citation to trace it to its evidence,
+  or click a ledger entry to find the sentences resting on it.

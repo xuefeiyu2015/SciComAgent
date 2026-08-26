@@ -320,14 +320,36 @@ body.dropping #entry { border-color: var(--ink); border-style: dashed; }
   background: rgba(27, 122, 90, .07);
 }
 
-.mark sup {
+.mark sup.query {
   font: 500 10px var(--mono);
   color: var(--flag);
   padding-left: 2px;
   vertical-align: super;
 }
-.mark[data-state="accepted"] sup { color: var(--muted); }
-.mark[data-state="rewritten"] sup { color: var(--verified); }
+.mark[data-state="accepted"] sup.query { color: var(--muted); }
+.mark[data-state="rewritten"] sup.query { color: var(--verified); }
+
+/* A ledger citation: the sentence's own pointer at its evidence. Ink, not
+   vermilion — a citation is the draft behaving correctly, and saturation on
+   this page is reserved for a claim that has outrun its source. */
+sup.cite {
+  font: 500 10px var(--mono);
+  color: var(--ink);
+  opacity: .55;
+  padding: 0 1px 0 2px;
+  vertical-align: super;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+sup.cite:hover, sup.cite[data-open="1"] { opacity: 1; border-bottom-color: var(--ink); }
+sup.cite:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+sup.cite + sup.cite { padding-left: 0; }
+sup.cite + sup.cite::before { content: ","; opacity: .55; }
+
+.claim { cursor: pointer; }
+.claim:hover { background: rgba(15, 35, 64, .04); }
+.claim:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+.claim summary { cursor: pointer; }
 
 /* a flag whose sentence could not be found — never silently dropped */
 .orphans {
@@ -409,6 +431,8 @@ body.dropping #entry { border-color: var(--ink); border-style: dashed; }
 #tether path { fill: none; stroke: var(--flag); stroke-width: 1.25; }
 #tether circle { fill: var(--leaf); stroke: var(--flag); stroke-width: 1.25; }
 #tether.untethered path { stroke-dasharray: 3 3; }
+/* tracing a citation is not a problem being reported — draw it in ink */
+#tether.citation path, #tether.citation circle { stroke: var(--ink); }
 
 /* ── popover ─────────────────────────────────────────────────────────── */
 

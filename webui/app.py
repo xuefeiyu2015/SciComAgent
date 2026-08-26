@@ -39,7 +39,7 @@ from api import jobs, settings  # noqa: E402
 from api.check import check_faithfulness  # noqa: E402
 from api.config_loader import ROLES, capabilities  # noqa: E402
 from api.highlight import locate_flags  # noqa: E402
-from api.render import render_markdown  # noqa: E402
+from api.render import render_text  # noqa: E402
 from api.revise import revise_sentence  # noqa: E402
 from api.schema import (  # noqa: E402
     AgentInput,
@@ -134,7 +134,7 @@ def _enum(cls, value: Any, what: str):
 # --- page ---------------------------------------------------------------------
 
 async def index(request: Request) -> FileResponse:
-    return FileResponse(_STATIC_DIR / "index.html")
+    return FileResponse(_STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 # --- source input -------------------------------------------------------------
@@ -304,7 +304,12 @@ def _as_overreach(flag, platform: Platform) -> OverreachFlag:
 
 @_endpoint
 async def save(request: Request) -> JSONResponse:
-    """Write the reviewed result to outputs/reviews/. Never publishes anywhere."""
+    """Write the reviewed post to outputs/reviews/ as plain text.
+
+    One `.txt` per platform, carrying the human's edits and nothing else: no
+    provenance, no Markdown, no `(c17)` citations. The ledger did its job during
+    review; what gets saved is the post. Never publishes anywhere.
+    """
     body = await _json_body(request)
     out = _model(AgentOutput, body.get("result"), "result")
     name = _safe_name(str(body.get("filename", "")))
@@ -316,18 +321,12 @@ async def save(request: Request) -> JSONResponse:
         )
 
     _REVIEW_DIR.mkdir(parents=True, exist_ok=True)
-    written: list[str] = []
-    artifacts = body.get("artifacts") or ["review", "post", "json"]
-
-    if "review" in artifacts:
-        written.append(_write(f"{name}.review.md", render_markdown(out)))
-    if "post" in artifacts:
-        written.append(
-            _write(f"{name}.post.md", render_markdown(out, include_provenance=False))
-        )
-    if "json" in artifacts:
-        written.append(_write(f"{name}.json", out.model_dump_json(indent=2)))
-
+    written = [
+        _write(f"{name}.{draft.platform.value}.txt", render_text(out, platform=draft.platform))
+        for draft in out.platform_outputs
+    ]
+    if not written:  # nothing drafted -> save the reason rather than an empty file
+        written = [_write(f"{name}.txt", render_text(out))]
     return JSONResponse({"written": written})
 
 
@@ -416,6 +415,21 @@ async def verify(request: Request) -> JSONResponse:
 
 # --- app ----------------------------------------------------------------------
 
+class _RevalidatingStatic(StaticFiles):
+    """Serve the page assets with `no-cache`.
+
+    Not "do not cache" — the browser still keeps the file and still gets a 304
+    when it has not changed. It just has to ASK first. Without this, editing
+    board.js and reloading silently serves the previous version out of the disk
+    cache, and you debug a file the browser is not running.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 routes = [
     Route("/", index),
     Route("/api/upload", upload, methods=["POST"]),
@@ -430,7 +444,7 @@ routes = [
     Route("/api/settings/keys", write_keys, methods=["POST"]),
     Route("/api/settings/sources", write_sources, methods=["POST"]),
     Route("/api/settings/verify", verify, methods=["POST"]),
-    Mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static"),
+    Mount("/static", _RevalidatingStatic(directory=str(_STATIC_DIR)), name="static"),
 ]
 
 app = Starlette(routes=routes)

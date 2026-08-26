@@ -157,18 +157,30 @@ def test_a_lost_session_is_reported_not_a_server_error(client, monkeypatch):
 
 # --- save ---------------------------------------------------------------------
 
-def test_save_writes_the_review_markdown(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(webui.jobs, "result", lambda sid: _RESULT)
-
+def test_save_writes_one_clean_text_file_per_platform(client, tmp_path):
     resp = client.post(
         "/api/save",
         json={"filename": "attention", "result": json.loads(_RESULT.model_dump_json())},
     )
 
     assert resp.status_code == 200
-    written = tmp_path / "reviews" / "attention.review.md"
+    written = tmp_path / "reviews" / "attention.news.txt"
     assert written.exists()
-    assert "该疗法治愈了癌症。" in written.read_text(encoding="utf-8")
+    text = written.read_text(encoding="utf-8")
+    assert "该疗法治愈了癌症。" in text     # the reviewed prose
+    assert "依据清单" not in text          # no provenance
+    assert "丢失限定词" not in text         # no flags
+
+
+def test_saved_text_carries_no_ledger_citations(client, tmp_path):
+    cited = json.loads(_RESULT.model_dump_json())
+    cited["platform_outputs"][0]["body"] = "肿瘤体积缩小了23% (c1)。"
+
+    client.post("/api/save", json={"filename": "cited", "result": cited})
+
+    text = (tmp_path / "reviews" / "cited.news.txt").read_text(encoding="utf-8")
+    assert "c1" not in text
+    assert "肿瘤体积缩小了23%。" in text
 
 
 def test_save_refuses_a_filename_that_escapes_the_reviews_directory(client, tmp_path):

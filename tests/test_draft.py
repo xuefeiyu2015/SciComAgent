@@ -1,8 +1,8 @@
 """Tests for api.draft marker filtering and payload assembly — no network/keys.
 
-The drafter over-cites; _filter_markers is the code-side guarantee that only
-medium/low confidence claims keep an inline (cN) marker so solid facts read
-clean. _human_payload tests pin that background materials enter as a clearly
+The drafter cites the ledger inline; _filter_markers is the code-side
+guarantee that a surviving (cN) marker always names a claim that really is in
+the ledger, so a citation can never dangle. _human_payload tests pin that background materials enter as a clearly
 labeled context-only block and that without them the payload is unchanged.
 The system-prompt tests pin the learned-voice layer: absent by default, and
 when present carrying the fact boundary in the SYSTEM prompt only.
@@ -185,3 +185,42 @@ def test_style_does_not_touch_the_facts_payload():
     # the profile is SYSTEM-prompt voice guidance; the ledger contract is
     # assembled separately and is unaware of it
     assert "Voice profile" not in _human_payload(_LEDGER, None, [_MATERIAL], "angle")
+
+
+def test_every_ledger_claim_may_keep_its_citation(monkeypatch):
+    """A high-confidence claim keeps its marker too — provenance, not hedging.
+
+    The board draws a sentence's link to its evidence from this marker, so
+    stripping citations off settled facts left a draft with nothing to trace.
+    """
+    import json
+
+    from langchain_core.messages import AIMessage
+
+    from api import draft as draft_module
+    from api.schema import AgentInput, Claim, ConfidenceLevel, Platform, SourceType
+
+    ledger = [
+        Claim(id="c1", claim="缩小了23%", source_evidence="e", qualifier="小鼠",
+              confidence=ConfidenceLevel.high),
+        Claim(id="c2", claim="随机对照", source_evidence="e", qualifier="小鼠",
+              confidence=ConfidenceLevel.low),
+    ]
+
+    class _Stub:
+        def invoke(self, messages):
+            return AIMessage(content=json.dumps({
+                "title_options": ["t"],
+                "cover_copy": "c",
+                "body": "肿瘤体积缩小了23% (c1)。这是一项随机对照实验 (c2)。作者提醒 (c9)。",
+                "hashtags": [],
+            }))
+
+    monkeypatch.setattr(draft_module, "get_model", lambda role, temperature=0.0: _Stub())
+    inp = AgentInput(source="https://example.org/p", source_type=SourceType.url)
+
+    out = draft_module.draft_platform(Platform.news, ledger, inp)
+
+    assert "(c1)" in out.body   # high confidence keeps its citation
+    assert "(c2)" in out.body   # so does low
+    assert "c9" not in out.body  # an id that is not in the ledger never survives

@@ -34,14 +34,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from api.config_loader import get_model
 from api.jsonio import invoke_json
 from api.lang import language_label
+from api.markers import MARKER_RE as _MARKER_RE
+from api.markers import split_ids
 from api.schema import CheckFlag, Claim, Language, PlatformOutput
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "check.md"
-
-# A ledger-id marker the drafter leaves in the body, e.g. "(c17)" or
-# "(c77, c78)" — ASCII or full-width parens/commas. We pull the ids back out to
-# check them against the ledger (see _dangling_marker_flags).
-_MARKER_RE = re.compile(r"[（(]\s*(c\d+(?:\s*[,，]\s*c\d+)*)\s*[）)]")
 
 # Sentence boundaries for quoting the sentence a dangling marker sits in.
 _SENTENCE_SPLIT_RE = re.compile(r"[。.!?！？\n]")
@@ -197,8 +194,7 @@ def _dangling_marker_flags(
     seen: set[str] = set()
     for draft in drafts:
         for match in _MARKER_RE.finditer(draft.body):
-            for cid in re.split(r"[,，]", match.group(1)):
-                cid = cid.strip()
+            for cid in split_ids(match.group(1)):
                 if cid in known or cid in seen:
                     continue
                 seen.add(cid)
