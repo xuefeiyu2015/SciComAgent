@@ -64,7 +64,9 @@ body.reviewing { grid-template-columns: 288px minmax(0, 1fr) 340px; }
   max-height: 100vh;
 }
 
-.masthead { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; }
+.masthead { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; text-decoration: none; }
+a.masthead:hover .masthead-name { color: #fff; text-decoration: underline; }
+a.masthead:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 3px; }
 
 .masthead-mark {
   font-family: var(--mono);

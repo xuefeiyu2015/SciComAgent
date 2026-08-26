@@ -11,6 +11,12 @@ red for you to accept or rewrite, tethered to the claim ledger that backs them.
 uv run python -m webui.app     # http://127.0.0.1:8080
 ```
 
+- `/` is the overview: what the agent does, the four hard rules, the pipeline,
+  and every MCP tool with its parameters — that tool list is read from
+  `agent.yaml` at request time, so it cannot drift from the manifest the
+  platform sees.
+- `/board` is the review board itself.
+
 - `/webui` is a THIN Starlette wrapper over `/api`, like `/mcp_server` — no
   business logic lives there.
 - It binds loopback only: these routes write `.env`, read local files and spend

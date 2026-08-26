@@ -39,6 +39,7 @@ from api import jobs, settings  # noqa: E402
 from api.check import check_faithfulness  # noqa: E402
 from api.config_loader import ROLES, capabilities  # noqa: E402
 from api.highlight import locate_flags, locate_hedged  # noqa: E402
+from api.manifest import load_manifest  # noqa: E402
 from api.render import render_text  # noqa: E402
 from api.revise import revise_sentence  # noqa: E402
 from api.schema import (  # noqa: E402
@@ -133,8 +134,20 @@ def _enum(cls, value: Any, what: str):
 
 # --- page ---------------------------------------------------------------------
 
+async def front(request: Request) -> FileResponse:
+    """The overview: what this agent does, and the tools it exposes."""
+    return FileResponse(_STATIC_DIR / "front.html", headers={"Cache-Control": "no-cache"})
+
+
 async def index(request: Request) -> FileResponse:
+    """The review board itself."""
     return FileResponse(_STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+
+
+@_endpoint
+async def agent(request: Request) -> JSONResponse:
+    """The agent's own manifest, so the overview page never drifts from it."""
+    return JSONResponse(load_manifest().model_dump(mode="json"))
 
 
 # --- source input -------------------------------------------------------------
@@ -459,7 +472,9 @@ class _RevalidatingStatic(StaticFiles):
 
 
 routes = [
-    Route("/", index),
+    Route("/", front),
+    Route("/board", index),
+    Route("/api/agent", agent),
     Route("/api/upload", upload, methods=["POST"]),
     Route("/api/generate", generate, methods=["POST"]),
     Route("/api/job/{session_id}/status", job_status),
@@ -479,7 +494,7 @@ app = Starlette(routes=routes)
 
 
 def main() -> None:
-    print(f"SciComm review board -> http://{_HOST}:{_PORT}")
+    print(f"SciComm agent -> http://{_HOST}:{_PORT}   (board: /board)")
     uvicorn.run(app, host=_HOST, port=_PORT, log_level="info")
 
 

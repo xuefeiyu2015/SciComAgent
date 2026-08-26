@@ -330,3 +330,17 @@ def test_job_result_marks_sentences_resting_on_hedged_evidence(client, monkeypat
     span = pack["hedged"][0]
     assert draft.body[span["start"] : span["end"]] == "作者推测机制与T细胞有关 (c9)。"
     assert span["claim_ids"] == ["c9"]
+
+
+def test_the_overview_serves_the_agents_own_manifest(client):
+    """The page describes the agent from agent.yaml, never a second copy."""
+    body = client.get("/api/agent").json()
+
+    assert body["name"] == "scicomm-agent"
+    names = [t["name"] for t in body["tools"]]
+    assert names[0] == "generate"
+    assert "health" in names
+
+
+def test_the_board_keeps_its_own_address(client):
+    assert client.get("/board").status_code == 200
