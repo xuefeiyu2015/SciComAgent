@@ -24,7 +24,7 @@ already produced.
 
 from __future__ import annotations
 
-from api.markers import strip_markers
+from api.markers import strip_markers, to_caret
 from api.schema import (
     AgentOutput,
     BackgroundMaterial,
@@ -152,16 +152,21 @@ def _render_draft_text(draft: PlatformOutput, header: bool = False) -> str:
 
 
 def _render_draft(draft: PlatformOutput) -> str:
-    """The publish-facing post: titles, cover copy, body, hashtags."""
+    """The post as reviewed: titles, cover copy, body, hashtags.
+
+    Ledger citations are written `^c1`, since Markdown cannot raise a
+    character. `render_text` strips them instead — that view is the finished
+    post, and a finished post carries no citations.
+    """
     lines = [f"## {_PLATFORM_LABEL.get(draft.platform, draft.platform.value)}"]
     if draft.title_options:
         lines.append("**标题选项 / Titles:**")
-        lines.extend(f"{i}. {t}" for i, t in enumerate(draft.title_options, 1))
+        lines.extend(f"{i}. {to_caret(t)}" for i, t in enumerate(draft.title_options, 1))
     if draft.cover_copy.strip():
-        lines.append(f"**封面 / Cover:** {draft.cover_copy.strip()}")
+        lines.append(f"**封面 / Cover:** {to_caret(draft.cover_copy.strip())}")
     if draft.body.strip():
         lines.append("")
-        lines.append(draft.body.strip())
+        lines.append(to_caret(draft.body.strip()))
     if draft.hashtags:
         lines.append("")
         lines.append("**标签 / Tags:** " + " ".join(_as_tag(h) for h in draft.hashtags))

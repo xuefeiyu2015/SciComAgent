@@ -207,3 +207,23 @@ def test_render_text_covers_every_platform_when_none_is_named():
     text = render_text(out)
 
     assert "新闻正文。" in text and "小红书正文。" in text
+
+
+def test_review_view_shows_citations_as_carets():
+    """Markdown cannot raise a character, so a citation reads `^c1` there."""
+    out = AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[
+            PlatformOutput(platform=Platform.news, body="缩小了23% (c1)。又一句 (c1, c2)。")
+        ],
+        claim_ledger=[
+            Claim(id="c1", claim="缩小23%", source_evidence="e", qualifier="小鼠",
+                  confidence=ConfidenceLevel.high)
+        ],
+    )
+
+    text = render_markdown(out)
+
+    assert "缩小了23%^c1。" in text
+    assert "又一句^c1,c2。" in text
+    assert "(c1)" not in text
