@@ -209,7 +209,14 @@ async def job_result(request: Request) -> JSONResponse:
 
 
 def _with_spans(out: AgentOutput) -> dict[str, Any]:
-    """Attach flag positions so the board can paint without re-deriving them."""
+    """Attach flag positions so the board can paint without re-deriving them.
+
+    The learned voice profile is STRIPPED here rather than hidden in the page:
+    it is the operator's own distilled craft, and a value the browser never
+    receives cannot be read out of devtools or a saved payload. The profile
+    still reaches `api.render` and the MCP `render` tool, which are the
+    operator-facing audit paths.
+    """
     spans: dict[str, Any] = {}
     for draft in out.platform_outputs:
         flags = [f for f in out.overreach_flags if f.platform == draft.platform]
@@ -219,7 +226,9 @@ def _with_spans(out: AgentOutput) -> dict[str, Any]:
             "spans": [s.model_dump(mode="json") for s in located],
             "unlocated": unlocated,
         }
-    return {"result": out.model_dump(mode="json"), "spans": spans}
+    payload = out.model_dump(mode="json")
+    payload.pop("style_profile", None)
+    return {"result": payload, "spans": spans}
 
 
 # --- review actions -----------------------------------------------------------

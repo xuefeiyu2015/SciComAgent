@@ -256,3 +256,22 @@ def test_recheck_returns_the_reviewers_flags(client, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["flags"] == []
+
+
+def test_the_learned_voice_never_reaches_the_browser(client, monkeypatch):
+    """The voice profile is the operator's own craft — it is not shipped."""
+    from api.schema import StyleProfile
+
+    secret = AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[_DRAFT],
+        claim_ledger=_LEDGER,
+        style_profile=StyleProfile(voice="从一个具体场景开场", sources=["favourite-essay.md"]),
+    )
+    monkeypatch.setattr(webui.jobs, "result", lambda sid: secret)
+
+    resp = client.get("/api/job/j_test_1/result")
+
+    assert "从一个具体场景开场" not in resp.text
+    assert "favourite-essay.md" not in resp.text
+    assert resp.json()["result"].get("style_profile") is None

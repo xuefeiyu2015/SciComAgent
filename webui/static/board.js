@@ -588,14 +588,6 @@ function renderApparatus() {
     rail.append(sources);
   }
 
-  if (result.style_profile) {
-    const style = el('section');
-    const p = result.style_profile;
-    style.innerHTML = `<h2>学到的文风 <em>Learned voice</em></h2>
-      <p class="note">仅语气与结构 · voice and structure only</p>
-      <div class="source">${esc(p.voice || '—')}<span>${esc((p.sources || []).join(', '))}</span></div>`;
-    rail.append(style);
-  }
 }
 
 /* ── completing the review ──────────────────────────────────────────── */
