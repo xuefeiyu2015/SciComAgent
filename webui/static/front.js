@@ -3,73 +3,64 @@
    drift from the contract the platform reads. */
 'use strict';
 
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const el = (tag, cls) => { const n = document.createElement(tag); if (cls) n.className = cls; return n; };
+const escape_ = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const node_ = (tag, cls) => { const n = document.createElement(tag); if (cls) n.className = cls; return n; };
 
-/* The manifest writes inline code in backticks, the way its own comments do.
-   Escape first, then lift the backticks — never the other way round. */
-const code = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+let manifest = null;
 
-/* What a parameter accepts, in the order a reader cares about. */
+/* Inline code written in the manifest's own backticks. Escape, then lift. */
+const code_ = (s) => escape_(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+
 function paramNote(param) {
   const bits = [];
   if (param.allowed && param.allowed.length) {
-    bits.push(param.allowed.map((v) => `<b>${esc(v)}</b>`).join(' · '));
+    bits.push(param.allowed.map((v) => `<b>${escape_(v)}</b>`).join(' · '));
   }
   if (param.default !== null && param.default !== undefined) {
-    bits.push(`默认 default <b>${esc(JSON.stringify(param.default).replace(/^"|"$/g, ''))}</b>`);
+    const shown = JSON.stringify(param.default).replace(/^"|"$/g, '');
+    bits.push(`${escape_(t('front.tools.default'))} <b>${escape_(shown)}</b>`);
   }
-  if (param.description) bits.push(code(param.description));
+  if (param.description) bits.push(code_(param.description));
   return bits.join(' — ');
 }
 
 function toolCard(tool) {
-  const card = el('article', 'tool');
-  const head = el('div', 'tool-head');
-  head.innerHTML = `<span class="tool-name">${esc(tool.name)}</span>`;
-  card.append(head);
+  const card = node_('article', 'tool');
+  card.innerHTML = `<div class="tool-head"><span class="tool-name">${escape_(tool.name)}</span></div>`;
 
-  const desc = el('p', 'tool-desc');
-  desc.innerHTML = code(tool.description);
+  const desc = node_('p', 'tool-desc');
+  desc.innerHTML = code_(tool.description);
   card.append(desc);
 
   if (tool.parameters.length) {
-    const list = el('div', 'tool-params');
+    const list = node_('div', 'tool-params');
     tool.parameters.forEach((param) => {
-      const row = el('div', 'param');
-      row.innerHTML = `<span class="param-name">${esc(param.name)}`
-        + `${param.required ? '<span class="req" title="必填 required">*</span>' : ''}</span>`
+      const row = node_('div', 'param');
+      row.innerHTML = `<span class="param-name">${escape_(param.name)}`
+        + `${param.required ? `<span class="req" title="${escape_(t('front.tools.required'))}">*</span>` : ''}</span>`
         + `<span class="param-note">${paramNote(param)}</span>`;
       list.append(row);
     });
     card.append(list);
   } else {
-    const none = el('div', 'tool-none');
-    none.textContent = '无参数 · no parameters';
+    const none = node_('div', 'tool-none');
+    none.textContent = t('front.tools.noParams');
     card.append(none);
   }
 
-  const returns = Object.entries(tool.output || {});
+  const returns = Object.keys(tool.output || {});
   if (returns.length) {
-    const note = el('p', 'tool-returns');
-    note.innerHTML = '返回 returns · ' + returns
-      .map(([key]) => `<b>${esc(key)}</b>`).join(' · ');
+    const note = node_('p', 'tool-returns');
+    note.innerHTML = `${escape_(t('front.tools.returns'))} · `
+      + returns.map((key) => `<b>${escape_(key)}</b>`).join(' · ');
     card.append(note);
   }
   return card;
 }
 
-async function render() {
+function renderManifest() {
   const host = document.querySelector('#tools-list');
-  let manifest;
-  try {
-    const resp = await fetch('/api/agent');
-    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-    manifest = await resp.json();
-  } catch (err) {
-    host.textContent = `读不到 agent.yaml · could not read the manifest (${err.message})`;
-    return;
-  }
+  if (!manifest) { host.textContent = t('front.tools.loading'); return; }
 
   host.innerHTML = '';
   manifest.tools.forEach((tool) => host.append(toolCard(tool)));
@@ -77,16 +68,28 @@ async function render() {
   const roles = document.querySelector('#roles-list');
   roles.innerHTML = '';
   manifest.model_requirements.forEach((role) => {
-    const card = el('div', 'role-card');
+    const card = node_('div', 'role-card');
     card.dataset.tier = role.tier;
-    card.innerHTML = `<h3>${esc(role.role)}</h3><span>${esc(role.tier)}</span>`;
+    card.innerHTML = `<h3>${escape_(role.role)}</h3><span>${escape_(role.tier)}</span>`;
     roles.append(card);
   });
-
-  if (manifest.version) {
-    document.querySelector('#version').textContent =
-      `科普写作智能体 · v${manifest.version}`;
-  }
 }
 
-render();
+async function start() {
+  await loadStrings();
+  onLanguageChange(renderManifest);
+  document.querySelectorAll('[data-lang-switch]').forEach((b) => { b.onclick = toggleLanguage; });
+
+  renderManifest();
+  try {
+    const resp = await fetch('/api/agent');
+    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+    manifest = await resp.json();
+  } catch (err) {
+    document.querySelector('#tools-list').textContent = `${t('front.tools.failed')} (${err.message})`;
+    return;
+  }
+  renderManifest();
+}
+
+start();

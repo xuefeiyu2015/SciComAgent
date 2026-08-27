@@ -19,15 +19,18 @@ body.front {
   background: var(--ink);
   border-bottom: 1px solid var(--ink-line);
 }
-.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
-.brand-name { color: #fff; font-weight: 600; font-size: 14px; line-height: 1.2; }
-.brand-name em {
-  display: block;
-  font: 400 11px var(--mono);
-  font-style: normal;
-  color: #7D93B4;
-  letter-spacing: .03em;
+.brand { display: flex; align-items: baseline; gap: 9px; text-decoration: none; }
+.brand-name { color: #fff; font-weight: 600; font-size: 15px; letter-spacing: .01em; }
+.brand-sub { font: 400 11px var(--mono); color: #7D93B4; letter-spacing: .04em; }
+
+.btn-lang {
+  border-color: #3D5A80;
+  color: var(--ink-text);
+  font: 500 11px var(--mono);
+  padding: 5px 10px;
+  letter-spacing: .04em;
 }
+.btn-lang:hover { background: var(--ink-raised); color: #fff; }
 .topbar nav { margin-left: auto; display: flex; align-items: center; gap: 18px; }
 .nav-link { color: var(--ink-text); text-decoration: none; font-size: 13px; }
 .nav-link:hover { color: #fff; text-decoration: underline; }

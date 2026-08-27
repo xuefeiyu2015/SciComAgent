@@ -11,6 +11,15 @@ red for you to accept or rewrite, tethered to the claim ledger that backs them.
 uv run python -m webui.app     # http://127.0.0.1:8080
 ```
 
+- The interface runs in **中文 or English**, switched from the toggle in the
+  header; the choice is remembered and also pre-fills the draft language (which
+  stays a per-run question, since it is a real `generate` parameter). All UI
+  text lives in `webui/i18n.json`.
+- **API keys are set only in `.env`.** The sidebar reports which providers have
+  a key and never writes one.
+- The model dropdowns offer **only what your keys can actually run** — fetched
+  from each provider's own catalogue, cached, with a fallback list if that call
+  fails.
 - `/` is the overview: what the agent does, the four hard rules, the pipeline,
   and every MCP tool with its parameters — that tool list is read from
   `agent.yaml` at request time, so it cannot drift from the manifest the

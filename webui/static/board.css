@@ -64,9 +64,37 @@ body.reviewing { grid-template-columns: 288px minmax(0, 1fr) 340px; }
   max-height: 100vh;
 }
 
-.masthead { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; text-decoration: none; }
-a.masthead:hover .masthead-name { color: #fff; text-decoration: underline; }
+.masthead-row { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; }
+.masthead { display: flex; flex-direction: column; gap: 1px; text-decoration: none; min-width: 0; }
+.masthead-name { color: #fff; font-weight: 600; font-size: 14px; line-height: 1.25; }
+.masthead-sub { font: 400 10px var(--mono); color: #7D93B4; letter-spacing: .05em; }
+a.masthead:hover .masthead-name { text-decoration: underline; }
 a.masthead:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 3px; }
+
+.btn-lang {
+  margin-left: auto;
+  flex: none;
+  border-color: #3D5A80;
+  color: var(--ink-text);
+  font: 500 11px var(--mono);
+  padding: 4px 9px;
+  letter-spacing: .04em;
+}
+.btn-lang:hover { background: var(--ink-raised); color: #fff; }
+
+/* keys are reported, never edited */
+.keystatus .keyrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1px 8px;
+  margin-bottom: 9px;
+}
+.key-name { font-size: 12px; color: var(--ink-text); white-space: nowrap; }
+.key-state { font: 500 10px var(--mono); color: #5E738F; text-align: right; white-space: nowrap; }
+.key-state[data-present="1"] { color: var(--verified); }
+.key-var { grid-column: 1 / -1; font: 400 9.5px var(--mono); color: #46597A; }
+.note-warn { color: #E7A9A5; }
+
 
 .masthead-mark {
   font-family: var(--mono);
@@ -108,6 +136,7 @@ a.masthead:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 3px; }
 .dot[data-state="failed"]   { background: var(--flag); }
 
 .role-inputs { display: grid; gap: 4px; }
+#sidebar select { cursor: pointer; }
 
 #sidebar input, #sidebar select {
   width: 100%;
@@ -629,3 +658,13 @@ textarea.rw-ask {
   padding-bottom: 1px;
 }
 .hedged:hover { background: rgba(154, 107, 15, .14); }
+
+/* a select must look like one, even with the native arrow suppressed */
+#sidebar select {
+  appearance: none;
+  padding-right: 22px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' fill='none' stroke='%237D93B4' stroke-width='1.4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+}
+#sidebar select:hover { border-color: #3D5A80; }

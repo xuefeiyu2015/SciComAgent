@@ -14,6 +14,7 @@ Run with `python -m webui.app` (or `python webui/app.py`); open the printed URL.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sys
@@ -60,6 +61,7 @@ from api.schema import (  # noqa: E402
 _log = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+_I18N_PATH = Path(__file__).resolve().parent / "i18n.json"
 _UPLOAD_DIR = _REPO_ROOT / "outputs" / "uploads"
 _REVIEW_DIR = _REPO_ROOT / "outputs" / "reviews"
 
@@ -416,6 +418,17 @@ async def read_settings(request: Request) -> JSONResponse:
 
 
 @_endpoint
+async def strings(request: Request) -> JSONResponse:
+    """The interface's own text, in both languages.
+
+    Served rather than compiled into the page so the table is one file that a
+    test can check for parity — a key present in one language and missing from
+    the other renders as the raw key to whoever picked that language.
+    """
+    return JSONResponse(json.loads(_I18N_PATH.read_text(encoding="utf-8")))
+
+
+@_endpoint
 async def providers(request: Request) -> JSONResponse:
     """Which providers this machine can use, and which models each key allows.
 
@@ -503,6 +516,7 @@ routes = [
     Route("/api/save", save, methods=["POST"]),
     Route("/api/settings", read_settings),
     Route("/api/providers", providers),
+    Route("/api/strings", strings),
     Route("/api/settings/models", write_models, methods=["POST"]),
     Route("/api/settings/sources", write_sources, methods=["POST"]),
     Route("/api/settings/verify", verify, methods=["POST"]),

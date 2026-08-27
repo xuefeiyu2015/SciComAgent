@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SciComm Agent · 科普写作智能体</title>
+<title>ScicomAgent</title>
+<meta data-i18n-doctitle="app.title.front">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
@@ -14,98 +15,82 @@
 
 <header class="topbar">
   <a class="brand" href="/">
-    <span class="masthead-mark">SC</span>
-    <span class="brand-name">SciComm Agent<em id="version">科普写作智能体</em></span>
+    <span class="brand-name" data-i18n="app.name">白话智能体</span>
+    <span class="brand-sub" data-i18n="app.sub">ScicomAgent</span>
   </a>
   <nav>
-    <a class="nav-link" href="#tools">MCP 工具 Tools</a>
-    <a class="nav-link" href="#pipeline">流程 Pipeline</a>
-    <a class="btn btn-inverse" href="/board">打开审稿台 Open the board</a>
+    <a class="nav-link" href="#tools" data-i18n="nav.tools">MCP 工具</a>
+    <a class="nav-link" href="#pipeline" data-i18n="nav.pipeline">工作流程</a>
+    <button class="btn btn-lang" type="button" data-lang-switch data-i18n-title="lang.label">English</button>
+    <a class="btn btn-inverse" href="/board" data-i18n="nav.board">打开审稿台</a>
   </nav>
 </header>
 
-<!-- the thesis, shown rather than claimed -->
 <section class="hero">
   <div class="hero-copy">
-    <h1>把一篇论文写成公众读得懂的稿子，<b>每一句都追得回它的出处。</b></h1>
-    <p>SciComm Agent 读取论文，抽出一份「依据清单」，为不同平台起草，
-       再用<strong>另一个模型</strong>逐句核对。任何超出依据的说法都会被标出来交给人处理。</p>
-    <p class="en">It reads a paper, extracts a claim ledger, drafts for each platform, then audits
-       every sentence against that ledger with a <strong>different</strong> model. Anything that
-       outruns its source is flagged for a human. It never publishes.</p>
+    <h1 data-i18n="front.hero.title">把一篇论文，写成公众读得懂的稿子。</h1>
+    <p data-i18n="front.hero.lead"></p>
+    <p class="en" data-i18n="front.hero.note"></p>
   </div>
 
   <figure class="demo">
-    <figcaption>依据清单里有什么，稿子里才能写什么</figcaption>
+    <figcaption data-i18n="front.demo.caption"></figcaption>
     <div class="demo-ledger">
       <span class="demo-id">c1</span>
-      <span>在12只小鼠中，肿瘤体积平均缩小了23%</span>
-      <span class="demo-meta">high · 小鼠, n=12, 初步</span>
+      <span data-i18n="front.demo.claim"></span>
+      <span class="demo-meta" data-i18n="front.demo.meta"></span>
     </div>
     <div class="demo-row demo-ok">
-      <span class="demo-verdict">会这样写 · written</span>
-      <p>在12只小鼠中（初步结果），肿瘤体积平均缩小了23%<sup class="demo-cite">c1</sup>。</p>
+      <span class="demo-verdict" data-i18n="front.demo.written"></span>
+      <p><span data-i18n="front.demo.writtenText"></span><sup class="demo-cite">c1</sup><span data-i18n="front.demo.stop"></span></p>
     </div>
     <div class="demo-row demo-no">
-      <span class="demo-verdict">不会这样写 · refused</span>
-      <p><span class="demo-flag">这种疗法能治愈癌症。</span><sup class="demo-query">?</sup></p>
-      <small>丢掉了物种、样本量与「初步」——依据清单撑不起这句话。</small>
+      <span class="demo-verdict" data-i18n="front.demo.refused"></span>
+      <p><span class="demo-flag" data-i18n="front.demo.refusedText"></span><sup class="demo-query">?</sup></p>
+      <small data-i18n="front.demo.why"></small>
     </div>
   </figure>
 </section>
 
-<!-- the four hard rules -->
 <section class="band">
-  <h2 class="section-head">不会妥协的四条 <em>The rules it will not bend</em></h2>
+  <h2 class="section-head" data-i18n="front.rules.head"></h2>
   <div class="rules">
-    <article><h3>写得出，就查得到</h3><p>数字、因果、程度、「首次」、「证明」——任何一句这样的话都必须对应依据清单里的一条，否则不写。</p>
-      <em>Every number, causal claim, magnitude, “first” or “proves” maps to a ledger entry, or it is not written.</em></article>
-    <article><h3>限定词跟着走</h3><p>物种、样本量、「初步」、相关不等于因果——起草时保留，核对时检查。</p>
-      <em>Species, sample size, “preliminary”, correlation-not-causation: carried into the prose, then checked.</em></article>
-    <article><h3>不自己给自己打分</h3><p>起草与核对用<strong>不同的模型、不同的提示词</strong>。两者设成同一个模型时，审稿台拒绝开工。</p>
-      <em>Drafting and checking use different models and different prompts. Set them the same and the board refuses to start.</em></article>
-    <article><h3>永不自动发布</h3><p>产出的是草稿、出处和存疑标记，交给人审。发布这一步永远由人来做。</p>
-      <em>The output is a draft, its provenance and its flags — for a human. Publishing is never automated.</em></article>
+    <article><h3 data-i18n="front.rules.1.title"></h3><p data-i18n="front.rules.1.body"></p></article>
+    <article><h3 data-i18n="front.rules.2.title"></h3><p data-i18n="front.rules.2.body"></p></article>
+    <article><h3 data-i18n="front.rules.3.title"></h3><p data-i18n="front.rules.3.body"></p></article>
+    <article><h3 data-i18n="front.rules.4.title"></h3><p data-i18n="front.rules.4.body"></p></article>
   </div>
 </section>
 
-<!-- the pipeline: genuinely a sequence, so it is numbered -->
 <section class="band" id="pipeline">
-  <h2 class="section-head">一次运行经过什么 <em>What one run does</em></h2>
+  <h2 class="section-head" data-i18n="front.pipeline.head"></h2>
   <ol class="pipeline">
-    <li><span class="step">01</span><h3>取全文 · fetch + extract</h3>
-      <p>链接、DOI 或 PDF。摘要页会自动升级成全文 PDF；取不到就说清楚为什么，并请你补一个 PDF。</p></li>
-    <li><span class="step">02</span><h3>建依据清单 · claim ledger</h3>
-      <p>把论文里可引用的结论逐条抽出来，每条带上原文依据、限定词和置信度。清单是空的，就什么都不写。</p></li>
-    <li><span class="step">03</span><h3>分平台起草 · draft</h3>
-      <p>新闻稿与小红书各有结构；语言、读者、活泼度是参数。每个事实句都标注它引用的依据编号。</p></li>
-    <li><span class="step">04</span><h3>逐句核对 · faithfulness check</h3>
-      <p>换一个更强的模型，只对着依据清单读稿子，标出相关当因果、丢限定词、以偏概全、清单里没有的说法。</p></li>
+    <li><span class="step">01</span><h3 data-i18n="front.pipeline.1.title"></h3><p data-i18n="front.pipeline.1.body"></p></li>
+    <li><span class="step">02</span><h3 data-i18n="front.pipeline.2.title"></h3><p data-i18n="front.pipeline.2.body"></p></li>
+    <li><span class="step">03</span><h3 data-i18n="front.pipeline.3.title"></h3><p data-i18n="front.pipeline.3.body"></p></li>
+    <li><span class="step">04</span><h3 data-i18n="front.pipeline.4.title"></h3><p data-i18n="front.pipeline.4.body"></p></li>
   </ol>
-  <p class="aside">两条支线只影响文风、不提供事实：外部背景检索给起草提供叙事语境，
-    <code>api/styles/examples/</code> 里的范文会被蒸馏成语气画像。核对模型两者都看不到。</p>
+  <p class="aside" data-i18n-html="front.pipeline.aside"></p>
 </section>
 
-<!-- read straight from agent.yaml -->
 <section class="band" id="tools">
-  <h2 class="section-head">MCP 工具 <em>MCP tools</em></h2>
-  <p class="aside">下面这份清单直接读自 <code>agent.yaml</code>，与平台看到的契约是同一份。
-    <em>Read straight from the manifest, so it is the same contract the platform sees.</em></p>
-  <div id="tools-list" class="tools">载入中… loading</div>
+  <h2 class="section-head" data-i18n="front.tools.head"></h2>
+  <p class="aside" data-i18n-html="front.tools.aside"></p>
+  <div id="tools-list" class="tools"></div>
 </section>
 
 <section class="band">
-  <h2 class="section-head">模型分工 <em>Model roles</em></h2>
-  <p class="aside">按角色声明，具体模型名写在配置里，代码里从不写死。
-    <em>Declared by role; concrete names live in config, never in code.</em></p>
+  <h2 class="section-head" data-i18n="front.roles.head"></h2>
+  <p class="aside" data-i18n="front.roles.aside"></p>
   <div id="roles-list" class="roles"></div>
 </section>
 
 <footer class="foot">
-  <a class="btn btn-solid" href="/board">打开审稿台 Open the review board</a>
-  <p>本地运行，只监听 127.0.0.1。<em>Runs locally, bound to loopback.</em></p>
+  <a class="btn btn-solid" href="/board" data-i18n="front.foot.cta"></a>
+  <p data-i18n="front.foot.note"></p>
 </footer>
 
+<script src="/static/i18n.js"></script>
 <script src="/static/front.js"></script>
 </body>
 </html>

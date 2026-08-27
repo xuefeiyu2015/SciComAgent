@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SciComm 审稿台 · Review Board</title>
+<title>ScicomAgent</title>
+<meta data-i18n-doctitle="app.title.board">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
@@ -12,78 +13,76 @@
 <body>
 
 <!-- ── sidebar: the instrument panel ─────────────────────────────────── -->
-<aside id="sidebar" aria-label="Agent settings">
-  <a class="masthead" href="/" title="返回概览 · back to the overview">
-    <span class="masthead-mark">SC</span>
-    <span class="masthead-name">审稿台<em>Review Board</em></span>
-  </a>
+<aside id="sidebar" aria-label="Settings">
+  <header class="masthead-row">
+    <a class="masthead" href="/" data-i18n-title="nav.overview">
+      <span class="masthead-name" data-i18n="app.name">白话智能体</span>
+      <span class="masthead-sub" data-i18n="app.sub">ScicomAgent</span>
+    </a>
+    <button class="btn btn-lang" type="button" data-lang-switch data-i18n-title="lang.label">English</button>
+  </header>
 
-  <div id="rule3" class="alarm" hidden>
-    起草与审校用了同一个模型，审校无法给自己打分。
-    <em>Drafting and checking are set to the same model — pick a different reviewer.</em>
-  </div>
+  <div id="rule3" class="alarm" hidden data-i18n="settings.rule3"></div>
 
   <section class="panel">
-    <h2>模型分工 <em>Model roles</em></h2>
-    <p class="note">起草与审校必须不同 · drafter and reviewer must differ</p>
+    <h2 data-i18n="settings.roles"></h2>
+    <p class="note" data-i18n="settings.rolesNote"></p>
     <div id="roles"></div>
     <div class="panel-actions">
-      <button id="save-models" class="btn">保存 Save</button>
-      <button id="verify-models" class="btn btn-quiet">验证 Verify</button>
+      <button id="save-models" class="btn" data-i18n="settings.save"></button>
+      <button id="verify-models" class="btn btn-quiet" data-i18n="settings.verify"></button>
     </div>
   </section>
 
   <section class="panel">
-    <h2>API 密钥 <em>API keys</em></h2>
-    <p class="note">写入本机 .env，永不回显 · stored in .env, never shown back</p>
-    <div id="keys"></div>
+    <h2 data-i18n="settings.keys"></h2>
+    <p class="note" data-i18n="settings.keysNote"></p>
+    <div id="keys" class="keystatus"></div>
   </section>
 
   <section class="panel">
-    <h2>背景检索 <em>Background search</em></h2>
-    <p class="note">仅作行文背景，不是事实来源 · framing only, never facts</p>
+    <h2 data-i18n="settings.sources"></h2>
+    <p class="note" data-i18n="settings.sourcesNote"></p>
     <div id="sources" class="checkrow"></div>
   </section>
 </aside>
 
-<!-- ── main: submission slip, then manuscript ────────────────────────── -->
+<!-- ── main: the conversation, then the manuscript ───────────────────── -->
 <main id="main">
   <section id="dialog" aria-live="polite"></section>
 
   <form id="composer" autocomplete="off">
-    <input id="entry" type="text" placeholder="粘贴论文链接、DOI，或把 PDF 拖进来 · Paste a link or DOI, or drop a PDF">
-    <button class="btn btn-solid" type="submit">发送 Send</button>
+    <input id="entry" type="text" data-i18n-placeholder="board.composer">
+    <button class="btn btn-solid" type="submit" data-i18n="board.send"></button>
   </form>
 
   <section id="board" hidden></section>
 </main>
 
-<!-- ── apparatus: the ledger this draft is tethered to ───────────────── -->
-<aside id="apparatus" aria-label="Claim ledger and sources" hidden></aside>
+<aside id="apparatus" aria-label="Claim ledger" hidden></aside>
 
-<!-- the signature: a hairline from a flagged sentence to its ledger entry -->
 <svg id="tether" aria-hidden="true"></svg>
 
-<div id="popover" role="dialog" aria-label="Flag" hidden></div>
+<div id="popover" role="dialog" hidden></div>
 
-<!-- select any passage in a draft and ask for it to be changed -->
-<button id="pill" type="button" hidden>改写 Rewrite</button>
+<button id="pill" type="button" hidden data-i18n="rewrite.pill"></button>
 
-<div id="rewriter" role="dialog" aria-label="改写 Rewrite" hidden>
-  <h3>改写这段 · Rewrite this</h3>
+<div id="rewriter" role="dialog" hidden>
+  <h3 data-i18n="rewrite.head"></h3>
   <blockquote class="rw-target"></blockquote>
   <div class="rw-thread"></div>
-  <textarea class="rw-ask" rows="2" aria-label="想怎么改 how it should change"
-            placeholder="想怎么改？例如：写短一点／别那么耸动／先说样本量 · ⌘↵ 发送"></textarea>
+  <textarea class="rw-ask" rows="2" data-i18n-placeholder="rewrite.ask" data-i18n-aria="rewrite.head"></textarea>
   <div class="rw-actions">
-    <button class="btn btn-solid rw-send" type="button">发送 Send</button>
-    <button class="btn rw-apply" type="button">应用 Apply</button>
-    <button class="btn btn-quiet rw-cancel" type="button">取消 Cancel</button>
+    <button class="btn btn-solid rw-send" type="button" data-i18n="rewrite.send"></button>
+    <button class="btn rw-apply" type="button" data-i18n="rewrite.apply"></button>
+    <button class="btn btn-quiet rw-cancel" type="button" data-i18n="rewrite.cancel"></button>
   </div>
-  <p class="rw-note">事实仍以依据清单为准，改写不会新增事实。<br>The ledger still bounds the result — a rewrite never adds a fact.</p>
+  <p class="rw-note" data-i18n="rewrite.note"></p>
 </div>
+
 <div id="toast" role="status" aria-live="polite" hidden></div>
 
+<script src="/static/i18n.js"></script>
 <script src="/static/board.js"></script>
 </body>
 </html>

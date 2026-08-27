@@ -13,11 +13,8 @@ const ROLE_HINTS = {
   researcher:'optional',
   stylist:   'optional',
 };
-// Suggestions only. Provider strings vary by integration (google_genai vs
-// google_vertexai, azure_openai, ...), so this is a datalist and never a
-// closed <select> — a fixed list would silently rewrite a working config.
-const PROVIDERS = ['anthropic', 'openai', 'google_genai', 'google_vertexai', 'azure_openai', 'ollama'];
-const PLATFORM_LABEL = { news: 'News · 新闻稿', xhs: 'Xiaohongshu · 小红书', wechat: 'WeChat · 公众号' };
+const PLATFORM_KEY = { news: 'dialog.platformNews', xhs: 'dialog.platformXhs', wechat: 'dialog.platformXhs' };
+const platformLabel = (p) => t(PLATFORM_KEY[p] || 'dialog.platformNews');
 const POLL_MS = 1500;
 
 const state = {
@@ -28,6 +25,7 @@ const state = {
   drafts: {},         // platform -> working copy, carrying human edits
   decisions: {},      // "platform:flagIndex" -> "accepted" | "rewritten"
   settings: null,
+  providers: [],
   polling: null,
   openKey: null,
   rewriter: null,     // the passage currently being rewritten by hand
@@ -77,7 +75,7 @@ function ask(label, prompt, options, onPick) {
     const chip = el('button', 'chip');
     chip.type = 'button';
     chip.innerHTML = esc(text) + (sub ? `<small>${esc(sub)}</small>` : '');
-    chip.onclick = () => { chips.remove(); turn('你 · You', esc(text), 'you'); onPick(value); };
+    chip.onclick = () => { chips.remove(); turn(t('board.you'), esc(text), 'you'); onPick(value); };
     chips.append(chip);
   });
   node.append(chips);
@@ -99,40 +97,39 @@ function detectSource(text) {
   return null;
 }
 
-/* The empty screen is where the product states what it is for. */
-function thesis() {
+/* The board opens by asking, not by explaining. The overview page at / is
+   where the argument for the agent lives; someone who reached the board has
+   already made up their mind and wants to get on with it. */
+function greeting() {
   const node = el('div', 'thesis');
-  node.innerHTML = `<h1>每一句话，要么<b>有据可依</b>，要么不能写。</h1>
-    <p>把一篇论文交给我，我会起草面向公众的稿子，然后用另一个模型逐句核对。
-       任何超出依据清单的说法都会标红，由你决定保留还是改写。稿子永远不会自动发布。</p>
-    <p>Hand me a paper. The agent drafts it for a public audience, then a
-       <em>different</em> model audits every sentence against the claim ledger.
-       Anything that outruns its source is marked in red for you to accept or
-       rewrite. Nothing is ever published automatically.</p>`;
+  node.innerHTML = `<h1>${esc(t('board.greeting'))}</h1><p>${esc(t('board.greetingSub'))}</p>`;
   $('#dialog').append(node);
 }
 
 function askNext() {
   const s = state.slots;
-  if (!s.source) {
-    turn('审稿台 · Board', '把论文链接、DOI 或 PDF 给我。<em>Give me a paper: a link, a DOI, or a PDF.</em>');
-    return;
-  }
+  if (!s.source) return;            // the greeting already asked for one
   if (!s.platforms) {
-    return ask('审稿台 · Board', '要写成哪种稿子？<em>Which kind of piece?</em>', [
-      [['news'], '新闻稿', 'News'],
-      [['xhs'], '小红书', 'Xiaohongshu'],
-      [['news', 'xhs'], '两者都要', 'Both'],
+    return ask(t('board.speaker'), esc(t('dialog.askPlatform')), [
+      [['news'], t('dialog.platformNews'), ''],
+      [['xhs'], t('dialog.platformXhs'), ''],
+      [['news', 'xhs'], t('dialog.platformBoth'), ''],
     ], (v) => { s.platforms = v; askNext(); });
   }
   if (!s.language) {
-    return ask('审稿台 · Board', '用什么语言？<em>Which language?</em>', [
-      ['zh', '中文', 'Chinese'], ['en', 'English', '英文'],
+    // The interface language pre-selects, but never decides: `language` is a
+    // real run parameter, so an English draft from a Chinese UI stays possible.
+    const preferred = draftLanguage();
+    return ask(t('board.speaker'), esc(t('dialog.askLanguage')), [
+      ['zh', t('dialog.langZh'), preferred === 'zh' ? '·' : ''],
+      ['en', t('dialog.langEn'), preferred === 'en' ? '·' : ''],
     ], (v) => { s.language = v; askNext(); });
   }
   if (!s.liveliness) {
-    return ask('审稿台 · Board', '语气要多活泼？<em>How lively should the tone be? Tone only — never the facts.</em>', [
-      [1, '1', '克制 restrained'], [2, '2', ''], [3, '3', '适中 middle'], [4, '4', ''], [5, '5', '活泼 playful'],
+    return ask(t('board.speaker'),
+      `${esc(t('dialog.askLiveliness'))}<em>${esc(t('dialog.livelinessNote'))}</em>`, [
+      [1, '1', t('dialog.lively1')], [2, '2', ''], [3, '3', t('dialog.lively3')],
+      [4, '4', ''], [5, '5', t('dialog.lively5')],
     ], (v) => { s.liveliness = v; confirm(); });
   }
   confirm();
@@ -140,20 +137,20 @@ function askNext() {
 
 function confirm() {
   const s = state.slots;
-  const node = turn('审稿台 · Board', '准备好了。<em>Ready. Check the slip and start drafting.</em>');
+  const node = turn(t('board.speaker'), esc(t('dialog.ready')));
   const slip = el('div', 'slip');
   slip.innerHTML = `<dl>
-    <dt>来源 source</dt><dd>${esc(s.source)}</dd>
-    <dt>类型 type</dt><dd>${esc(s.source_type)}</dd>
-    <dt>平台 platform</dt><dd>${s.platforms.map((p) => esc(PLATFORM_LABEL[p] || p)).join(' · ')}</dd>
-    <dt>语言 language</dt><dd>${s.language === 'zh' ? '中文 Chinese' : 'English'}</dd>
-    <dt>活泼度 liveliness</dt><dd>${s.liveliness}/5</dd>
+    <dt>${esc(t('dialog.slipSource'))}</dt><dd>${esc(s.source)}</dd>
+    <dt>${esc(t('dialog.slipType'))}</dt><dd>${esc(s.source_type)}</dd>
+    <dt>${esc(t('dialog.slipPlatform'))}</dt><dd>${s.platforms.map((p) => esc(platformLabel(p))).join(' · ')}</dd>
+    <dt>${esc(t('dialog.slipLanguage'))}</dt><dd>${s.language === 'zh' ? esc(t('dialog.langZh')) : esc(t('dialog.langEn'))}</dd>
+    <dt>${esc(t('dialog.slipLiveliness'))}</dt><dd>${s.liveliness}/5</dd>
   </dl>`;
   const start = el('button', 'btn btn-solid');
-  start.textContent = '开始起草 Start drafting';
+  start.textContent = t('dialog.start');
   start.onclick = () => { slip.remove(); startRun(); };
   const change = el('button', 'btn btn-quiet');
-  change.textContent = '重来 Start over';
+  change.textContent = t('dialog.startOver');
   change.onclick = () => { resetRun(); askNext(); };
   const actions = el('div', 'chips');
   actions.append(start, change);
@@ -173,14 +170,15 @@ function resetRun() {
   $('#composer').hidden = false;
   document.body.classList.remove('reviewing');
   $('#dialog').innerHTML = '';
-  thesis();
+  greeting();
 }
 
 /* ── the run ────────────────────────────────────────────────────────── */
 
 async function startRun() {
   const s = state.slots;
-  const node = turn('审稿台 · Board', '<div class="progress">正在起草… starting</div><div class="progress-bar"><i style="width:4%"></i></div>');
+  const node = turn(t('board.speaker'),
+    `<div class="progress">${esc(t('dialog.starting'))}</div><div class="progress-bar"><i style="width:4%"></i></div>`);
   try {
     const { session_id } = await postJSON('/api/generate', {
       source: s.source, source_type: s.source_type, platforms: s.platforms,
@@ -190,7 +188,7 @@ async function startRun() {
     poll(node);
   } catch (err) {
     node.remove();
-    turn('审稿台 · Board', `<span style="color:var(--flag)">${esc(err.message)}</span>`);
+    turn(t('board.speaker'), `<span style="color:var(--flag)">${esc(err.message)}</span>`);
   }
 }
 
@@ -238,10 +236,10 @@ async function loadResult() {
 /* A blocked source is a question, not an error dump: say what to do next. */
 function reportTerminal(result) {
   const notice = (result.notices || [])[0];
-  const message = notice ? notice.message : '这一篇没能取到可引用的来源。';
-  turn('审稿台 · Board', `${esc(message)}`);
+  const message = notice ? notice.message : t('dialog.noClaims');
+  turn(t('board.speaker'), `${esc(message)}`);
   if (notice && (notice.code === 'need_pdf' || notice.code === 'too_short')) {
-    turn('审稿台 · Board', '把 PDF 拖进下面的输入框，我再试一次。<em>Drop the PDF into the box below and I will try again.</em>');
+    turn(t('board.speaker'), esc(t('dialog.needPdf')));
     state.slots.source = null;
     state.slots.source_type = null;
   }
@@ -280,16 +278,17 @@ function renderBoard() {
     // Two different things a reviewer looks for, so the header names both. A
     // draft with no overstatements can still rest on shaky evidence, and a bare
     // "0 处存疑" would read as "nothing to do here".
-    const counts = [`${pack.flags.length} 处存疑 · overstatements${open ? ` (${open} left)` : ''}`];
-    if (hedged) counts.push(`${hedged} 处依据不确定 · hedged`);
-    head.innerHTML = `<h2>${esc(PLATFORM_LABEL[platform] || platform)}</h2>
+    const counts = [t('board.flagsCount', { count: pack.flags.length })
+      + (open ? ` · ${t('board.flagsLeft', { count: open })}` : '')];
+    if (hedged) counts.push(t('board.hedgedCount', { count: hedged }));
+    head.innerHTML = `<h2>${esc(platformLabel(platform))}</h2>
       <span class="count">${counts.join('　·　')}</span>`;
     wrap.append(head);
 
     if (pack.unlocated.length) wrap.append(orphanStrip(pack, platform));
 
     if (draft.title_options.length) {
-      wrap.append(fieldLabel('标题选项 · Title options'));
+      wrap.append(fieldLabel(t('board.titles')));
       const list = el('ol', 'titles');
       draft.title_options.forEach((title, i) => {
         const li = el('li');
@@ -301,14 +300,14 @@ function renderBoard() {
       wrap.append(list);
     }
     if (draft.cover_copy) {
-      wrap.append(fieldLabel('封面 · Cover'));
+      wrap.append(fieldLabel(t('board.cover')));
       const cover = el('p', 'cover');
       cover.dataset.field = 'cover_copy';
       cover.dataset.platform = platform;
       cover.innerHTML = paint(draft.cover_copy, pack, platform, 'cover_copy', confidence);
       wrap.append(cover);
     }
-    wrap.append(fieldLabel('正文 · Body'));
+    wrap.append(fieldLabel(t('board.body')));
     const prose = el('div', 'prose');
     prose.dataset.field = 'body';
     prose.dataset.platform = platform;
@@ -316,7 +315,7 @@ function renderBoard() {
     wrap.append(prose);
 
     if (draft.hashtags.length) {
-      wrap.append(fieldLabel('标签 · Tags'));
+      wrap.append(fieldLabel(t('board.tags')));
       const tags = el('p', 'tags');
       tags.textContent = draft.hashtags.map((h) => `#${h.replace(/^[#＃]+/, '')}`).join(' ');
       wrap.append(tags);
@@ -353,23 +352,21 @@ function fieldLabel(text) {
    that cannot be clicked in the prose would block the review forever. */
 function orphanStrip(pack, platform) {
   const node = el('div', 'orphans');
-  node.innerHTML = `<h3>未定位的存疑 · flags without a matching sentence</h3>
-    <p>审校标出了这些问题，但稿子里已经找不到对应的句子了，请自行核对。
-       <em>The reviewer raised these, but their sentence is no longer in the draft — check them by hand.</em></p>`;
+  node.innerHTML = `<h3>${esc(t('board.orphansHead'))}</h3><p>${esc(t('board.orphansBody'))}</p>`;
   const list = el('ul');
   pack.unlocated.forEach((index) => {
     const flag = pack.flags[index];
     const key = flagKey(platform, index);
     const item = el('li');
-    item.innerHTML = `${esc(flag.text || '(未引用原句)')} — ${esc(flag.reason)} `;
+    item.innerHTML = `${esc(flag.text || '—')} — ${esc(flag.reason)} `;
     if (state.decisions[key]) {
       const done = el('span', 'orphan-done');
-      done.textContent = '已核对 · checked';
+      done.textContent = t('board.orphanDone');
       item.append(done);
     } else {
       const ack = el('button', 'btn orphan-ack');
       ack.type = 'button';
-      ack.textContent = '我已核对 Checked by hand';
+      ack.textContent = t('board.orphanAck');
       ack.onclick = () => decide(key, 'accepted');
       item.append(ack);
     }
@@ -413,10 +410,10 @@ function segment(text, offset) {
 function citation(group, offset, length, confidence) {
   return group.split(/[,，]/).map((s) => s.trim()).filter(Boolean).map((id) => {
     const level = confidence[id] || '';
-    const caution = HEDGED.has(level) ? `（依据不够确定 · ${level} confidence）` : '';
+    const caution = HEDGED.has(level) ? ` · ${t('ledger.hedged')}` : '';
     return `<sup class="cite" role="button" tabindex="0" data-claim="${id}"`
       + ` data-confidence="${esc(level)}" data-off="${offset}" data-len="${length}"`
-      + ` aria-label="依据 ledger ${id}${caution}" title="依据 ledger · ${id}${caution}">${id}</sup>`;
+      + ` aria-label="${esc(t('flag.ledger'))} ${id}${caution}" title="${esc(t('flag.ledger'))} · ${id}${caution}">${id}</sup>`;
   }).join('');
 }
 
@@ -447,7 +444,7 @@ function flagMark(text, span, pack, platform, confidence) {
   const key = flagKey(platform, span.flag_index);
   const decision = state.decisions[key] || '';
   return `<span class="mark" tabindex="0" role="button" data-key="${esc(key)}"`
-    + ` data-state="${esc(decision)}" aria-label="存疑 flagged: ${esc(flag.reason)}">`
+    + ` data-state="${esc(decision)}" aria-label="${esc(t('flag.head'))}: ${esc(flag.reason)}">`
     + renderRun(text, span.start, span.end, confidence)
     + '<sup class="query" aria-hidden="true">?</sup></span>';
 }
@@ -455,8 +452,8 @@ function flagMark(text, span, pack, platform, confidence) {
 function hedgedMark(text, span, confidence) {
   const ids = span.claim_ids.join(' ');
   return `<span class="hedged" data-claims="${esc(ids)}"`
-    + ` title="依据不够确定 · rests on hedged evidence (${esc(ids)})"`
-    + ` aria-label="依据不够确定 rests on hedged evidence: ${esc(ids)}">`
+    + ` title="${esc(t('ledger.hedged'))} (${esc(ids)})"`
+    + ` aria-label="${esc(t('ledger.hedged'))}: ${esc(ids)}">`
     + renderRun(text, span.start, span.end, confidence)
     + '</span>';
 }
@@ -466,17 +463,17 @@ function tallyBar() {
   const done = Object.keys(state.decisions).length;
   const bar = el('div', 'tally');
   const count = el('span', 'tally-count');
-  count.textContent = `${done} / ${total} 处已处理 · reviewed`;
+  count.textContent = t('board.tally', { done, total });
 
   const complete = el('button', 'btn btn-solid');
-  complete.textContent = '完成审阅 Complete review';
+  complete.textContent = t('board.complete');
   complete.onclick = completeReview;
   if (done < total) {
     complete.disabled = true;
-    complete.title = '还有存疑没有处理 · every flag needs a decision first';
+    complete.title = t('board.completeBlocked');
   }
   const restart = el('button', 'btn btn-quiet');
-  restart.textContent = '换一篇 New paper';
+  restart.textContent = t('board.newPaper');
   restart.onclick = () => { resetRun(); askNext(); };
 
   bar.append(count, complete, restart);
@@ -511,7 +508,7 @@ function bindClaim(row) {
     const citing = [...document.querySelectorAll(`.cite[data-claim="${CSS.escape(claimId)}"]`)];
     document.querySelectorAll('.cite[data-open="1"]').forEach((c) => delete c.dataset.open);
     if (!citing.length) {
-      toast(`正文里没有引用 ${claimId} · nothing in the draft cites ${claimId}`);
+      toast(t('ledger.notCited', { id: claimId }));
       return;
     }
     closeFlag();
@@ -550,16 +547,16 @@ function openFlag(mark) {
   const claimId = (flag.reason.match(/^\[(c\d+)\]/) || [])[1] || null;
 
   const pop = $('#popover');
-  pop.innerHTML = `<h3>存疑 · overstatement</h3>
+  pop.innerHTML = `<h3>${esc(t('flag.head'))}</h3>
     <p class="reason">${esc(flag.reason)}</p>
-    <p class="cite">${claimId ? `依据 ledger · ${esc(claimId)}` : '没有对应的依据条目 · no matching ledger entry'}</p>`;
+    <p class="cite">${claimId ? `${esc(t('flag.ledger'))} · ${esc(claimId)}` : esc(t('flag.noLedger'))}</p>`;
 
   const actions = el('div', 'pop-actions');
   const accept = el('button', 'btn');
-  accept.textContent = '保留原句 Accept as written';
+  accept.textContent = t('flag.accept');
   accept.onclick = () => decide(key, 'accepted');
   const rewrite = el('button', 'btn btn-solid');
-  rewrite.textContent = '改写 Rewrite';
+  rewrite.textContent = t('flag.rewrite');
   rewrite.onclick = () => proposeRewrite(key, mark, rewrite);
   actions.append(accept, rewrite);
   pop.append(actions);
@@ -585,7 +582,7 @@ async function proposeRewrite(key, mark, button) {
   const flag = state.spans[platform].flags[index];
 
   button.disabled = true;
-  button.textContent = '改写中… Rewriting';
+  button.textContent = t('flag.rewriting');
   let proposal;
   try {
     const body = await postJSON('/api/revise', {
@@ -600,7 +597,7 @@ async function proposeRewrite(key, mark, button) {
     proposal = body.sentence;
   } catch (err) {
     button.disabled = false;
-    button.textContent = '改写 Rewrite';
+    button.textContent = t('flag.rewrite');
     toast(err.message, 'error');
     return;
   }
@@ -609,13 +606,13 @@ async function proposeRewrite(key, mark, button) {
   pop.querySelector('.pop-actions').remove();
   const area = el('textarea');
   area.value = proposal;
-  area.setAttribute('aria-label', '改写后的句子 revised sentence');
+  area.setAttribute('aria-label', t('flag.rewrite'));
   const actions = el('div', 'pop-actions');
   const apply = el('button', 'btn btn-solid');
-  apply.textContent = '应用 Apply';
+  apply.textContent = t('flag.apply');
   apply.onclick = () => applyRewrite(key, area.value.trim());
   const cancel = el('button', 'btn');
-  cancel.textContent = '取消 Cancel';
+  cancel.textContent = t('flag.cancel');
   cancel.onclick = closeFlag;
   actions.append(apply, cancel);
   pop.append(area, actions);
@@ -678,12 +675,12 @@ function spliceField(platform, field, start, end, replacement) {
 }
 
 function applyRewrite(key, replacement) {
-  if (!replacement) { toast('改写不能是空的 · the rewrite cannot be empty', 'error'); return; }
+  if (!replacement) { toast(t('rewrite.empty'), 'error'); return; }
   const [platform, indexText] = key.split(':');
   const index = Number(indexText);
   const pack = state.spans[platform];
   const span = pack.spans.find((s) => s.flag_index === index);
-  if (!span) { toast('这处存疑没有位置，无法自动替换 · no position for this flag', 'error'); return; }
+  if (!span) { toast(t('board.orphansHead'), 'error'); return; }
 
   spliceField(platform, span.field, span.start, span.end, replacement);
   pack.flags[index].text = replacement;
@@ -783,11 +780,11 @@ function placeRewriter() {
 function rewriterTurn(who, text, editable = false) {
   const thread = $('#rewriter .rw-thread');
   const turn = el('div', `rw-turn rw-${who}`);
-  turn.innerHTML = `<span class="rw-who">${who === 'you' ? '你 · You' : '改写 · Rewrite'}</span>`;
+  turn.innerHTML = `<span class="rw-who">${esc(who === 'you' ? t('rewrite.you') : t('rewrite.agent'))}</span>`;
   if (editable) {
     const area = el('textarea', 'rw-proposal');
     area.value = text;
-    area.setAttribute('aria-label', '改写后的文字 revised text');
+    area.setAttribute('aria-label', t('rewrite.head'));
     turn.append(area);
   } else {
     const body = el('div', 'rw-text');
@@ -803,7 +800,7 @@ async function sendRewrite() {
   const panel = $('#rewriter');
   const ask = panel.querySelector('textarea.rw-ask');
   const instruction = ask.value.trim();
-  if (!instruction) { toast('说一下想怎么改 · say how it should change'); return; }
+  if (!instruction) { toast(t('rewrite.needInstruction')); return; }
 
   const rw = state.rewriter;
   // an earlier proposal the editor kept tweaking is what the next pass refines
@@ -814,7 +811,7 @@ async function sendRewrite() {
   ask.value = '';
   const send = panel.querySelector('.rw-send');
   send.disabled = true;
-  send.textContent = '改写中… Rewriting';
+  send.textContent = t('flag.rewriting');
 
   try {
     const body = await postJSON('/api/revise', {
@@ -839,7 +836,7 @@ async function sendRewrite() {
     toast(err.message, 'error');
   } finally {
     send.disabled = false;
-    send.textContent = '发送 Send';
+    send.textContent = t('rewrite.send');
   }
 }
 
@@ -847,13 +844,13 @@ function applyRewriter() {
   const panel = $('#rewriter');
   const standing = panel.querySelector('.rw-proposal');
   const replacement = (standing ? standing.value : state.rewriter.proposal).trim();
-  if (!replacement) { toast('改写不能是空的 · the rewrite cannot be empty', 'error'); return; }
+  if (!replacement) { toast(t('rewrite.empty'), 'error'); return; }
 
   const rw = state.rewriter;
   spliceField(rw.platform, rw.field, rw.start, rw.end, replacement);
   closeRewriter();
   renderBoard();
-  toast('已应用，完成审阅时会复核 · applied; it is re-checked when you complete the review');
+  toast(t('rewrite.applied'));
 }
 
 function closeRewriter() {
@@ -901,14 +898,14 @@ function renderApparatus() {
   rail.innerHTML = '';
 
   const ledger = el('section');
-  ledger.innerHTML = `<h2>依据清单 <em>Claim ledger</em></h2>
-    <p class="note">点一条，看正文里哪句引用了它 · click one to find the sentences citing it</p>`;
+  ledger.innerHTML = `<h2>${esc(t('ledger.head'))}</h2>
+    <p class="note">${esc(t('ledger.note'))}</p>`;
   const hedged = result.claim_ledger.filter((c) => HEDGED.has(c.confidence));
   if (hedged.length) {
     const banner = el('div', 'hedged-count');
-    banner.innerHTML = `${hedged.length} 条依据本身就不确定（${hedged.map((c) => esc(c.id)).join(' ')}）——`
-      + `引用它们的句子最值得改写。<br>${hedged.length} claims are hedged; the sentences resting on them `
-      + `are the ones worth rewriting.`;
+    banner.textContent = t('ledger.hedgedBanner', {
+      count: hedged.length, ids: hedged.map((c) => c.id).join(' '),
+    });
     ledger.append(banner);
   }
   result.claim_ledger.forEach((claim) => {
@@ -916,10 +913,10 @@ function renderApparatus() {
     node.dataset.id = claim.id;
     node.dataset.confidence = claim.confidence;
     const caution = HEDGED.has(claim.confidence)
-      ? '<span class="claim-caution">依据不确定 · hedged</span> · ' : '';
+      ? `<span class="claim-caution">${esc(t('ledger.hedged'))}</span> · ` : '';
     node.innerHTML = `<span class="claim-id">${esc(claim.id)}</span>${esc(claim.claim)}
       <span class="claim-meta">${caution}${esc(claim.confidence)}${claim.qualifier ? ` · ${esc(claim.qualifier)}` : ''}</span>
-      <details><summary>原文依据 evidence</summary><blockquote>${esc(claim.source_evidence)}</blockquote></details>`;
+      <details><summary>${esc(t('ledger.evidence'))}</summary><blockquote>${esc(claim.source_evidence)}</blockquote></details>`;
     node.tabIndex = 0;
     bindClaim(node);
     ledger.append(node);
@@ -928,8 +925,8 @@ function renderApparatus() {
 
   if ((result.background_materials || []).length) {
     const sources = el('section');
-    sources.innerHTML = `<h2>背景来源 <em>Background</em></h2>
-      <p class="note">只用于行文，不是事实来源 · framing only, never facts</p>`;
+    sources.innerHTML = `<h2>${esc(t('ledger.background'))}</h2>
+      <p class="note">${esc(t('ledger.backgroundNote'))}</p>`;
     result.background_materials.forEach((m) => {
       const node = el('div', 'source');
       const title = esc(m.source_title || m.source_url);
@@ -948,7 +945,7 @@ function renderApparatus() {
 
 async function completeReview() {
   const platforms = Object.keys(state.drafts);
-  toast('正在复核改动… re-checking your edits');
+  toast(t('save.rechecking'));
 
   let reopened = 0;
   for (const platform of platforms) {
@@ -968,7 +965,7 @@ async function completeReview() {
 
   if (reopened) {
     renderBoard();
-    toast(`复核又发现 ${reopened} 处存疑，请继续 · the re-check found ${reopened} more`, 'error');
+    toast(t('save.reopened', { count: reopened }), 'error');
     return;
   }
   offerSave();
@@ -977,35 +974,34 @@ async function completeReview() {
 function offerSave() {
   const board = $('#board');
   const panel = el('div', 'manuscript');
-  panel.innerHTML = `<div class="manuscript-head"><h2>保存 · Save</h2></div>
-    <p>复核通过，没有新的存疑。要存到本机吗？
-       <em>The re-check came back clean. Save it to this machine?</em></p>`;
+  panel.innerHTML = `<div class="manuscript-head"><h2>${esc(t('save.head'))}</h2></div>
+    <p>${esc(t('save.clean'))}</p>`;
 
   const slip = el('div', 'slip');
-  slip.innerHTML = `<dl><dt>目录 folder</dt><dd><code>outputs/reviews/</code></dd></dl>`;
+  slip.innerHTML = `<dl><dt>${esc(t('save.folder'))}</dt><dd><code>outputs/reviews/</code></dd></dl>`;
   const name = el('input');
   name.type = 'text';
   name.value = suggestName();
-  name.setAttribute('aria-label', '文件名 filename');
+  name.setAttribute('aria-label', t('save.filename'));
   name.style.cssText = 'width:100%;padding:7px 9px;border:1px solid var(--rule);font:400 13px var(--mono)';
 
   const actions = el('div', 'chips');
   const save = el('button', 'btn btn-solid');
-  save.textContent = '保存 Save';
+  save.textContent = t('save.do');
   save.onclick = async () => {
     save.disabled = true;
     try {
       const out = structuredClone(state.result);
       out.platform_outputs = Object.values(state.drafts);
       const body = await postJSON('/api/save', { filename: name.value, result: out });
-      slip.innerHTML = `<dl><dt>已写入 written</dt><dd>${body.written.map((p) => esc(p)).join('<br>')}</dd></dl>`;
+      slip.innerHTML = `<dl><dt>${esc(t('save.written'))}</dt><dd>${body.written.map((p) => esc(p)).join('<br>')}</dd></dl>`;
     } catch (err) {
       save.disabled = false;
       toast(err.message, 'error');
     }
   };
   const skip = el('button', 'btn btn-quiet');
-  skip.textContent = '暂不保存 Not now';
+  skip.textContent = t('save.skip');
   skip.onclick = () => panel.remove();
   actions.append(save, skip);
   slip.append(name, actions);
@@ -1023,20 +1019,41 @@ function suggestName() {
 /* ── sidebar ────────────────────────────────────────────────────────── */
 
 async function loadSettings() {
-  state.settings = await api('/api/settings');
+  const [settings, providers] = await Promise.all([
+    api('/api/settings'),
+    api('/api/providers'),
+  ]);
+  state.settings = settings;
+  state.providers = providers.providers;
+  renderSettings();
+}
+
+function renderSettings() {
+  if (!state.settings) return;
   renderRoles();
   renderKeys();
   renderSources();
   $('#rule3').hidden = state.settings.drafter_reviewer_distinct;
 }
 
+/* One role row: which provider, which model, and how sure we are it works.
+   Both are closed <select>s now, built from the keys this machine actually
+   holds — a free-text field let you save a provider with no key and only find
+   out mid-run. A configured value that is no longer available is KEPT as a
+   disabled option rather than dropped, so opening settings can never silently
+   rewrite a working config. */
 function renderRoles() {
   const host = $('#roles');
   host.innerHTML = '';
-  const options = el('datalist');
-  options.id = 'provider-options';
-  PROVIDERS.forEach((p) => { const o = el('option'); o.value = p; options.append(o); });
-  host.append(options);
+
+  const usable = state.providers.filter((p) => p.available);
+  if (!usable.length) {
+    const empty = el('p', 'note note-warn');
+    empty.textContent = t('settings.noKeys');
+    host.append(empty);
+    return;
+  }
+
   state.settings.roles.forEach((role) => {
     const spec = state.settings.models[role];
     const node = el('div', 'role');
@@ -1045,48 +1062,69 @@ function renderRoles() {
         <span class="role-name">${role}</span>
         <span class="role-hint">${esc(ROLE_HINTS[role] || '')}</span>
       </div>`;
+
     const inputs = el('div', 'role-inputs');
-    const provider = el('input');
+    const provider = el('select');
     provider.id = `provider-${role}`;
-    provider.value = spec.provider;
-    provider.placeholder = 'provider';
-    provider.setAttribute('list', 'provider-options');
     provider.setAttribute('aria-label', `${role} provider`);
-    const model = el('input');
+    provider.append(option('', t('settings.pickProvider')));
+    usable.forEach((p) => provider.append(option(p.id, p.label)));
+    if (spec.provider && !usable.some((p) => p.id === spec.provider)) {
+      provider.append(option(spec.provider, `${spec.provider} ${t('settings.modelUnavailable')}`, true));
+    }
+    provider.value = spec.provider || '';
+
+    const model = el('select');
     model.id = `model-${role}`;
-    model.value = spec.model;
-    model.placeholder = 'model id';
     model.setAttribute('aria-label', `${role} model`);
+    provider.onchange = () => fillModels(model, provider.value, '');
     inputs.append(provider, model);
     node.append(inputs);
     host.append(node);
+    fillModels(model, spec.provider, spec.model);
   });
+
+  const live = usable.filter((p) => p.source === 'live');
+  const note = el('p', 'note');
+  note.textContent = live.length === usable.length
+    ? t('settings.modelsLive')
+    : t('settings.modelsFallback');
+  host.append(note);
 }
 
+function option(value, label, disabled = false) {
+  const node = el('option');
+  node.value = value;
+  node.textContent = label;
+  node.disabled = disabled;
+  return node;
+}
+
+/* Fill a model <select> from what that provider's key allows, keeping a
+   configured-but-missing model visible so a save cannot quietly drop it. */
+function fillModels(select, providerId, selected) {
+  select.innerHTML = '';
+  const provider = state.providers.find((p) => p.id === providerId);
+  select.append(option('', t('settings.pickModel')));
+  (provider ? provider.models : []).forEach((m) => select.append(option(m.id, m.label || m.id)));
+  if (selected && !(provider ? provider.models : []).some((m) => m.id === selected)) {
+    select.append(option(selected, `${selected} ${t('settings.modelUnavailable')}`));
+  }
+  select.value = selected || '';
+}
+
+/* Keys are read-only here: they are set in .env, and this only reports which
+   ones the process can see, so a missing key explains itself instead of
+   surfacing later as a failed run. */
 function renderKeys() {
   const host = $('#keys');
   host.innerHTML = '';
-  state.settings.key_names.forEach((name) => {
-    const present = state.settings.keys[name];
+  state.providers.forEach((provider) => {
     const row = el('div', 'keyrow');
-    const label = el('label');
-    label.setAttribute('for', `key-${name}`);
-    label.textContent = name.replace(/_API_KEY$/, '');
-    const input = el('input');
-    input.id = `key-${name}`;
-    input.type = 'password';
-    input.placeholder = present ? '已设置 set · 输入以替换' : '未设置 not set';
-    input.onchange = async () => {
-      try {
-        const body = await postJSON('/api/settings/keys', { keys: { [name]: input.value } });
-        state.settings.keys = body.keys;
-        input.value = '';
-        renderKeys();
-        toast(`${name} 已保存 · saved`);
-      } catch (err) { toast(err.message, 'error'); }
-    };
-    row.append(label, input);
-    if (present) { const tick = el('span', 'set'); tick.textContent = '✓'; row.append(tick); }
+    row.innerHTML = `<span class="key-name">${esc(provider.label)}</span>`
+      + `<span class="key-state" data-present="${provider.available ? '1' : '0'}">`
+      + `${esc(provider.available ? t('settings.keyPresent') : t('settings.keyMissing'))}</span>`
+      + `<code class="key-var">${esc(provider.env_var)}</code>`;
     host.append(row);
   });
 }
@@ -1116,10 +1154,10 @@ function renderSources() {
 async function saveModels() {
   const models = {};
   state.settings.roles.forEach((role) => {
-    models[role] = {
-      provider: $(`#provider-${role}`).value,
-      model: $(`#model-${role}`).value.trim(),
-    };
+    const provider = $(`#provider-${role}`);
+    const model = $(`#model-${role}`);
+    if (!provider || !model) return;           // no keys: nothing was rendered
+    models[role] = { provider: provider.value, model: model.value };
   });
   try {
     const body = await postJSON('/api/settings/models', { models });
@@ -1127,12 +1165,12 @@ async function saveModels() {
     state.settings.drafter_reviewer_distinct = body.drafter_reviewer_distinct;
     $('#rule3').hidden = body.drafter_reviewer_distinct;
     renderRoles();
-    toast('模型已保存 · models saved');
+    toast(t('settings.saved'));
   } catch (err) { toast(err.message, 'error'); }
 }
 
 async function verifyModels() {
-  toast('正在验证… verifying');
+  toast(t('settings.verifying'));
   try {
     const body = await postJSON('/api/settings/verify', {});
     Object.entries(body.verified).forEach(([role, outcome]) => {
@@ -1140,7 +1178,7 @@ async function verifyModels() {
       if (dot) { dot.dataset.state = outcome.ok ? 'verified' : 'failed'; dot.title = outcome.detail; }
     });
     const failed = Object.entries(body.verified).filter(([, o]) => !o.ok);
-    toast(failed.length ? `${failed.length} 个角色没通过 · hover a dot for why` : '全部通过 · all roles verified',
+    toast(failed.length ? t('settings.verifyFailed', { count: failed.length }) : t('settings.verifyOk'),
       failed.length ? 'error' : 'info');
   } catch (err) { toast(err.message, 'error'); }
 }
@@ -1148,7 +1186,7 @@ async function verifyModels() {
 /* ── input handling ─────────────────────────────────────────────────── */
 
 async function acceptFile(file) {
-  turn('你 · You', esc(file.name), 'you');
+  turn(t('board.you'), esc(file.name), 'you');
   try {
     const body = await api('/api/upload', {
       method: 'POST',
@@ -1159,7 +1197,7 @@ async function acceptFile(file) {
     state.slots.source_type = body.source_type;
     askNext();
   } catch (err) {
-    turn('审稿台 · Board', `<span style="color:var(--flag)">${esc(err.message)}</span>`);
+    turn(t('board.speaker'), `<span style="color:var(--flag)">${esc(err.message)}</span>`);
   }
 }
 
@@ -1169,7 +1207,7 @@ function submitEntry(event) {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
-  turn('你 · You', esc(text), 'you');
+  turn(t('board.you'), esc(text), 'you');
 
   const detected = detectSource(text);
   if (detected) {
@@ -1177,10 +1215,20 @@ function submitEntry(event) {
     askNext();
     return;
   }
-  turn('审稿台 · Board', '没认出这是链接、DOI 还是 PDF。<em>That is not a link, a DOI, or a PDF — try pasting the paper URL.</em>');
+  turn(t('board.speaker'), esc(t('dialog.unrecognised')));
 }
 
-function init() {
+async function init() {
+  await loadStrings();
+  document.querySelectorAll('[data-lang-switch]').forEach((b) => { b.onclick = toggleLanguage; });
+  onLanguageChange(() => {
+    // Re-render everything the page drew itself; the markup's own data-i18n
+    // nodes are already handled by applyStrings().
+    renderSettings();
+    if (state.result) { renderBoard(); renderApparatus(); }
+    else { $('#dialog').innerHTML = ''; greeting(); askNext(); }
+  });
+
   $('#composer').addEventListener('submit', submitEntry);
   $('#save-models').onclick = saveModels;
   $('#verify-models').onclick = verifyModels;
@@ -1226,7 +1274,7 @@ function init() {
   $('#apparatus').addEventListener('scroll', closeFlag, { passive: true });
 
   loadSettings().catch((err) => toast(err.message, 'error'));
-  thesis();
+  greeting();
   askNext();
 }
 
