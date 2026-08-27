@@ -20,6 +20,10 @@ uv run python -m webui.app     # http://127.0.0.1:8080
 - The model dropdowns offer **only what your keys can actually run** — fetched
   from each provider's own catalogue, cached, with a fallback list if that call
   fails.
+- `/` opens with the three things it is for, then a diagram of the four agents
+  — extractor, researcher, drafter, reviewer — showing what each hands the next
+  and, importantly, that the ledger reaches both drafter and reviewer while the
+  background materials reach only the drafter.
 - `/` is the overview: what the agent does, the four hard rules, the pipeline,
   and every MCP tool with its parameters — that tool list is read from
   `agent.yaml` at request time, so it cannot drift from the manifest the
