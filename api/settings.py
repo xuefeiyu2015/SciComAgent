@@ -7,9 +7,11 @@ business concerns; the web layer only marshals what is decided here.
 
 Two invariants hold no matter what the UI does:
 
-- **A secret never comes back out.** `byo_key` means keys live in the
-  environment, not in config. Nothing here returns, logs, or renders a key
-  value — `key_status` reports booleans, and that is the only read path.
+- **A secret never comes back out, and none goes in.** `byo_key` means keys
+  live in the environment, not in config and not behind a browser form. Keys
+  are set by editing the repo `.env`; this module only ever reports whether one
+  is present, as a boolean. There is deliberately no writer — a write path to
+  secrets that no interface uses is not harmless.
 - **A save never destroys config the user did not touch.** Model writes merge
   into the existing YAML tree, and key writes upsert into `.env` line by line,
   leaving unrelated lines and comments alone.
@@ -29,7 +31,6 @@ import yaml
 from api.config_loader import (
     ROLES,
     config_path,
-    env_path,
     get_model,
     reload_config,
     resolve_role,
@@ -37,6 +38,9 @@ from api.config_loader import (
 
 # Keys the sidebar offers. Provider keys first (a run needs at least the ones
 # its configured roles use), then the optional boosters from config.example.yaml.
+# Keys whose presence is worth reporting. Provider keys first (a run needs the
+# ones its configured roles use), then the optional boosters from
+# config.example.yaml. Set them in the repo `.env`, never from the interface.
 KEY_NAMES = (
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
@@ -173,49 +177,6 @@ def key_status() -> dict[str, bool]:
     return {name: bool(os.environ.get(name)) for name in KEY_NAMES}
 
 
-def write_keys(mapping: dict[str, str]) -> None:
-    """Upsert keys into the repo `.env` and into this process's environment.
-
-    Args:
-        mapping: `{ENV_VAR: value}`. An empty value REMOVES the key from both
-            `.env` and the environment — that is the sidebar's "clear" button.
-
-    Unrelated lines and comments in `.env` are preserved. The file is written
-    0600, since it now holds credentials a browser form put there.
-
-    Raises:
-        ValueError: on a name outside `KEY_NAMES`, so the sidebar cannot be
-            used to write arbitrary environment variables.
-    """
-    unknown = [name for name in mapping if name not in KEY_NAMES]
-    if unknown:
-        raise ValueError(f"refusing to write non-key env var(s) {unknown}")
-
-    path = env_path()
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    remaining = dict(mapping)
-
-    kept: list[str] = []
-    for line in lines:
-        name = line.split("=", 1)[0].strip() if "=" in line else ""
-        if name not in remaining:
-            kept.append(line)
-            continue
-        value = remaining.pop(name)
-        if value:  # replace in place, keeping the file's existing order
-            kept.append(f"{name}={value}")
-    kept.extend(f"{name}={value}" for name, value in remaining.items() if value)
-
-    path.write_text("\n".join(kept).strip() + "\n", encoding="utf-8")
-    path.chmod(0o600)
-
-    for name, value in mapping.items():
-        if value:
-            os.environ[name] = value
-        else:
-            os.environ.pop(name, None)
-
-
 # --- config file --------------------------------------------------------------
 
 def _load() -> dict[str, Any]:
@@ -245,7 +206,6 @@ __all__ = [
     "read_models",
     "read_search_sources",
     "verify_role",
-    "write_keys",
     "write_models",
     "write_search_sources",
 ]

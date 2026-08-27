@@ -205,10 +205,39 @@ def test_settings_never_returns_a_key_value(client, monkeypatch):
     assert resp.json()["keys"]["ANTHROPIC_API_KEY"] is True
 
 
-def test_settings_refuses_to_write_an_arbitrary_env_var(client):
+def test_there_is_no_route_that_writes_a_key(client):
+    """Keys come from .env only. A live write path the UI stopped using would
+    still be reachable by anything on localhost."""
     resp = client.post("/api/settings/keys", json={"keys": {"PATH": "/tmp/evil"}})
 
-    assert resp.status_code == 400
+    assert resp.status_code in (404, 405)
+
+
+def test_providers_offers_only_what_a_key_can_run(client, monkeypatch):
+    from api import providers as providers_module
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "k")
+    for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    providers_module.forget_models()
+    monkeypatch.setattr(providers_module, "_fetch_json", lambda *a, **k: {
+        "models": [{"name": "models/gemini-flash-latest", "displayName": "Gemini Flash Latest",
+                    "supportedGenerationMethods": ["generateContent"]}]
+    })
+
+    rows = {p["id"]: p for p in client.get("/api/providers").json()["providers"]}
+    providers_module.forget_models()
+
+    assert rows["google_genai"]["available"] is True
+    assert [m["id"] for m in rows["google_genai"]["models"]] == ["gemini-flash-latest"]
+    assert rows["openai"]["available"] is False
+    assert rows["openai"]["models"] == []
+
+
+def test_providers_never_returns_a_key_value(client, monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_KEY", "sk-do-not-leak")
+
+    assert "sk-do-not-leak" not in client.get("/api/providers").text
 
 
 # --- review actions -----------------------------------------------------------

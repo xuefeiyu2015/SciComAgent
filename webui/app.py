@@ -40,6 +40,11 @@ from api.check import check_faithfulness  # noqa: E402
 from api.config_loader import ROLES, capabilities  # noqa: E402
 from api.highlight import locate_flags, locate_hedged  # noqa: E402
 from api.manifest import load_manifest  # noqa: E402
+from api.providers import (  # noqa: E402
+    forget_models,
+    list_models,
+    provider_status,
+)
 from api.render import render_text  # noqa: E402
 from api.revise import revise_sentence  # noqa: E402
 from api.schema import (  # noqa: E402
@@ -402,11 +407,36 @@ async def read_settings(request: Request) -> JSONResponse:
             "models": settings.read_models(),
             "keys": settings.key_status(),
             "key_names": list(settings.KEY_NAMES),
+            "providers": provider_status(),
             "search_sources": settings.read_search_sources(),
             "capabilities": capabilities(),
             "drafter_reviewer_distinct": settings.drafter_reviewer_distinct(),
         }
     )
+
+
+@_endpoint
+async def providers(request: Request) -> JSONResponse:
+    """Which providers this machine can use, and which models each key allows.
+
+    The sidebar offers only what is here, so a role can no longer be set to a
+    provider with no key or a model the key cannot call. Listings are free
+    read-only catalogue calls and are cached; `refresh=1` drops that cache
+    after someone edits `.env`.
+    """
+    if request.query_params.get("refresh"):
+        forget_models()
+
+    out = []
+    for row in provider_status():
+        listing = list_models(row["id"]) if row["available"] else None
+        out.append({
+            **row,
+            "models": [m.model_dump(mode="json") for m in listing.models] if listing else [],
+            "source": listing.source if listing else "no_key",
+            "detail": listing.detail if listing else "",
+        })
+    return JSONResponse({"providers": out})
 
 
 @_endpoint
@@ -422,17 +452,6 @@ async def write_models(request: Request) -> JSONResponse:
             "drafter_reviewer_distinct": settings.drafter_reviewer_distinct(),
         }
     )
-
-
-@_endpoint
-async def write_keys(request: Request) -> JSONResponse:
-    """Store API keys. The response reports presence only, never a value."""
-    body = await _json_body(request)
-    try:
-        settings.write_keys(body.get("keys") or {})
-    except ValueError as err:
-        raise _HttpError(400, str(err)) from err
-    return JSONResponse({"keys": settings.key_status()})
 
 
 @_endpoint
@@ -483,8 +502,8 @@ routes = [
     Route("/api/recheck", recheck, methods=["POST"]),
     Route("/api/save", save, methods=["POST"]),
     Route("/api/settings", read_settings),
+    Route("/api/providers", providers),
     Route("/api/settings/models", write_models, methods=["POST"]),
-    Route("/api/settings/keys", write_keys, methods=["POST"]),
     Route("/api/settings/sources", write_sources, methods=["POST"]),
     Route("/api/settings/verify", verify, methods=["POST"]),
     Mount("/static", _RevalidatingStatic(directory=str(_STATIC_DIR)), name="static"),

@@ -1,13 +1,13 @@
 """Tests for api.settings — the sidebar's read/write backend. No network.
 
 Two things must hold no matter what the sidebar does: a save must not destroy
-config the user did not touch, and a secret must never come back OUT of this
-module (byo_key — the UI only ever learns whether a key is set).
+config the user did not touch, and a secret must never move through this module
+in either direction. Keys are set by editing `.env`; api.settings only reports
+whether one is present (byo_key), and has no writer at all.
 """
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
@@ -29,16 +29,8 @@ def repo(tmp_path, monkeypatch):
     for role in config_loader.ROLES:
         monkeypatch.delenv(f"{role.upper()}_PROVIDER", raising=False)
         monkeypatch.delenv(f"{role.upper()}_MODEL", raising=False)
-    # write_keys sets os.environ directly, which monkeypatch cannot undo — so
-    # snapshot the key vars ourselves and put them back.
-    saved = {name: os.environ.get(name) for name in settings.KEY_NAMES}
     config_loader.reload_config()
     yield tmp_path
-    for name, value in saved.items():
-        if value is None:
-            os.environ.pop(name, None)
-        else:
-            os.environ[name] = value
     config_loader.reload_config()
 
 
@@ -112,28 +104,6 @@ def test_unconfigured_roles_do_not_read_as_a_rule_three_violation(repo, monkeypa
 
 # --- keys --------------------------------------------------------------------
 
-def test_write_keys_upserts_and_preserves_other_env_lines(repo, monkeypatch):
-    (repo / ".env").write_text(
-        "# my notes\nDRAFTER_MODEL=keep-me\nANTHROPIC_API_KEY=old\n", encoding="utf-8"
-    )
-
-    settings.write_keys({"ANTHROPIC_API_KEY": "new", "OPENAI_API_KEY": "fresh"})
-
-    text = (repo / ".env").read_text(encoding="utf-8")
-    assert "# my notes" in text
-    assert "DRAFTER_MODEL=keep-me" in text
-    assert "ANTHROPIC_API_KEY=new" in text
-    assert "old" not in text
-    assert "OPENAI_API_KEY=fresh" in text
-    assert os.environ["ANTHROPIC_API_KEY"] == "new"
-
-
-def test_env_file_is_not_world_readable(repo):
-    settings.write_keys({"ANTHROPIC_API_KEY": "s3cret"})
-
-    assert (repo / ".env").stat().st_mode & 0o077 == 0
-
-
 def test_key_status_reports_booleans_never_values(repo, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "s3cret")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -143,16 +113,6 @@ def test_key_status_reports_booleans_never_values(repo, monkeypatch):
     assert status["ANTHROPIC_API_KEY"] is True
     assert status["OPENAI_API_KEY"] is False
     assert "s3cret" not in repr(status)
-
-
-def test_empty_value_clears_a_key(repo, monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "s3cret")
-    (repo / ".env").write_text("ANTHROPIC_API_KEY=s3cret\n", encoding="utf-8")
-
-    settings.write_keys({"ANTHROPIC_API_KEY": ""})
-
-    assert "s3cret" not in (repo / ".env").read_text(encoding="utf-8")
-    assert settings.key_status()["ANTHROPIC_API_KEY"] is False
 
 
 # --- search sources ----------------------------------------------------------
@@ -170,3 +130,8 @@ def test_verify_role_reports_why_an_unconfigured_role_fails(repo):
 
     assert ok is False
     assert "reviewer" in detail
+
+
+def test_settings_has_no_way_to_write_a_key():
+    """Keys are set in .env only — a writer here would be a hole, not a feature."""
+    assert not hasattr(settings, "write_keys")
