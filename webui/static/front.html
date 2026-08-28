@@ -156,8 +156,36 @@
 </section>
 
 <section class="band" id="tools">
-  <h2 class="section-head" data-i18n="front.tools.head"></h2>
-  <p class="aside" data-i18n-html="front.tools.aside"></p>
+  <h2 class="section-head" data-i18n="front.connect.head"></h2>
+  <p class="aside" data-i18n="front.connect.lead"></p>
+
+  <div class="connect">
+    <article>
+      <h3 data-i18n="front.connect.platformTitle"></h3>
+      <p data-i18n-html="front.connect.platformBody"></p>
+      <pre><code>scicomagent__generate
+scicomagent__extract_ledger
+scicomagent__check_draft</code></pre>
+    </article>
+    <article>
+      <h3 data-i18n="front.connect.localTitle"></h3>
+      <p data-i18n="front.connect.localBody"></p>
+      <pre><code>{
+  "mcpServers": {
+    "scicomm": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp_server.server"],
+      "cwd": "/path/to/SciComAgent"
+    }
+  }
+}</code></pre>
+      <p class="connect-alt" data-i18n="front.connect.cli"></p>
+      <pre><code>claude mcp add scicomm -- uv run python -m mcp_server.server</code></pre>
+      <p class="connect-alt" data-i18n-html="front.connect.remote"></p>
+    </article>
+  </div>
+
+  <h2 class="section-head section-head-sub" data-i18n="front.tools.head"></h2>
   <div id="tools-list" class="tools"></div>
 </section>
 

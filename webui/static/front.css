@@ -246,3 +246,31 @@ body.front {
   .agentmap { overflow-x: auto; }
   .agentmap svg { min-width: 720px; }
 }
+
+/* ── connect: how to actually call it ────────────────────────────────── */
+
+.connect {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 28px;
+  margin-bottom: 44px;
+}
+.connect article { border-top: 2px solid var(--ink); padding-top: 13px; }
+.connect h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+.connect p { margin: 0 0 11px; font-size: 13.5px; line-height: 1.7; color: var(--muted); }
+.connect p code { font: 400 12px var(--mono); color: var(--text); }
+.connect pre {
+  margin: 0 0 11px;
+  padding: 12px 14px;
+  background: var(--ink);
+  border-radius: 2px;
+  overflow-x: auto;
+}
+.connect pre code {
+  font: 400 11.5px/1.75 var(--mono);
+  color: #CFE0F2;
+  white-space: pre;
+}
+.connect-alt { margin-top: 0; font-size: 12.5px; }
+
+.section-head-sub { margin-top: 8px; }

@@ -52,3 +52,15 @@ def test_placeholders_match_across_languages():
         zh_vars = set(re.findall(r"\{(\w+)\}", str(zh_value)))
         en_vars = set(re.findall(r"\{(\w+)\}", str(_STRINGS["en"][key])))
         assert zh_vars == en_vars, f"{key}: zh has {zh_vars}, en has {en_vars}"
+
+
+def test_every_translated_tool_still_exists_in_the_manifest():
+    """A renamed or removed tool would leave its translation pointing at nothing."""
+    from api.manifest import load_manifest
+
+    declared = {tool.name for tool in load_manifest().tools}
+    translated = {
+        key.split(".")[1] for key in _STRINGS["zh"] if key.startswith("tool.")
+    }
+
+    assert translated <= declared, f"translations for tools that do not exist: {sorted(translated - declared)}"
