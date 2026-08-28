@@ -12,8 +12,8 @@
 </head>
 <body>
 
-<!-- ── sidebar: the instrument panel ─────────────────────────────────── -->
-<aside id="sidebar" aria-label="Settings">
+<!-- ── rail: where you left off ──────────────────────────────────────── -->
+<aside id="sidebar" aria-label="History and settings">
   <header class="masthead-row">
     <a class="masthead" href="/" data-i18n-title="nav.overview">
       <span class="masthead-name" data-i18n="app.name">白话智能体</span>
@@ -22,28 +22,19 @@
     <button class="btn btn-lang" type="button" data-lang-switch data-i18n-title="lang.label">English</button>
   </header>
 
+  <button id="open-settings" class="railbtn" type="button">
+    <span class="gear" aria-hidden="true">⚙</span><span data-i18n="settings.open"></span>
+  </button>
+
+  <!-- a blocking condition must stay visible even with the dialog shut -->
   <div id="rule3" class="alarm" hidden data-i18n="settings.rule3"></div>
 
-  <section class="panel">
-    <h2 data-i18n="settings.roles"></h2>
-    <p class="note" data-i18n="settings.rolesNote"></p>
-    <div id="roles"></div>
-    <div class="panel-actions">
-      <button id="save-models" class="btn" data-i18n="settings.save"></button>
-      <button id="verify-models" class="btn btn-quiet" data-i18n="settings.verify"></button>
-    </div>
-  </section>
-
-  <section class="panel">
-    <h2 data-i18n="settings.keys"></h2>
-    <p class="note" data-i18n="settings.keysNote"></p>
-    <div id="keys" class="keystatus"></div>
-  </section>
-
-  <section class="panel">
-    <h2 data-i18n="settings.sources"></h2>
-    <p class="note" data-i18n="settings.sourcesNote"></p>
-    <div id="sources" class="checkrow"></div>
+  <section class="panel rail-history">
+    <h2 data-i18n="history.head"></h2>
+    <button id="new-run" class="railbtn railbtn-quiet" type="button">
+      <span aria-hidden="true">＋</span><span data-i18n="history.new"></span>
+    </button>
+    <div id="history"></div>
   </section>
 </aside>
 
@@ -62,6 +53,38 @@
 <aside id="apparatus" aria-label="Claim ledger" hidden></aside>
 
 <svg id="tether" aria-hidden="true"></svg>
+
+<!-- ── settings: one door, three rooms ───────────────────────────────── -->
+<div id="settings-scrim" hidden></div>
+<div id="settings" role="dialog" aria-modal="true" data-i18n-aria="settings.open" hidden>
+  <header class="dlg-head">
+    <div class="dlg-tabs" role="tablist">
+      <button class="dlg-tab" role="tab" data-tab="models" data-i18n="settings.tabModels"></button>
+      <button class="dlg-tab" role="tab" data-tab="keys" data-i18n="settings.tabKeys"></button>
+      <button class="dlg-tab" role="tab" data-tab="search" data-i18n="settings.tabSearch"></button>
+    </div>
+    <button id="close-settings" class="btn btn-quiet" type="button" data-i18n="settings.close"></button>
+  </header>
+
+  <section class="dlg-panel" data-panel="models">
+    <p class="note" data-i18n="settings.rolesNote"></p>
+    <div id="roles"></div>
+    <div class="panel-actions">
+      <button id="save-models" class="btn btn-solid" data-i18n="settings.save"></button>
+      <button id="verify-models" class="btn" data-i18n="settings.verify"></button>
+    </div>
+  </section>
+
+  <section class="dlg-panel" data-panel="keys" hidden>
+    <p class="note" data-i18n="settings.keysNote"></p>
+    <div id="keys" class="keystatus"></div>
+  </section>
+
+  <section class="dlg-panel" data-panel="search" hidden>
+    <p class="note" data-i18n="settings.sourcesNote"></p>
+    <div id="sources" class="checkrow"></div>
+  </section>
+</div>
 
 <div id="popover" role="dialog" hidden></div>
 

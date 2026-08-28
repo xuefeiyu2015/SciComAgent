@@ -26,6 +26,7 @@ const state = {
   decisions: {},      // "platform:flagIndex" -> "accepted" | "rewritten"
   settings: null,
   providers: [],
+  history: [],
   polling: null,
   openKey: null,
   rewriter: null,     // the passage currently being rewritten by hand
@@ -231,6 +232,7 @@ async function loadResult() {
   document.body.classList.add('reviewing');
   renderBoard();
   renderApparatus();
+  loadHistory();
 }
 
 /* A blocked source is a question, not an error dump: say what to do next. */
@@ -1016,6 +1018,93 @@ function suggestName() {
   return (stem || 'review').slice(0, 60);
 }
 
+/* ── history: the way back to earlier work ──────────────────────────── */
+
+async function loadHistory() {
+  try {
+    const body = await api('/api/history?limit=50');
+    state.history = body.runs;
+  } catch (err) {
+    state.history = [];
+  }
+  renderHistory();
+}
+
+function renderHistory() {
+  const host = $('#history');
+  if (!host) return;
+  host.innerHTML = '';
+
+  if (!state.history.length) {
+    const empty = el('p', 'note');
+    empty.textContent = t('history.empty');
+    host.append(empty);
+    return;
+  }
+
+  state.history.forEach((run) => {
+    const row = el('button', 'histrow');
+    row.type = 'button';
+    if (run.session_id === state.sessionId) row.dataset.open = '1';
+    row.innerHTML = `<span class="hist-title">${esc(run.title)}</span>`
+      + `<span class="hist-meta">${esc(stamp(run.created_at))} · ${esc(run.platforms.join(' · '))}`
+      + ` · ${esc(t('history.claims', { count: run.claims }))}</span>`;
+    row.onclick = () => reopen(run.session_id);
+    host.append(row);
+  });
+}
+
+function stamp(seconds) {
+  const d = new Date(seconds * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/* Reopening gives the ORIGINAL draft: review decisions are not persisted, so
+   pretending to resume one would quietly lose the earlier pass. */
+async function reopen(sessionId) {
+  clearInterval(state.polling);
+  state.sessionId = sessionId;
+  state.decisions = {};
+  state.drafts = {};
+  try {
+    await loadResult();
+  } catch (err) {
+    toast(err.message, 'error');
+    return;
+  }
+  renderHistory();
+  toast(t('history.reopenNote'));
+}
+
+/* ── settings dialog ────────────────────────────────────────────────── */
+
+function openSettings(tab = 'models') {
+  $('#settings').hidden = false;
+  $('#settings-scrim').hidden = false;
+  showTab(tab);
+  const first = $('#settings .dlg-tab');
+  if (first) first.focus();
+}
+
+function closeSettings() {
+  if ($('#settings').hidden) return;
+  $('#settings').hidden = true;
+  $('#settings-scrim').hidden = true;
+  $('#open-settings').focus();
+}
+
+function showTab(name) {
+  document.querySelectorAll('#settings .dlg-tab').forEach((tab) => {
+    const on = tab.dataset.tab === name;
+    tab.dataset.on = on ? '1' : '';
+    tab.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('#settings .dlg-panel').forEach((panel) => {
+    panel.hidden = panel.dataset.panel !== name;
+  });
+}
+
 /* ── sidebar ────────────────────────────────────────────────────────── */
 
 async function loadSettings() {
@@ -1225,6 +1314,7 @@ async function init() {
     // Re-render everything the page drew itself; the markup's own data-i18n
     // nodes are already handled by applyStrings().
     renderSettings();
+    renderHistory();
     if (state.result) { renderBoard(); renderApparatus(); }
     else { $('#dialog').innerHTML = ''; greeting(); askNext(); }
   });
@@ -1232,6 +1322,13 @@ async function init() {
   $('#composer').addEventListener('submit', submitEntry);
   $('#save-models').onclick = saveModels;
   $('#verify-models').onclick = verifyModels;
+  $('#open-settings').onclick = () => openSettings();
+  $('#close-settings').onclick = closeSettings;
+  $('#new-run').onclick = () => { resetRun(); renderHistory(); };
+  document.querySelectorAll('#settings .dlg-tab').forEach((tab) => {
+    tab.onclick = () => showTab(tab.dataset.tab);
+  });
+  $('#settings-scrim').onclick = closeSettings;
 
   ['dragover', 'dragenter'].forEach((type) =>
     document.addEventListener(type, (e) => { e.preventDefault(); document.body.classList.add('dropping'); }));
@@ -1259,7 +1356,9 @@ async function init() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if ($('#rewriter').hidden) closeFlag(); else closeRewriter();
+    if (!$('#settings').hidden) closeSettings();
+    else if ($('#rewriter').hidden) closeFlag();
+    else closeRewriter();
   });
   document.addEventListener('click', (e) => {
     if (!state.openKey) return;
@@ -1274,6 +1373,7 @@ async function init() {
   $('#apparatus').addEventListener('scroll', closeFlag, { passive: true });
 
   loadSettings().catch((err) => toast(err.message, 'error'));
+  loadHistory();
   greeting();
   askNext();
 }

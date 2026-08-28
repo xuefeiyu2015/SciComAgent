@@ -42,7 +42,7 @@ body {
   display: grid;
   /* the apparatus track only exists once there is a ledger to put in it —
      otherwise it reserves a dead strip down the side of the page */
-  grid-template-columns: 288px minmax(0, 1fr);
+  grid-template-columns: 250px minmax(0, 1fr);
   min-height: 100vh;
   background: var(--ink);
   color: var(--text);
@@ -53,7 +53,7 @@ body {
 
 /* ── sidebar ─────────────────────────────────────────────────────────── */
 
-body.reviewing { grid-template-columns: 288px minmax(0, 1fr) 340px; }
+body.reviewing { grid-template-columns: 250px minmax(0, 1fr) 340px; }
 
 #sidebar {
   background: var(--ink);
@@ -668,3 +668,109 @@ textarea.rw-ask {
   background-position: right 7px center;
 }
 #sidebar select:hover { border-color: #3D5A80; }
+
+/* ── the rail: settings behind one door, history in the open ─────────── */
+
+.railbtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 22px;
+  background: var(--ink-raised);
+  border: 1px solid var(--ink-line);
+  border-radius: 2px;
+  color: var(--ink-text);
+  font: 500 12px var(--sans);
+  cursor: pointer;
+  text-align: left;
+}
+.railbtn:hover { background: #1F3A5C; color: #fff; }
+.railbtn:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 2px; }
+.railbtn .gear { font-size: 13px; }
+.railbtn-quiet { background: none; border-style: dashed; margin-bottom: 10px; padding: 6px 10px; }
+
+.rail-history h2 { margin-bottom: 10px; }
+
+.histrow {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  margin-bottom: 3px;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: var(--ink-text);
+  cursor: pointer;
+  font: inherit;
+}
+.histrow:hover { background: var(--ink-raised); }
+.histrow:focus-visible { outline: 2px solid #6FA0E0; outline-offset: -2px; }
+.histrow[data-open="1"] { border-left-color: var(--leaf); background: var(--ink-raised); }
+.hist-title {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #E4ECF6;
+  /* two lines is enough to recognise a paper; more turns the rail into a wall */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.histrow[data-open="1"] .hist-title { color: #fff; }
+.hist-meta { display: block; margin-top: 3px; font: 400 10px var(--mono); color: #6C82A2; }
+
+/* ── settings dialog ─────────────────────────────────────────────────── */
+
+#settings-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(15, 35, 64, .38);
+}
+#settings {
+  position: fixed;
+  z-index: 71;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  background: var(--ink);
+  border: 1px solid var(--ink-line);
+  box-shadow: 0 20px 60px rgba(15, 35, 64, .4);
+  color: var(--ink-text);
+  padding: 0 22px 22px;
+}
+.dlg-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 0 12px;
+  margin-bottom: 14px;
+  background: var(--ink);
+  border-bottom: 1px solid var(--ink-line);
+}
+.dlg-tabs { display: flex; gap: 4px; }
+.dlg-tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: #7D93B4;
+  font: 500 12px var(--sans);
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.dlg-tab:hover { color: #fff; }
+.dlg-tab[data-on="1"] { color: #fff; border-bottom-color: var(--leaf); }
+.dlg-tab:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 2px; }
+#close-settings { margin-left: auto; }
+.dlg-panel .note { margin-bottom: 14px; }
+#settings .panel-actions { margin-top: 18px; }

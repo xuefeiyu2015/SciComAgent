@@ -175,7 +175,18 @@
     "front.agents.1.body": "抓取论文全文，抽成源卡片，逐条建立带来源与限定词的证据台账。台账是空的，就什么都不写。",
     "front.agents.2.body": "检索 arXiv、PubMed 等外部资料，只作行文背景，绝不当作事实——它写不进台账。",
     "front.agents.3.body": "按平台结构起草，受众与活泼度可调；每个事实句都标注它引用的台账编号。",
-    "front.agents.4.body": "换一个更强的模型，只对着台账读稿子，标出夸大，最多退回重写两次。"
+    "front.agents.4.body": "换一个更强的模型，只对着台账读稿子，标出夸大，最多退回重写两次。",
+    "settings.open": "设置",
+    "settings.close": "关闭",
+    "settings.tabModels": "模型",
+    "settings.tabKeys": "密钥",
+    "settings.tabSearch": "检索",
+    "history.head": "历史",
+    "history.new": "新建",
+    "history.empty": "还没有记录。起草一篇，它就会出现在这里。",
+    "history.loading": "载入中…",
+    "history.claims": "{count} 条依据",
+    "history.reopenNote": "重新打开的是原始草稿；上次的处理结果不会恢复。"
   },
   "en": {
     "app.name": "ScicomAgent",
@@ -353,6 +364,17 @@
     "front.agents.1.body": "Pulls the full text, distils it into a source card, and builds a ledger of claims each carrying its evidence and its qualifier. An empty ledger means nothing gets written.",
     "front.agents.2.body": "Searches arXiv, PubMed and the rest for context. Framing only — it can never become a fact, and it never enters the ledger.",
     "front.agents.3.body": "Writes to each platform's structure, with audience and liveliness as dials, citing the ledger entry every factual sentence rests on.",
-    "front.agents.4.body": "A stronger, different model reads the draft against the ledger alone, flags what overreaches, and sends it back to be rewritten at most twice."
+    "front.agents.4.body": "A stronger, different model reads the draft against the ledger alone, flags what overreaches, and sends it back to be rewritten at most twice.",
+    "settings.open": "Settings",
+    "settings.close": "Close",
+    "settings.tabModels": "Models",
+    "settings.tabKeys": "API keys",
+    "settings.tabSearch": "Search",
+    "history.head": "History",
+    "history.new": "New",
+    "history.empty": "Nothing yet. Draft something and it will show up here.",
+    "history.loading": "loading…",
+    "history.claims": "{count} claims",
+    "history.reopenNote": "Reopening gives you the original draft — earlier decisions are not restored."
   }
 }

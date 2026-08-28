@@ -11,6 +11,14 @@ red for you to accept or rewrite, tethered to the claim ledger that backs them.
 uv run python -m webui.app     # http://127.0.0.1:8080
 ```
 
+- The rail lists **past runs**, newest first — click one to reopen its draft,
+  ledger and flags. It reads the mirrors `api/jobs.py` already writes, so
+  history survives a restart with no extra storage. Reopening gives you the
+  original draft; review decisions are not persisted.
+  `uv run python scripts/prune_jobs.py` clears mirrors that carry no draft
+  (reports by default, deletes with `--apply`).
+- Settings live behind one **⚙** in the rail, with tabs for models, keys and
+  search — configuration you touch once should not compete with the manuscript.
 - The interface runs in **中文 or English**, switched from the toggle in the
   header; the choice is remembered and also pre-fills the draft language (which
   stays a per-run question, since it is a real `generate` parameter). All UI
