@@ -373,3 +373,22 @@ def test_the_overview_serves_the_agents_own_manifest(client):
 
 def test_the_board_keeps_its_own_address(client):
     assert client.get("/board").status_code == 200
+
+
+def test_history_lists_past_runs(client, monkeypatch):
+    from api import jobs as jobs_module
+
+    jobs_module.jobs_dir().mkdir(parents=True, exist_ok=True)
+    (jobs_module.jobs_dir() / "j_hist_1.json").write_text(
+        _RESULT.model_dump_json(), encoding="utf-8"
+    )
+
+    runs = client.get("/api/history").json()["runs"]
+
+    assert [r["session_id"] for r in runs] == ["j_hist_1"]
+    assert runs[0]["title"] == "温和的标题"
+    assert runs[0]["claims"] == 1
+
+
+def test_history_survives_a_nonsense_limit(client):
+    assert client.get("/api/history?limit=banana").status_code == 200

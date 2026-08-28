@@ -40,6 +40,7 @@ from api import jobs, settings  # noqa: E402
 from api.check import check_faithfulness  # noqa: E402
 from api.config_loader import ROLES, capabilities  # noqa: E402
 from api.highlight import locate_flags, locate_hedged  # noqa: E402
+from api.history import list_runs  # noqa: E402
 from api.manifest import load_manifest  # noqa: E402
 from api.providers import (  # noqa: E402
     forget_models,
@@ -418,6 +419,23 @@ async def read_settings(request: Request) -> JSONResponse:
 
 
 @_endpoint
+async def history(request: Request) -> JSONResponse:
+    """Past runs, newest first — the rail's way back to earlier work.
+
+    A view over the mirrors api.jobs already writes; reopening one needs no new
+    route, since `/api/job/{id}/result` serves a mirrored run with its spans.
+    There is deliberately no delete route: pruning removes the operator's own
+    files and belongs in a script they run, not behind a URL anything on
+    localhost could reach.
+    """
+    try:
+        limit = max(1, min(int(request.query_params.get("limit", 50)), 200))
+    except ValueError:
+        limit = 50
+    return JSONResponse({"runs": [r.model_dump(mode="json") for r in list_runs(limit)]})
+
+
+@_endpoint
 async def strings(request: Request) -> JSONResponse:
     """The interface's own text, in both languages.
 
@@ -517,6 +535,7 @@ routes = [
     Route("/api/settings", read_settings),
     Route("/api/providers", providers),
     Route("/api/strings", strings),
+    Route("/api/history", history),
     Route("/api/settings/models", write_models, methods=["POST"]),
     Route("/api/settings/sources", write_sources, methods=["POST"]),
     Route("/api/settings/verify", verify, methods=["POST"]),
