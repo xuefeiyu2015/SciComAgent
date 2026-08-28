@@ -27,6 +27,7 @@ const state = {
   settings: null,
   providers: [],
   history: [],
+  transcript: [],
   polling: null,
   openKey: null,
   rewriter: null,     // the passage currently being rewritten by hand
@@ -61,7 +62,8 @@ function toast(message, kind = 'info') {
 
 /* ── dialog ─────────────────────────────────────────────────────────── */
 
-function turn(label, html, who = 'agent') {
+function turn(label, html, who = 'agent', plain = '') {
+  if (plain) state.transcript.push({ role: who === 'you' ? 'you' : 'agent', text: plain });
   const node = el('div', `turn ${who}`);
   node.innerHTML = `<div class="turn-label">${esc(label)}</div><div class="turn-body">${html}</div>`;
   $('#dialog').append(node);
@@ -167,10 +169,10 @@ function resetRun() {
   });
   $('#board').hidden = true;
   $('#apparatus').hidden = true;
-  $('#dialog').hidden = false;
-  $('#composer').hidden = false;
+  $('#dialog-grip').hidden = true;
   document.body.classList.remove('reviewing');
   $('#dialog').innerHTML = '';
+  state.transcript = [];
   greeting();
 }
 
@@ -225,14 +227,22 @@ async function loadResult() {
   if (state.result.status === 'failed' || state.result.status === 'no_claims') {
     return reportTerminal(state.result);
   }
-  $('#dialog').hidden = true;
-  $('#composer').hidden = true;
+  // The conversation STAYS. `reviewing` caps the dialog so the manuscript gets
+  // the room; it no longer replaces the agent you were just talking to.
   $('#board').hidden = false;
   $('#apparatus').hidden = false;
+  $('#dialog-grip').hidden = false;
   document.body.classList.add('reviewing');
   renderBoard();
   renderApparatus();
   loadHistory();
+  // The dock must never be a blank pane: if this draft arrived without a
+  // conversation (reopened from History, say), open one.
+  if (!$('#dialog').querySelector('.turn')) {
+    $('#dialog').innerHTML = '';
+    turn(t('board.speaker'), esc(t('chat.ready')));
+  }
+  $('#dialog').scrollTop = $('#dialog').scrollHeight;
 }
 
 /* A blocked source is a question, not an error dump: say what to do next. */
@@ -1018,6 +1028,61 @@ function suggestName() {
   return (stem || 'review').slice(0, 60);
 }
 
+/* ── the dock: how much room the conversation gets ──────────────────── */
+
+const DOCK_KEY = 'scicom.dock';
+const DOCK_MIN = 96;
+
+function dockMax() { return Math.round(window.innerHeight * 0.7); }
+
+function setDockHeight(px) {
+  const height = Math.max(DOCK_MIN, Math.min(px, dockMax()));
+  document.documentElement.style.setProperty('--dialog-h', `${height}px`);
+  try { localStorage.setItem(DOCK_KEY, String(height)); } catch { /* private window */ }
+}
+
+function restoreDockHeight() {
+  let saved = null;
+  try { saved = localStorage.getItem(DOCK_KEY); } catch { /* private window */ }
+  setDockHeight(saved ? Number(saved) : 190);
+}
+
+/* Drag the grip to trade manuscript for transcript. Pointer events rather than
+   mouse, so it works on a trackpad and a touchscreen alike. */
+function bindDock() {
+  const grip = $('#dialog-grip');
+  let startY = 0;
+  let startH = 0;
+
+  grip.addEventListener('pointerdown', (e) => {
+    startY = e.clientY;
+    startH = $('#dialog').getBoundingClientRect().height;
+    grip.setPointerCapture(e.pointerId);
+    grip.dataset.dragging = '1';
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (!grip.dataset.dragging) return;
+    setDockHeight(startH + (startY - e.clientY));
+  });
+  const stop = (e) => {
+    delete grip.dataset.dragging;
+    if (e.pointerId !== undefined && grip.hasPointerCapture?.(e.pointerId)) {
+      grip.releasePointerCapture(e.pointerId);
+    }
+  };
+  grip.addEventListener('pointerup', stop);
+  grip.addEventListener('pointercancel', stop);
+
+  // keyboard: the grip is focusable, so it must be operable without a pointer
+  grip.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 60 : 20;
+    const current = $('#dialog').getBoundingClientRect().height;
+    if (e.key === 'ArrowUp') { setDockHeight(current + step); e.preventDefault(); }
+    if (e.key === 'ArrowDown') { setDockHeight(current - step); e.preventDefault(); }
+  });
+}
+
 /* ── history: the way back to earlier work ──────────────────────────── */
 
 async function loadHistory() {
@@ -1290,21 +1355,100 @@ async function acceptFile(file) {
   }
 }
 
+/* Three things can arrive in the box, in this order of precedence:
+   a source to draft, a message about the draft on screen, or neither. */
 function submitEntry(event) {
   event.preventDefault();
   const input = $('#entry');
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
-  turn(t('board.you'), esc(text), 'you');
+  turn(t('board.you'), esc(text), 'you', text);
 
   const detected = detectSource(text);
-  if (detected) {
+  if (detected) return startNewPaper(detected);
+  if (state.result) return askAgent(text);
+  turn(t('board.speaker'), esc(t('dialog.unrecognised')));
+}
+
+/* A new link while a review is half-done: say what would be left behind rather
+   than silently wiping it. The run itself is safe in History either way — the
+   accept/rewrite decisions on it are what would be lost. */
+function startNewPaper(detected) {
+  const open = state.result ? openFlagCount() : 0;
+  if (!open) {
+    resetRun();
     Object.assign(state.slots, detected);
     askNext();
     return;
   }
-  turn(t('board.speaker'), esc(t('dialog.unrecognised')));
+  ask(t('board.speaker'), esc(t('chat.switchAsk', { count: open })), [
+    ['go', t('chat.switchGo'), ''],
+    ['stay', t('chat.switchStay'), ''],
+  ], (choice) => {
+    if (choice !== 'go') return;
+    resetRun();
+    Object.assign(state.slots, detected);
+    askNext();
+  });
+}
+
+function openFlagCount() {
+  const total = Object.values(state.spans).reduce((n, p) => n + p.flags.length, 0);
+  return total - Object.keys(state.decisions).length;
+}
+
+/* Ask the agent about the draft. It answers, or proposes one edit to apply. */
+async function askAgent(message) {
+  if (!state.result) { turn(t('board.speaker'), esc(t('chat.noDraft'))); return; }
+  const pending = turn(t('board.speaker'), `<span class="thinking">${esc(t('chat.thinking'))}</span>`);
+
+  let reply;
+  try {
+    reply = await postJSON('/api/converse', {
+      message,
+      drafts: Object.values(state.drafts),
+      ledger: state.result.claim_ledger,
+      flags: Object.values(state.spans).flatMap((pack) => pack.flags),
+      language: state.slots.language || draftLanguage(),
+      liveliness: state.slots.liveliness || 3,
+      transcript: state.transcript.slice(-8),
+    });
+  } catch (err) {
+    pending.remove();
+    turn(t('board.speaker'), `<span style="color:var(--flag)">${esc(err.message)}</span>`);
+    return;
+  }
+
+  pending.remove();
+  const node = turn(t('board.speaker'), esc(reply.message), 'agent', reply.message);
+  if (reply.kind === 'edit' && reply.replacement) node.append(proposal(reply));
+}
+
+/* An edit arrives as a PROPOSAL. Nothing reaches the draft without Apply. */
+function proposal(reply) {
+  const box = el('div', 'slip');
+  box.innerHTML = `<div class="turn-label">${esc(t('chat.proposal'))}</div>`;
+  const area = el('textarea', 'rw-proposal');
+  area.value = reply.replacement;
+  area.setAttribute('aria-label', t('chat.proposal'));
+  const actions = el('div', 'chips');
+  const apply = el('button', 'btn btn-solid');
+  apply.textContent = t('chat.apply');
+  apply.onclick = () => {
+    const text = area.value.trim();
+    if (!text) { toast(t('rewrite.empty'), 'error'); return; }
+    spliceField(reply.platform, reply.field, reply.start, reply.end, text);
+    box.remove();
+    renderBoard();
+    toast(t('chat.applied'));
+  };
+  const dismiss = el('button', 'btn btn-quiet');
+  dismiss.textContent = t('chat.dismiss');
+  dismiss.onclick = () => { box.remove(); toast(t('chat.dismissed')); };
+  actions.append(apply, dismiss);
+  box.append(area, actions);
+  return box;
 }
 
 async function init() {
@@ -1329,6 +1473,8 @@ async function init() {
     tab.onclick = () => showTab(tab.dataset.tab);
   });
   $('#settings-scrim').onclick = closeSettings;
+  restoreDockHeight();
+  bindDock();
 
   ['dragover', 'dragenter'].forEach((type) =>
     document.addEventListener(type, (e) => { e.preventDefault(); document.body.classList.add('dropping'); }));

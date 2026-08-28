@@ -38,6 +38,7 @@ from starlette.staticfiles import StaticFiles  # noqa: E402
 
 from api import jobs, settings  # noqa: E402
 from api.check import check_faithfulness  # noqa: E402
+from api.converse import converse  # noqa: E402
 from api.config_loader import ROLES, capabilities  # noqa: E402
 from api.highlight import locate_flags, locate_hedged  # noqa: E402
 from api.history import list_runs  # noqa: E402
@@ -311,6 +312,45 @@ async def revise(request: Request) -> JSONResponse:
 
 
 @_endpoint
+async def converse_route(request: Request) -> JSONResponse:
+    """One turn of conversation about the draft on screen.
+
+    Answers a question, or proposes ONE edit for the human to apply. Nothing is
+    written here: the reply carries a located passage and a replacement produced
+    by the ledger-bounded rewrite path, and the human presses Apply.
+    """
+    body = await _json_body(request)
+    message = str(body.get("message", "")).strip()
+    if not message:
+        raise _HttpError(400, "nothing to answer: 'message' is empty")
+
+    drafts = [_model(PlatformOutput, item, "draft") for item in body.get("drafts", [])]
+    if not drafts:
+        raise _HttpError(400, "there is no draft to talk about yet")
+    ledger = [_model(Claim, item, "claim") for item in body.get("ledger", [])]
+    flags = [_model(OverreachFlag, item, "flag") for item in body.get("flags", [])]
+    inp = _model(
+        AgentInput,
+        {
+            "source": body.get("source") or "about:blank",
+            "source_type": "url",
+            "language": body.get("language", "zh"),
+            "audience": body.get("audience", "general_public"),
+            "liveliness": body.get("liveliness", 3),
+        },
+        "request",
+    )
+    transcript = [
+        {"role": str(t.get("role", "you")), "text": str(t.get("text", ""))}
+        for t in body.get("transcript", [])
+        if isinstance(t, dict)
+    ]
+
+    reply = converse(message, drafts, ledger, flags, inp, transcript)
+    return JSONResponse(reply.model_dump(mode="json"))
+
+
+@_endpoint
 async def recheck(request: Request) -> JSONResponse:
     """Re-audit an EDITED draft against its ledger, with the reviewer model.
 
@@ -531,6 +571,7 @@ routes = [
     Route("/api/job/{session_id}/result", job_result),
     Route("/api/revise", revise, methods=["POST"]),
     Route("/api/recheck", recheck, methods=["POST"]),
+    Route("/api/converse", converse_route, methods=["POST"]),
     Route("/api/save", save, methods=["POST"]),
     Route("/api/settings", read_settings),
     Route("/api/providers", providers),

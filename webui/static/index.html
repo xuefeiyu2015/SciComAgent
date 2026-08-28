@@ -40,14 +40,16 @@
 
 <!-- ── main: the conversation, then the manuscript ───────────────────── -->
 <main id="main">
+  <section id="board" hidden></section>
+
+  <div id="dialog-grip" role="separator" aria-orientation="horizontal"
+       data-i18n-title="chat.expand" tabindex="0" hidden></div>
   <section id="dialog" aria-live="polite"></section>
 
   <form id="composer" autocomplete="off">
     <input id="entry" type="text" data-i18n-placeholder="board.composer">
     <button class="btn btn-solid" type="submit" data-i18n="board.send"></button>
   </form>
-
-  <section id="board" hidden></section>
 </main>
 
 <aside id="apparatus" aria-label="Claim ledger" hidden></aside>

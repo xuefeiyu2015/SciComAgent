@@ -134,6 +134,30 @@ def locate_flags(
     return spans, unlocated
 
 
+def locate_text(draft: PlatformOutput, quote: str) -> FlagSpan | None:
+    """Find one arbitrary passage in a draft, or None.
+
+    The conversational agent names the passage it wants to change by quoting it;
+    this places that quote using the same tiered matching as a reviewer's quote,
+    so the two behave identically.
+
+    Returning None is the point. A caller that cannot find what the human meant
+    must say so — rewriting a passage that was merely *similar* would edit the
+    wrong sentence, and the human would have to notice on their own.
+    """
+    quote = quote.strip()
+    if not quote:
+        return None
+
+    fields = _searchable_fields(draft)
+    claimed: dict[str, list[tuple[int, int]]] = {name: [] for name, _ in fields}
+    hit = _find(fields, quote, claimed)
+    if hit is None:
+        return None
+    field, start, end = hit
+    return FlagSpan(start=start, end=end, flag_index=-1, field=field)
+
+
 def _searchable_fields(draft: PlatformOutput) -> list[tuple[str, str]]:
     """Every piece of draft prose a flag can quote, in reading order.
 

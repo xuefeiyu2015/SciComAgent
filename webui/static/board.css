@@ -774,3 +774,52 @@ textarea.rw-ask {
 #close-settings { margin-left: auto; }
 .dlg-panel .note { margin-bottom: 14px; }
 #settings .panel-actions { margin-top: 18px; }
+
+/* ── the conversation stays docked under the manuscript ──────────────── */
+
+:root { --dialog-h: 190px; }
+
+/* Before there is a draft the conversation IS the page. */
+#dialog { flex: 1; min-height: 0; }
+
+/* Once a draft is on screen the manuscript takes the room and the
+   conversation keeps a strip of it — capped, resizable, never hidden. */
+body.reviewing #board { flex: 1; min-height: 0; }
+body.reviewing #dialog {
+  flex: 0 0 var(--dialog-h);
+  height: var(--dialog-h);
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+  background: var(--leaf-2);
+}
+body.reviewing #dialog .thesis { display: none; }
+
+#dialog-grip {
+  flex: none;
+  height: 9px;
+  cursor: ns-resize;
+  background: var(--leaf);
+  position: relative;
+}
+#dialog-grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 44px;
+  height: 2px;
+  margin-left: -22px;
+  border-radius: 1px;
+  background: var(--rule);
+}
+#dialog-grip:hover::after, #dialog-grip[data-dragging="1"]::after { background: var(--ink); }
+#dialog-grip:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+
+.thinking { color: var(--muted); font-style: italic; }
+#dialog .slip textarea.rw-proposal { margin-bottom: 9px; }
+
+/* The tally sticks to the bottom of the board's scrollport. Bottom padding on
+   the scroll container would end its containing block early and leave it
+   floating mid-manuscript with text visible underneath. */
+#board { padding-bottom: 0; }
+.tally { padding-bottom: 16px; }

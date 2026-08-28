@@ -392,3 +392,61 @@ def test_history_lists_past_runs(client, monkeypatch):
 
 def test_history_survives_a_nonsense_limit(client):
     assert client.get("/api/history?limit=banana").status_code == 200
+
+
+def _converse_body(**kw):
+    body = {
+        "message": "样本量写进去了吗？",
+        "drafts": [json.loads(_DRAFT.model_dump_json())],
+        "ledger": [json.loads(_LEDGER[0].model_dump_json())],
+        "flags": [],
+        "language": "zh",
+    }
+    body.update(kw)
+    return body
+
+
+def test_converse_answers_a_question(client, monkeypatch):
+    from api.converse import AgentReply
+
+    monkeypatch.setattr(
+        webui, "converse", lambda *a, **k: AgentReply(kind="answer", message="写了。")
+    )
+
+    body = client.post("/api/converse", json=_converse_body()).json()
+
+    assert body["kind"] == "answer"
+    assert body["message"] == "写了。"
+    assert body["replacement"] == ""
+
+
+def test_converse_refuses_an_empty_message_before_spending_anything(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(webui, "converse", lambda *a, **k: called.append(a))
+
+    resp = client.post("/api/converse", json=_converse_body(message="   "))
+
+    assert resp.status_code == 400
+    assert called == []
+
+
+def test_converse_needs_a_draft_to_talk_about(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(webui, "converse", lambda *a, **k: called.append(a))
+
+    resp = client.post("/api/converse", json=_converse_body(drafts=[]))
+
+    assert resp.status_code == 400
+    assert called == []
+
+
+def test_a_provider_failure_while_conversing_is_a_message_not_a_crash(client, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("provider is on fire")
+
+    monkeypatch.setattr(webui, "converse", boom)
+
+    resp = client.post("/api/converse", json=_converse_body())
+
+    assert resp.status_code == 502
+    assert "provider is on fire" in resp.json()["error"]

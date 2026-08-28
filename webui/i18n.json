@@ -214,7 +214,19 @@
     "front.connect.platformTitle": "图灵星球",
     "front.connect.platformBody": "仓库根目录的 `agent.manifest.yaml` 里 `fleet.register: true`，推到 main 就会向平台登记；管理员合并 members.yaml 的 PR 之后，这个 agent 就进了 fleet。之后不用本地装任何东西——工具会以 agent 名作前缀出现，例如：",
     "front.connect.localTitle": "本机 stdio",
-    "front.connect.localBody": "在 MCP 客户端（Claude Code、Claude Desktop 等）的配置里加上这一段，重启即可。"
+    "front.connect.localBody": "在 MCP 客户端（Claude Code、Claude Desktop 等）的配置里加上这一段，重启即可。",
+    "chat.thinking": "在想…",
+    "chat.apply": "应用",
+    "chat.dismiss": "放弃",
+    "chat.applied": "已应用，完成审阅时会复核",
+    "chat.dismissed": "没有改动",
+    "chat.proposal": "改成：",
+    "chat.noDraft": "还没有稿子可以聊。先给我一个链接、DOI 或 PDF。",
+    "chat.switchAsk": "还有 {count} 处存疑没处理。要开始新的一篇吗？当前这篇会留在历史里。",
+    "chat.switchGo": "开始新的",
+    "chat.switchStay": "留在这篇",
+    "chat.expand": "拖动调整高度",
+    "chat.ready": "稿子在上面了。想改哪一句，或者想问关于这份稿子的什么，直接说。"
   },
   "en": {
     "app.name": "ScicomAgent",
@@ -431,6 +443,18 @@
     "front.connect.platformTitle": "Turing Planet",
     "front.connect.platformBody": "`agent.manifest.yaml` carries `fleet.register: true`, so a push to main asks the platform to register this repo; once an admin merges the members.yaml PR the agent is in the fleet. Nothing to install locally after that — the tools appear prefixed by the agent's name, e.g.",
     "front.connect.localTitle": "Local, over stdio",
-    "front.connect.localBody": "Add this to your MCP client (Claude Code, Claude Desktop, …) and restart it."
+    "front.connect.localBody": "Add this to your MCP client (Claude Code, Claude Desktop, …) and restart it.",
+    "chat.thinking": "thinking…",
+    "chat.apply": "Apply",
+    "chat.dismiss": "Dismiss",
+    "chat.applied": "Applied — it is re-checked when you complete the review",
+    "chat.dismissed": "Left as it was",
+    "chat.proposal": "Change it to:",
+    "chat.noDraft": "There's no draft to talk about yet. Give me a link, a DOI, or a PDF.",
+    "chat.switchAsk": "{count} flags are still open. Start a new paper? This one stays in History.",
+    "chat.switchGo": "Start the new one",
+    "chat.switchStay": "Stay here",
+    "chat.expand": "Drag to resize",
+    "chat.ready": "The draft is above. Tell me what to change, or ask me anything about it."
   }
 }

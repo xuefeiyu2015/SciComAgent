@@ -11,6 +11,12 @@ red for you to accept or rewrite, tethered to the claim ledger that backs them.
 uv run python -m webui.app     # http://127.0.0.1:8080
 ```
 
+- **The conversation stays open.** Once a draft is on screen the agent docks
+  under it instead of disappearing: ask about the draft, ask for a change in
+  your own words, or paste the next paper. An edit arrives as a proposal you
+  Apply — and its text always comes from the ledger-bounded rewrite path, never
+  from the conversing model, so a chat cannot put an unsourced claim into a
+  draft.
 - The rail lists **past runs**, newest first — click one to reopen its draft,
   ledger and flags. It reads the mirrors `api/jobs.py` already writes, so
   history survives a restart with no extra storage. Reopening gives you the

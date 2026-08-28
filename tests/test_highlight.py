@@ -7,7 +7,7 @@ draft text, and any flag that cannot be located is REPORTED rather than dropped.
 
 from __future__ import annotations
 
-from api.highlight import locate_flags, locate_hedged
+from api.highlight import locate_flags, locate_hedged, locate_text
 from api.schema import (
     Claim,
     ConfidenceLevel,
@@ -157,3 +157,37 @@ def test_hedged_citations_in_cover_and_titles_are_found():
     spans = locate_hedged(draft, _HEDGED_LEDGER)
 
     assert {s.field for s in spans} == {"cover_copy", "title:0"}
+
+
+# --- locating an arbitrary passage --------------------------------------------
+
+def test_locate_text_finds_an_exact_passage():
+    body = "第一句。该疗法治愈了癌症。第三句。"
+    span = locate_text(_draft(body), "该疗法治愈了癌症。")
+
+    assert span is not None
+    assert body[span.start : span.end] == "该疗法治愈了癌症。"
+    assert span.field == "body"
+
+
+def test_locate_text_tolerates_whitespace_drift():
+    body = "Background.  The therapy reduced\n  tumor volume. End."
+    span = locate_text(_draft(body), "The therapy reduced tumor volume.")
+
+    assert body[span.start : span.end] == "The therapy reduced\n  tumor volume."
+
+
+def test_locate_text_searches_cover_and_titles_too():
+    draft = _draft(body="正文。", cover_copy="封面文案。", titles=["标题一"])
+
+    assert locate_text(draft, "封面文案。").field == "cover_copy"
+    assert locate_text(draft, "标题一").field == "title:0"
+
+
+def test_locate_text_returns_none_when_it_is_not_there():
+    """The caller must be able to say 'I could not find that' instead of guessing."""
+    assert locate_text(_draft("完全无关的正文。"), "根本不存在的句子") is None
+
+
+def test_locate_text_refuses_an_empty_quote():
+    assert locate_text(_draft("正文。"), "   ") is None

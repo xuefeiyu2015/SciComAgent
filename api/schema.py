@@ -270,7 +270,8 @@ class FlagSpan(BaseModel):
     start: int = Field(description="Inclusive character offset into the field's text.")
     end: int = Field(description="Exclusive character offset into the field's text.")
     flag_index: int = Field(
-        description="Index of the flag in the list this span was located for."
+        description="Index of the flag this span was located for; -1 when the "
+        "span is not a flag at all (a passage located on request)."
     )
     field: str = Field(
         description="Which part of the draft: 'body', 'cover_copy', or 'title:<n>'."
