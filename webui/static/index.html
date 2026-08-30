@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScicomAgent</title>
+<meta data-i18n-doctitle="app.title.board">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/board.css">
+</head>
+<body>
+
+<!-- ── rail: where you left off ──────────────────────────────────────── -->
+<aside id="sidebar" aria-label="History and settings">
+  <header class="masthead-row">
+    <a class="masthead" href="/" data-i18n-title="nav.overview">
+      <span class="masthead-name" data-i18n="app.name">白话智能体</span>
+      <span class="masthead-sub" data-i18n="app.sub">ScicomAgent</span>
+    </a>
+    <button class="btn btn-lang" type="button" data-lang-switch data-i18n-title="lang.label">English</button>
+  </header>
+
+  <button id="open-settings" class="railbtn" type="button">
+    <span class="gear" aria-hidden="true">⚙</span><span data-i18n="settings.open"></span>
+  </button>
+
+  <!-- a blocking condition must stay visible even with the dialog shut -->
+  <div id="rule3" class="alarm" hidden data-i18n="settings.rule3"></div>
+
+  <section class="panel rail-history">
+    <h2 data-i18n="history.head"></h2>
+    <button id="new-run" class="railbtn railbtn-quiet" type="button">
+      <span aria-hidden="true">＋</span><span data-i18n="history.new"></span>
+    </button>
+    <div id="history"></div>
+  </section>
+</aside>
+
+<!-- ── main: the conversation, then the manuscript ───────────────────── -->
+<main id="main">
+  <section id="board" hidden></section>
+
+  <div id="dialog-grip" role="separator" aria-orientation="horizontal"
+       data-i18n-title="chat.expand" tabindex="0" hidden></div>
+  <section id="dialog" aria-live="polite"></section>
+
+  <form id="composer" autocomplete="off">
+    <input id="entry" type="text" data-i18n-placeholder="board.composer">
+    <button class="btn btn-solid" type="submit" data-i18n="board.send"></button>
+  </form>
+</main>
+
+<aside id="apparatus" aria-label="Claim ledger" hidden></aside>
+
+<svg id="tether" aria-hidden="true"></svg>
+
+<!-- ── settings: one door, three rooms ───────────────────────────────── -->
+<div id="settings-scrim" hidden></div>
+<div id="settings" role="dialog" aria-modal="true" data-i18n-aria="settings.open" hidden>
+  <header class="dlg-head">
+    <div class="dlg-tabs" role="tablist">
+      <button class="dlg-tab" role="tab" data-tab="models" data-i18n="settings.tabModels"></button>
+      <button class="dlg-tab" role="tab" data-tab="keys" data-i18n="settings.tabKeys"></button>
+      <button class="dlg-tab" role="tab" data-tab="search" data-i18n="settings.tabSearch"></button>
+    </div>
+    <button id="close-settings" class="btn btn-quiet" type="button" data-i18n="settings.close"></button>
+  </header>
+
+  <section class="dlg-panel" data-panel="models">
+    <p class="note" data-i18n="settings.rolesNote"></p>
+    <div id="roles"></div>
+    <div class="panel-actions">
+      <button id="save-models" class="btn btn-solid" data-i18n="settings.save"></button>
+      <button id="verify-models" class="btn" data-i18n="settings.verify"></button>
+    </div>
+  </section>
+
+  <section class="dlg-panel" data-panel="keys" hidden>
+    <p class="note" data-i18n="settings.keysNote"></p>
+    <div id="keys" class="keystatus"></div>
+  </section>
+
+  <section class="dlg-panel" data-panel="search" hidden>
+    <p class="note" data-i18n="settings.sourcesNote"></p>
+    <div id="sources" class="checkrow"></div>
+  </section>
+</div>
+
+<div id="popover" role="dialog" hidden></div>
+
+<button id="pill" type="button" hidden data-i18n="rewrite.pill"></button>
+
+<div id="rewriter" role="dialog" hidden>
+  <h3 data-i18n="rewrite.head"></h3>
+  <blockquote class="rw-target"></blockquote>
+  <div class="rw-thread"></div>
+  <textarea class="rw-ask" rows="2" data-i18n-placeholder="rewrite.ask" data-i18n-aria="rewrite.head"></textarea>
+  <div class="rw-actions">
+    <button class="btn btn-solid rw-send" type="button" data-i18n="rewrite.send"></button>
+    <button class="btn rw-apply" type="button" data-i18n="rewrite.apply"></button>
+    <button class="btn btn-quiet rw-cancel" type="button" data-i18n="rewrite.cancel"></button>
+  </div>
+  <p class="rw-note" data-i18n="rewrite.note"></p>
+</div>
+
+<div id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="/static/i18n.js"></script>
+<script src="/static/board.js"></script>
+</body>
+</html>

@@ -1,0 +1,825 @@
+/* SciComm review board.
+ *
+ * One rule governs colour here: SATURATION MEANS EVIDENCE STATUS. Vermilion
+ * appears only where a sentence overstates its source; green only where
+ * something has been verified against it. Nothing else in the interface is
+ * allowed to be saturated, so a red mark on the page always means exactly one
+ * thing. Everything else is ink (the instrument chrome) or paper (the prose
+ * under judgement).
+ */
+
+:root {
+  --ink:        #0F2340;   /* instrument chrome */
+  --ink-raised: #17314F;
+  --ink-line:   #26456C;
+  --ink-text:   #C9D6E8;
+
+  --leaf:       #FBF8F3;   /* the manuscript */
+  --leaf-2:     #F2EDE3;   /* the apparatus */
+  --rule:       #DED7C9;
+  --text:       #1C1A17;
+  --muted:      #6E6759;
+
+  --flag:       #D6342C;   /* overstatement — nothing else */
+  --verified:   #1B7A5A;   /* verified — nothing else */
+  --hedged:     #9A6B0F;   /* the evidence itself is uncertain — nothing else */
+
+  --sans:  "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+  --serif: "Source Serif 4", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
+  --mono:  "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --step: 0.75rem;
+}
+
+* { box-sizing: border-box; }
+
+/* `display` in a component rule outranks the hidden attribute's UA style, so
+   an element with display:flex stays on screen when JS hides it. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  display: grid;
+  /* the apparatus track only exists once there is a ledger to put in it —
+     otherwise it reserves a dead strip down the side of the page */
+  grid-template-columns: 250px minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* ── sidebar ─────────────────────────────────────────────────────────── */
+
+body.reviewing { grid-template-columns: 250px minmax(0, 1fr) 340px; }
+
+#sidebar {
+  background: var(--ink);
+  color: var(--ink-text);
+  padding: 20px 18px 40px;
+  border-right: 1px solid var(--ink-line);
+  overflow-y: auto;
+  max-height: 100vh;
+}
+
+.masthead-row { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; }
+.masthead { display: flex; flex-direction: column; gap: 1px; text-decoration: none; min-width: 0; }
+.masthead-name { color: #fff; font-weight: 600; font-size: 14px; line-height: 1.25; }
+.masthead-sub { font: 400 10px var(--mono); color: #7D93B4; letter-spacing: .05em; }
+a.masthead:hover .masthead-name { text-decoration: underline; }
+a.masthead:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 3px; }
+
+.btn-lang {
+  margin-left: auto;
+  flex: none;
+  border-color: #3D5A80;
+  color: var(--ink-text);
+  font: 500 11px var(--mono);
+  padding: 4px 9px;
+  letter-spacing: .04em;
+}
+.btn-lang:hover { background: var(--ink-raised); color: #fff; }
+
+/* keys are reported, never edited */
+.keystatus .keyrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1px 8px;
+  margin-bottom: 9px;
+}
+.key-name { font-size: 12px; color: var(--ink-text); white-space: nowrap; }
+.key-state { font: 500 10px var(--mono); color: #5E738F; text-align: right; white-space: nowrap; }
+.key-state[data-present="1"] { color: var(--verified); }
+.key-var { grid-column: 1 / -1; font: 400 9.5px var(--mono); color: #46597A; }
+.note-warn { color: #E7A9A5; }
+
+
+.masthead-mark {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: .06em;
+  color: var(--leaf);
+  border: 1px solid var(--ink-line);
+  padding: 6px 8px;
+}
+
+.masthead-name { font-weight: 600; color: #fff; line-height: 1.2; }
+.masthead-name em { display: block; font: 400 11px/1.4 var(--mono); font-style: normal; color: #7D93B4; letter-spacing: .04em; }
+
+.panel { margin-bottom: 30px; }
+
+.panel h2 {
+  margin: 0 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: #fff;
+}
+.panel h2 em { font-style: normal; font-weight: 400; color: #7D93B4; letter-spacing: .04em; text-transform: none; }
+
+.note { margin: 0 0 12px; font: 400 11px/1.5 var(--mono); color: #6C82A2; }
+
+/* one role: a status dot, a provider, a model */
+.role { margin-bottom: 13px; }
+
+.role-head { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.role-name { font-size: 12px; font-weight: 500; letter-spacing: .03em; }
+.role-hint { font: 400 10px var(--mono); color: #5E738F; margin-left: auto; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #3A4E6B; }
+.dot[data-state="resolved"] { background: #C9A227; }
+.dot[data-state="verified"] { background: var(--verified); }
+.dot[data-state="failed"]   { background: var(--flag); }
+
+.role-inputs { display: grid; gap: 4px; }
+#sidebar select { cursor: pointer; }
+
+#sidebar input, #sidebar select {
+  width: 100%;
+  min-width: 0;
+  background: var(--ink-raised);
+  border: 1px solid var(--ink-line);
+  color: #E8EEF7;
+  font: 400 12px var(--mono);
+  padding: 6px 7px;
+}
+#sidebar input::placeholder { color: #566C8B; }
+#sidebar input:focus-visible, #sidebar select:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 1px; }
+
+.panel-actions { display: flex; gap: 6px; margin-top: 12px; }
+
+.keyrow { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.keyrow label { font: 400 11px var(--mono); color: #8FA4C2; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.keyrow .set { color: var(--verified); font: 500 11px var(--mono); }
+.keyrow input { flex: 1.2; }
+
+.checkrow { display: flex; flex-wrap: wrap; gap: 6px; }
+.checkrow label { font: 400 11px var(--mono); color: #8FA4C2; display: flex; align-items: center; gap: 4px; }
+
+.alarm {
+  border-left: 3px solid var(--flag);
+  background: rgba(214, 52, 44, .14);
+  color: #FFD9D6;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+.alarm em { display: block; margin-top: 4px; font-style: normal; color: #E7A9A5; font-size: 11px; }
+
+/* ── buttons ─────────────────────────────────────────────────────────── */
+
+.btn {
+  font: 500 12px var(--sans);
+  letter-spacing: .02em;
+  padding: 7px 12px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { background: rgba(127, 127, 127, .14); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 2px; }
+
+.btn-solid { background: var(--ink); color: #fff; border-color: var(--ink); }
+.btn-solid:hover:not(:disabled) { background: var(--ink-raised); }
+.btn-quiet { opacity: .72; }
+
+/* ── main column: the desk ───────────────────────────────────────────── */
+
+#main {
+  background: var(--leaf);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+#dialog {
+  flex: 1;
+  overflow-y: auto;
+  padding: 40px 44px 8px;
+}
+
+/* Both halves of the conversation stay in one column: a reply pinned to the
+   far edge of a wide window reads as a different conversation. */
+.dialog-column, #dialog > *, #composer > * { max-width: none; }
+#dialog { display: flex; flex-direction: column; align-items: center; }
+#dialog > * { width: 100%; max-width: 760px; }
+#composer { justify-content: center; }
+#composer > * { max-width: 760px; }
+#entry { max-width: 660px; }
+
+/* A turn is a slip on the desk, not a chat bubble: label above, content below,
+   ruled off from the next one. */
+.turn { margin: 0 0 18px; }
+.turn-label {
+  font: 500 10px var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+.turn-body { font-size: 15px; }
+.turn-body em { font-style: normal; color: var(--muted); }
+
+/* the empty screen states the promise, because that promise IS the product */
+.thesis { margin: 0 0 30px; }
+.thesis h1 { margin: 0 0 14px; font-family: var(--serif); font-size: 30px; font-weight: 600; line-height: 1.3; }
+.thesis h1 b { font-weight: 600; border-bottom: 2px solid var(--flag); box-shadow: 0 3px 0 -1px var(--flag); }
+.thesis p + p { margin-top: 13px; }
+.thesis p { margin: 0; max-width: 54ch; color: var(--muted); font-size: 14px; line-height: 1.7; }
+.turn.you { margin-left: auto; text-align: right; }
+.turn.you .turn-body { font-family: var(--mono); font-size: 13px; word-break: break-all; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.chip {
+  font: 500 13px var(--sans);
+  padding: 6px 13px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+}
+.chip:hover { border-color: var(--ink); }
+.chip:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.chip small { color: var(--muted); margin-left: 5px; font-weight: 400; }
+
+.slip {
+  border: 1px solid var(--rule);
+  background: #fff;
+  padding: 14px 16px;
+  margin-top: 11px;
+  max-width: 46ch;
+}
+.slip dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 0 0 13px; }
+.slip dt { font: 400 11px var(--mono); color: var(--muted); }
+.slip dd { margin: 0; font-size: 13px; }
+
+/* progress while the pipeline runs */
+.progress { font: 400 12px var(--mono); color: var(--muted); }
+.progress-bar { height: 2px; background: var(--rule); margin: 9px 0; max-width: 46ch; }
+.progress-bar i { display: block; height: 100%; background: var(--ink); transition: width .3s ease; }
+
+#composer {
+  display: flex;
+  gap: 8px;
+  padding: 14px 44px 20px;
+  border-top: 1px solid var(--rule);
+  background: var(--leaf);
+}
+#entry {
+  flex: 1;
+  min-width: 0;
+  font: 400 14px var(--sans);
+  padding: 9px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--text);
+}
+#entry:focus-visible { outline: 2px solid var(--ink); outline-offset: -1px; }
+body.dropping #entry { border-color: var(--ink); border-style: dashed; }
+
+/* ── the manuscript ──────────────────────────────────────────────────── */
+
+#board { flex: 1; overflow-y: auto; padding: 30px 44px 40px; }
+
+.manuscript { max-width: 66ch; margin: 0 auto 46px; }
+
+.manuscript-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 7px;
+  margin-bottom: 20px;
+}
+.manuscript-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
+.manuscript-head .count { margin-left: auto; font: 400 11px var(--mono); color: var(--muted); }
+
+.field-label {
+  font: 500 10px var(--mono);
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 22px 0 6px;
+}
+
+.titles { margin: 0; padding-left: 1.4em; }
+.titles li { font-family: var(--serif); font-size: 17px; margin-bottom: 3px; }
+
+.cover { font-family: var(--serif); font-size: 16px; }
+
+.prose {
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+}
+
+.tags { font: 400 13px var(--mono); color: var(--muted); }
+
+/* A flag is a copy-editor's query, not a highlighter swipe. The three states
+   stay visually distinct AFTER review — an accepted flag must not vanish,
+   because "a human overrode this" is provenance too. */
+.mark {
+  cursor: pointer;
+  padding-bottom: 1px;
+  border-bottom: 2px solid var(--flag);
+  box-shadow: 0 3px 0 -1px var(--flag);
+  background: rgba(214, 52, 44, .06);
+}
+.mark:hover, .mark[data-open="1"] { background: rgba(214, 52, 44, .15); }
+.mark:focus-visible { outline: 2px solid var(--flag); outline-offset: 2px; }
+
+.mark[data-state="accepted"] {
+  border-bottom: 1px dotted var(--muted);
+  box-shadow: none;
+  background: none;
+}
+.mark[data-state="rewritten"] {
+  border-bottom: 1px solid var(--verified);
+  box-shadow: none;
+  background: rgba(27, 122, 90, .07);
+}
+
+.mark sup.query {
+  font: 500 10px var(--mono);
+  color: var(--flag);
+  padding-left: 2px;
+  vertical-align: super;
+}
+.mark[data-state="accepted"] sup.query { color: var(--muted); }
+.mark[data-state="rewritten"] sup.query { color: var(--verified); }
+
+/* A ledger citation: the sentence's own pointer at its evidence. Ink, not
+   vermilion — a citation is the draft behaving correctly, and saturation on
+   this page is reserved for a claim that has outrun its source. */
+sup.cite {
+  font: 500 10px var(--mono);
+  color: var(--ink);
+  opacity: .55;
+  padding: 0 1px 0 2px;
+  vertical-align: super;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+sup.cite:hover, sup.cite[data-open="1"] { opacity: 1; border-bottom-color: var(--ink); }
+
+/* A citation whose ledger entry is itself hedged (medium/low confidence).
+   Amber, matching the sidebar's "resolves but unverified" dot: the sentence is
+   sourced correctly — it is the SOURCE that is uncertain. That is a different
+   thing from an overstatement, so it never borrows the vermilion. */
+sup.cite[data-confidence="medium"], sup.cite[data-confidence="low"] {
+  color: var(--hedged);
+  opacity: .95;
+  border-bottom: 1px dotted var(--hedged);
+}
+sup.cite[data-confidence="medium"]:hover, sup.cite[data-confidence="low"]:hover,
+sup.cite[data-confidence="medium"][data-open="1"], sup.cite[data-confidence="low"][data-open="1"] {
+  border-bottom-style: solid;
+  border-bottom-color: var(--hedged);
+}
+sup.cite:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+sup.cite + sup.cite { padding-left: 0; }
+sup.cite + sup.cite::before { content: ","; opacity: .55; }
+
+.claim { cursor: pointer; }
+.claim:hover { background: rgba(15, 35, 64, .04); }
+.claim:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+.claim summary { cursor: pointer; }
+
+/* a flag whose sentence could not be found — never silently dropped */
+.orphans {
+  border-left: 3px solid var(--flag);
+  background: rgba(214, 52, 44, .07);
+  padding: 11px 14px;
+  margin-bottom: 20px;
+  font-size: 13px;
+}
+.orphans h3 { margin: 0 0 6px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--flag); }
+.orphans li { margin-bottom: 4px; }
+
+.notices { max-width: 66ch; margin: 0 auto 30px; font-size: 13px; color: var(--muted); }
+.notices code { font-family: var(--mono); font-size: 11px; }
+
+/* ── review footer ───────────────────────────────────────────────────── */
+
+.tally {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 0;
+  margin-top: 10px;
+  border-top: 1px solid var(--rule);
+  background: linear-gradient(to top, var(--leaf) 70%, rgba(251, 248, 243, 0));
+}
+.tally-count { font: 400 12px var(--mono); color: var(--muted); }
+
+/* ── apparatus ───────────────────────────────────────────────────────── */
+
+#apparatus {
+  background: var(--leaf-2);
+  border-left: 1px solid var(--rule);
+  padding: 30px 22px 60px;
+  overflow-y: auto;
+  max-height: 100vh;
+}
+
+#apparatus h2 {
+  margin: 0 0 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+#apparatus h2 em { font-style: normal; font-weight: 400; color: var(--muted); letter-spacing: .03em; text-transform: none; }
+#apparatus .note { color: var(--muted); }
+#apparatus section { margin-bottom: 30px; }
+
+.claim {
+  border-top: 1px solid var(--rule);
+  padding: 9px 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.claim:last-child { border-bottom: 1px solid var(--rule); }
+.claim[data-lit="1"] { background: rgba(15, 35, 64, .07); }
+
+/* Hedged evidence, marked in the margin so it can be scanned for. */
+.claim[data-confidence="medium"], .claim[data-confidence="low"] {
+  border-left: 2px solid var(--hedged);
+  padding-left: 9px;
+  margin-left: -11px;
+}
+.claim[data-confidence="medium"] .claim-meta,
+.claim[data-confidence="low"] .claim-meta { color: var(--hedged); }
+.claim-caution { color: var(--hedged); font-weight: 500; }
+
+.hedged-count {
+  display: block;
+  margin: 6px 0 10px;
+  font: 400 11px var(--mono);
+  color: var(--hedged);
+  border-left: 2px solid var(--hedged);
+  padding-left: 8px;
+  line-height: 1.5;
+}
+.claim-id { font: 500 11px var(--mono); color: var(--ink); margin-right: 6px; }
+.claim-meta { display: block; margin-top: 3px; font: 400 11px var(--mono); color: var(--muted); }
+.claim summary { cursor: pointer; font: 400 11px var(--mono); color: var(--muted); margin-top: 3px; }
+.claim blockquote { margin: 5px 0 0; padding-left: 9px; border-left: 2px solid var(--rule); font-size: 12px; color: var(--muted); }
+
+.source { font-size: 13px; margin-bottom: 9px; line-height: 1.5; }
+.source a { color: var(--ink); }
+.source span { display: block; color: var(--muted); font-size: 12px; }
+
+/* ── tether: the signature ───────────────────────────────────────────── */
+
+#tether {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 40;
+}
+#tether path { fill: none; stroke: var(--flag); stroke-width: 1.25; }
+#tether circle { fill: var(--leaf); stroke: var(--flag); stroke-width: 1.25; }
+#tether.untethered path { stroke-dasharray: 3 3; }
+/* tracing a citation is not a problem being reported — draw it in ink */
+#tether.citation path, #tether.citation circle { stroke: var(--ink); }
+
+/* ── popover ─────────────────────────────────────────────────────────── */
+
+#popover {
+  position: fixed;
+  z-index: 50;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  background: #fff;
+  border: 1px solid var(--ink);
+  box-shadow: 0 10px 30px rgba(15, 35, 64, .16);
+  padding: 14px 16px 15px;
+  font-size: 13px;
+}
+#popover h3 { margin: 0 0 7px; font: 500 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--flag); }
+#popover .reason { margin: 0 0 11px; line-height: 1.55; }
+#popover .cite { font: 400 11px var(--mono); color: var(--muted); }
+#popover textarea {
+  width: 100%;
+  min-height: 84px;
+  font: 400 14px/1.6 var(--serif);
+  padding: 8px 9px;
+  border: 1px solid var(--rule);
+  margin-bottom: 9px;
+  resize: vertical;
+}
+#popover textarea:focus-visible { outline: 2px solid var(--ink); outline-offset: -1px; }
+.pop-actions { display: flex; gap: 7px; }
+.pop-actions .btn { border-color: var(--rule); }
+.pop-actions .btn-solid { border-color: var(--ink); }
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 60;
+  background: var(--ink);
+  color: #fff;
+  padding: 10px 18px;
+  font-size: 13px;
+  max-width: 70ch;
+}
+#toast[data-kind="error"] { background: var(--flag); }
+
+/* ── responsive ──────────────────────────────────────────────────────── */
+
+@media (max-width: 1180px) {
+  body, body.reviewing { grid-template-columns: 250px minmax(0, 1fr); }
+  #apparatus { grid-column: 1 / -1; max-height: none; border-left: 0; border-top: 1px solid var(--rule); }
+  #tether { display: none; }
+}
+
+@media (max-width: 760px) {
+  body, body.reviewing { grid-template-columns: minmax(0, 1fr); }
+  #sidebar { max-height: none; border-right: 0; border-bottom: 1px solid var(--ink-line); }
+  #main { max-height: none; }
+  #dialog, #board { padding: 24px 18px 8px; }
+  #composer { padding: 12px 18px 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+
+/* ── select-to-rewrite ───────────────────────────────────────────────── */
+
+#pill {
+  position: fixed;
+  z-index: 55;
+  font: 500 12px var(--sans);
+  padding: 6px 12px;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  background: var(--ink);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(15, 35, 64, .22);
+}
+#pill:hover { background: var(--ink-raised); }
+#pill:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+#rewriter {
+  position: fixed;
+  z-index: 56;
+  width: 400px;
+  max-width: calc(100vw - 24px);
+  background: #fff;
+  border: 1px solid var(--ink);
+  box-shadow: 0 12px 34px rgba(15, 35, 64, .18);
+  padding: 14px 16px 13px;
+}
+#rewriter h3 {
+  margin: 0 0 9px;
+  font: 500 10px var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.rw-target {
+  margin: 0 0 11px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--rule);
+  background: var(--leaf);
+  font: 400 14px/1.6 var(--serif);
+  max-height: 6.6em;
+  overflow-y: auto;
+}
+.rw-thread { max-height: 240px; overflow-y: auto; margin-bottom: 10px; }
+.rw-thread:empty { margin-bottom: 0; }
+.rw-turn { margin-bottom: 10px; }
+.rw-who {
+  display: block;
+  font: 500 9px var(--mono);
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.rw-text { font: 400 14px/1.6 var(--serif); }
+.rw-you .rw-text { font: 400 12px/1.5 var(--mono); color: var(--muted); }
+textarea.rw-proposal {
+  width: 100%;
+  min-height: 76px;
+  font: 400 14px/1.6 var(--serif);
+  padding: 7px 8px;
+  border: 1px solid var(--verified);
+  background: rgba(27, 122, 90, .04);
+  resize: vertical;
+}
+textarea.rw-ask {
+  width: 100%;
+  font: 400 13px/1.5 var(--sans);
+  padding: 7px 8px;
+  border: 1px solid var(--rule);
+  resize: vertical;
+  margin-bottom: 9px;
+}
+#rewriter textarea:focus-visible { outline: 2px solid var(--ink); outline-offset: -1px; }
+.rw-actions { display: flex; gap: 7px; }
+.rw-actions .btn { border-color: var(--rule); }
+.rw-actions .btn-solid { border-color: var(--ink); }
+.rw-note { margin: 10px 0 0; font: 400 10px/1.5 var(--mono); color: var(--muted); }
+
+.orphans li { margin-bottom: 8px; }
+.orphan-ack { font-size: 11px; padding: 3px 8px; border-color: var(--flag); color: var(--flag); }
+.orphan-done { font: 400 11px var(--mono); color: var(--muted); }
+
+/* A sentence whose evidence is itself uncertain. Amber and dashed — the
+   sentence is sourced correctly, so it must not read as an error; it is the
+   SOURCE that is shaky. Never the solid vermilion rule of an overstatement. */
+.hedged {
+  border-bottom: 1px dashed var(--hedged);
+  background: rgba(154, 107, 15, .07);
+  padding-bottom: 1px;
+}
+.hedged:hover { background: rgba(154, 107, 15, .14); }
+
+/* a select must look like one, even with the native arrow suppressed */
+#sidebar select {
+  appearance: none;
+  padding-right: 22px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' fill='none' stroke='%237D93B4' stroke-width='1.4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+}
+#sidebar select:hover { border-color: #3D5A80; }
+
+/* ── the rail: settings behind one door, history in the open ─────────── */
+
+.railbtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 22px;
+  background: var(--ink-raised);
+  border: 1px solid var(--ink-line);
+  border-radius: 2px;
+  color: var(--ink-text);
+  font: 500 12px var(--sans);
+  cursor: pointer;
+  text-align: left;
+}
+.railbtn:hover { background: #1F3A5C; color: #fff; }
+.railbtn:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 2px; }
+.railbtn .gear { font-size: 13px; }
+.railbtn-quiet { background: none; border-style: dashed; margin-bottom: 10px; padding: 6px 10px; }
+
+.rail-history h2 { margin-bottom: 10px; }
+
+.histrow {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  margin-bottom: 3px;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: var(--ink-text);
+  cursor: pointer;
+  font: inherit;
+}
+.histrow:hover { background: var(--ink-raised); }
+.histrow:focus-visible { outline: 2px solid #6FA0E0; outline-offset: -2px; }
+.histrow[data-open="1"] { border-left-color: var(--leaf); background: var(--ink-raised); }
+.hist-title {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #E4ECF6;
+  /* two lines is enough to recognise a paper; more turns the rail into a wall */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.histrow[data-open="1"] .hist-title { color: #fff; }
+.hist-meta { display: block; margin-top: 3px; font: 400 10px var(--mono); color: #6C82A2; }
+
+/* ── settings dialog ─────────────────────────────────────────────────── */
+
+#settings-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(15, 35, 64, .38);
+}
+#settings {
+  position: fixed;
+  z-index: 71;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  background: var(--ink);
+  border: 1px solid var(--ink-line);
+  box-shadow: 0 20px 60px rgba(15, 35, 64, .4);
+  color: var(--ink-text);
+  padding: 0 22px 22px;
+}
+.dlg-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 0 12px;
+  margin-bottom: 14px;
+  background: var(--ink);
+  border-bottom: 1px solid var(--ink-line);
+}
+.dlg-tabs { display: flex; gap: 4px; }
+.dlg-tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: #7D93B4;
+  font: 500 12px var(--sans);
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.dlg-tab:hover { color: #fff; }
+.dlg-tab[data-on="1"] { color: #fff; border-bottom-color: var(--leaf); }
+.dlg-tab:focus-visible { outline: 2px solid #6FA0E0; outline-offset: 2px; }
+#close-settings { margin-left: auto; }
+.dlg-panel .note { margin-bottom: 14px; }
+#settings .panel-actions { margin-top: 18px; }
+
+/* ── the conversation stays docked under the manuscript ──────────────── */
+
+:root { --dialog-h: 190px; }
+
+/* Before there is a draft the conversation IS the page. */
+#dialog { flex: 1; min-height: 0; }
+
+/* Once a draft is on screen the manuscript takes the room and the
+   conversation keeps a strip of it — capped, resizable, never hidden. */
+body.reviewing #board { flex: 1; min-height: 0; }
+body.reviewing #dialog {
+  flex: 0 0 var(--dialog-h);
+  height: var(--dialog-h);
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+  background: var(--leaf-2);
+}
+body.reviewing #dialog .thesis { display: none; }
+
+#dialog-grip {
+  flex: none;
+  height: 9px;
+  cursor: ns-resize;
+  background: var(--leaf);
+  position: relative;
+}
+#dialog-grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 44px;
+  height: 2px;
+  margin-left: -22px;
+  border-radius: 1px;
+  background: var(--rule);
+}
+#dialog-grip:hover::after, #dialog-grip[data-dragging="1"]::after { background: var(--ink); }
+#dialog-grip:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+
+.thinking { color: var(--muted); font-style: italic; }
+#dialog .slip textarea.rw-proposal { margin-bottom: 9px; }
+
+/* The tally sticks to the bottom of the board's scrollport. Bottom padding on
+   the scroll container would end its containing block early and leave it
+   floating mid-manuscript with text visible underneath. */
+#board { padding-bottom: 0; }
+.tally { padding-bottom: 16px; }

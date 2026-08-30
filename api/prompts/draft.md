@@ -122,22 +122,25 @@ framing ONLY:
 
 ## Provenance markers
 
-Each ledger entry has an `id` (e.g. `c17`) and a `confidence`
-(`high` / `medium` / `low`). Flag only the claims a reader should treat with
-caution:
+Each ledger entry has an `id` (e.g. `c17`). A reader has to be able to trace
+any factual sentence back to the evidence behind it, so **cite the ledger entry
+every factual sentence rests on**:
 
-- For any claim whose confidence is **medium or low**, append its ledger id in
-  parentheses right after the sentence that uses it — e.g.
-  `…may yield more interpretable models (c17).`
-- **Do not** mark **high**-confidence claims. Solid facts (settled numbers,
-  counts, names) read clean and need no marker.
-- Apply this **identically on every platform** (news, xhs) — the marker
-  rule does not change with format or length.
-- If one sentence rests on several hedged claims, group their ids:
-  `(c77, c78)`.
+- Append the ledger id in parentheses right after the sentence that uses it —
+  e.g. `…reduced tumor volume by 23% (c17).`
+- Cite **every** claim you use, whatever its confidence. A settled number needs
+  its source as much as a hedged one does.
+- If one sentence rests on several claims, group their ids: `(c77, c78)`.
+- A sentence that states no claim from the ledger — a transition, a question, a
+  line of framing — takes **no** marker. Never invent an id to make a sentence
+  look sourced.
+- Apply this **identically on every platform** (news, xhs) — the marker rule
+  does not change with format or length.
 
-Markers are about confidence, not about qualifiers: you still carry **every**
-claim's qualifier into the prose regardless of whether it gets a marker.
+The markers are provenance, not hedging: you still carry **every** claim's
+qualifier into the prose regardless of its marker. Readers never see the
+parentheses — the review board raises them into superscripts and they are
+stripped from the published post.
 
 ## Output
 

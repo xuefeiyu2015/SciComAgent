@@ -157,3 +157,73 @@ def test_ledger_only_result_renders_provenance_without_drafts():
     md = render_markdown(out, include_provenance=True)
     assert "Claim ledger" in md and "`c1`" in md
     assert "no platform drafts" in md
+
+
+# --- plain-text publish view ---------------------------------------------------
+
+def test_render_text_is_the_clean_reviewed_post():
+    """What a human saves: the post itself, no provenance, no markup, no markers."""
+    from api.render import render_text
+
+    out = AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[
+            PlatformOutput(
+                platform=Platform.news,
+                title_options=["温和的标题", "另一个标题"],
+                cover_copy="12只小鼠的初步结果。",
+                body="肿瘤体积平均缩小了23% (c1)。作者提醒结果仍属初步 (c2)。",
+                hashtags=["#肿瘤免疫", "小鼠实验"],
+            )
+        ],
+        claim_ledger=[
+            Claim(id="c1", claim="缩小23%", source_evidence="e", qualifier="小鼠",
+                  confidence=ConfidenceLevel.high)
+        ],
+        overreach_flags=[OverreachFlag(text="x", reason="y", platform=Platform.news)],
+    )
+
+    text = render_text(out, platform=Platform.news)
+
+    assert "(c1)" not in text and "c1" not in text   # citations stripped
+    assert "**" not in text and "##" not in text     # no markdown syntax
+    assert "缩小23%" not in text                      # no ledger, no provenance
+    assert "肿瘤体积平均缩小了23%。" in text            # and no gap where the marker was
+    assert "温和的标题" in text
+    assert "#肿瘤免疫 #小鼠实验" in text
+
+
+def test_render_text_covers_every_platform_when_none_is_named():
+    from api.render import render_text
+
+    out = AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[
+            PlatformOutput(platform=Platform.news, body="新闻正文。"),
+            PlatformOutput(platform=Platform.xhs, body="小红书正文。"),
+        ],
+    )
+
+    text = render_text(out)
+
+    assert "新闻正文。" in text and "小红书正文。" in text
+
+
+def test_review_view_shows_citations_as_carets():
+    """Markdown cannot raise a character, so a citation reads `^c1` there."""
+    out = AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[
+            PlatformOutput(platform=Platform.news, body="缩小了23% (c1)。又一句 (c1, c2)。")
+        ],
+        claim_ledger=[
+            Claim(id="c1", claim="缩小23%", source_evidence="e", qualifier="小鼠",
+                  confidence=ConfidenceLevel.high)
+        ],
+    )
+
+    text = render_markdown(out)
+
+    assert "缩小了23%^c1。" in text
+    assert "又一句^c1,c2。" in text
+    assert "(c1)" not in text

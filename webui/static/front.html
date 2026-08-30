@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScicomAgent</title>
+<meta data-i18n-doctitle="app.title.front">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/board.css">
+<link rel="stylesheet" href="/static/front.css">
+</head>
+<body class="front">
+
+<header class="topbar">
+  <a class="brand" href="/">
+    <span class="brand-name" data-i18n="app.name">白话智能体</span>
+    <span class="brand-sub" data-i18n="app.sub">ScicomAgent</span>
+  </a>
+  <nav>
+    <a class="nav-link" href="#tools" data-i18n="nav.tools">MCP 工具</a>
+    <a class="nav-link" href="#pipeline" data-i18n="nav.pipeline">工作流程</a>
+    <button class="btn btn-lang" type="button" data-lang-switch data-i18n-title="lang.label">English</button>
+    <a class="btn btn-inverse" href="/board" data-i18n="nav.board">打开审稿台</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <div class="hero-copy">
+    <h1 data-i18n="front.hero.title">把一篇论文，写成公众读得懂的稿子。</h1>
+    <p data-i18n="front.hero.lead"></p>
+    <p class="en" data-i18n="front.hero.note"></p>
+  </div>
+
+  <figure class="demo">
+    <figcaption data-i18n="front.demo.caption"></figcaption>
+    <div class="demo-ledger">
+      <span class="demo-id">c1</span>
+      <span data-i18n="front.demo.claim"></span>
+      <span class="demo-meta" data-i18n="front.demo.meta"></span>
+    </div>
+    <div class="demo-row demo-ok">
+      <span class="demo-verdict" data-i18n="front.demo.written"></span>
+      <p><span data-i18n="front.demo.writtenText"></span><sup class="demo-cite">c1</sup><span data-i18n="front.demo.stop"></span></p>
+    </div>
+    <div class="demo-row demo-no">
+      <span class="demo-verdict" data-i18n="front.demo.refused"></span>
+      <p><span class="demo-flag" data-i18n="front.demo.refusedText"></span><sup class="demo-query">?</sup></p>
+      <small data-i18n="front.demo.why"></small>
+    </div>
+  </figure>
+</section>
+
+<section class="band band-sell">
+  <p class="eyebrow" data-i18n="front.sell.eyebrow"></p>
+  <h2 class="sell-head" data-i18n="front.sell.head"></h2>
+  <div class="sell">
+    <article><h3 data-i18n="front.sell.1.title"></h3><p data-i18n="front.sell.1.body"></p></article>
+    <article><h3 data-i18n="front.sell.2.title"></h3><p data-i18n="front.sell.2.body"></p></article>
+    <article><h3 data-i18n="front.sell.3.title"></h3><p data-i18n="front.sell.3.body"></p></article>
+  </div>
+</section>
+
+<section class="band">
+  <h2 class="section-head" data-i18n="front.rules.head"></h2>
+  <div class="rules">
+    <article><h3 data-i18n="front.rules.1.title"></h3><p data-i18n="front.rules.1.body"></p></article>
+    <article><h3 data-i18n="front.rules.2.title"></h3><p data-i18n="front.rules.2.body"></p></article>
+    <article><h3 data-i18n="front.rules.3.title"></h3><p data-i18n="front.rules.3.body"></p></article>
+    <article><h3 data-i18n="front.rules.4.title"></h3><p data-i18n="front.rules.4.body"></p></article>
+  </div>
+</section>
+
+<section class="band" id="pipeline">
+  <h2 class="section-head" data-i18n="front.agents.head"></h2>
+  <p class="aside" data-i18n="front.agents.lead"></p>
+
+  <figure class="agentmap">
+    <svg viewBox="0 0 1000 280" role="img" data-i18n-aria="front.agents.alt">
+      <defs>
+        <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+
+      <!-- the provenance path: paper -> ledger -> draft -> checked -> you -->
+      <g class="flow">
+        <line x1="72" y1="80" x2="94" y2="80" marker-end="url(#tip)"/>
+        <line x1="252" y1="80" x2="398" y2="80" marker-end="url(#tip)"/>
+        <line x1="556" y1="80" x2="596" y2="80"/>
+        <line x1="632" y1="80" x2="670" y2="80" marker-end="url(#tip)"/>
+        <line x1="828" y1="80" x2="892" y2="80" marker-end="url(#tip)"/>
+        <!-- the same ledger also goes straight to the reviewer -->
+        <path d="M360 80 V 24 H 752 V 42" fill="none" marker-end="url(#tip)"/>
+        <circle cx="360" cy="80" r="3.2" stroke="none"/>
+      </g>
+
+      <!-- background: framing only, and it stops at the drafter -->
+      <g class="side">
+        <path d="M176 112 V 196" fill="none" marker-end="url(#tip)"/>
+        <path d="M252 224 H 452 V 116" fill="none" marker-end="url(#tip)"/>
+      </g>
+
+      <!-- the redraft loop -->
+      <g class="loop">
+        <path d="M752 112 V 160 H 500 V 116" fill="none" marker-end="url(#tip)"/>
+      </g>
+
+      <g class="node">
+        <rect x="100" y="48" width="152" height="64" rx="2"/>
+        <rect x="404" y="48" width="152" height="64" rx="2"/>
+        <rect x="676" y="48" width="152" height="64" rx="2"/>
+        <rect x="100" y="196" width="152" height="56" rx="2"/>
+      </g>
+
+      <g class="name" text-anchor="middle">
+        <text x="176" y="76" data-i18n="diagram.extractor"></text>
+        <text x="480" y="76" data-i18n="diagram.drafter"></text>
+        <text x="752" y="76" data-i18n="diagram.reviewer"></text>
+        <text x="176" y="220" data-i18n="diagram.researcher"></text>
+      </g>
+      <g class="role" text-anchor="middle">
+        <text x="176" y="96">extractor</text>
+        <text x="480" y="96">drafter</text>
+        <text x="752" y="96">reviewer</text>
+        <text x="176" y="240">researcher</text>
+      </g>
+
+      <g class="edge" text-anchor="middle">
+        <text x="300" y="70" data-i18n="diagram.ledger"></text>
+        <text x="613" y="62" data-i18n="diagram.draft"></text>
+        <text x="860" y="70" data-i18n="diagram.flags"></text>
+        <text x="556" y="17" data-i18n="diagram.ledgerOnly"></text>
+        <text x="352" y="216" data-i18n="diagram.background"></text>
+        <text x="626" y="176" data-i18n="diagram.redraft"></text>
+      </g>
+      <g class="edge" text-anchor="start">
+        <text x="186" y="158" data-i18n="diagram.topic"></text>
+        <text x="902" y="84" class="terminal" data-i18n="diagram.human"></text>
+      </g>
+      <g class="edge" text-anchor="end">
+        <text x="66" y="84" class="terminal" data-i18n="diagram.paper"></text>
+      </g>
+      <text x="614" y="86" text-anchor="middle" class="constraint">≠<title data-i18n="diagram.different"></title></text>
+    </svg>
+    <figcaption data-i18n="front.agents.caption"></figcaption>
+  </figure>
+
+  <ol class="agentlist">
+    <li><span class="agent-n">1</span><h3 data-i18n="diagram.extractor"></h3><p data-i18n="front.agents.1.body"></p></li>
+    <li><span class="agent-n">2</span><h3 data-i18n="diagram.researcher"></h3><p data-i18n="front.agents.2.body"></p></li>
+    <li><span class="agent-n">3</span><h3 data-i18n="diagram.drafter"></h3><p data-i18n="front.agents.3.body"></p></li>
+    <li><span class="agent-n">4</span><h3 data-i18n="diagram.reviewer"></h3><p data-i18n="front.agents.4.body"></p></li>
+  </ol>
+</section>
+
+<section class="band" id="tools">
+  <h2 class="section-head" data-i18n="front.connect.head"></h2>
+  <p class="aside" data-i18n="front.connect.lead"></p>
+
+  <div class="connect">
+    <article>
+      <h3 data-i18n="front.connect.platformTitle"></h3>
+      <p data-i18n-html="front.connect.platformBody"></p>
+      <pre><code>scicomagent__generate
+scicomagent__extract_ledger
+scicomagent__check_draft</code></pre>
+    </article>
+    <article>
+      <h3 data-i18n="front.connect.localTitle"></h3>
+      <p data-i18n="front.connect.localBody"></p>
+      <pre><code>{
+  "mcpServers": {
+    "scicomm": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp_server.server"],
+      "cwd": "/path/to/SciComAgent"
+    }
+  }
+}</code></pre>
+      <p class="connect-alt" data-i18n="front.connect.cli"></p>
+      <pre><code>claude mcp add scicomm -- uv run python -m mcp_server.server</code></pre>
+      <p class="connect-alt" data-i18n-html="front.connect.remote"></p>
+    </article>
+  </div>
+
+  <h2 class="section-head section-head-sub" data-i18n="front.tools.head"></h2>
+  <div id="tools-list" class="tools"></div>
+</section>
+
+<section class="band">
+  <h2 class="section-head" data-i18n="front.roles.head"></h2>
+  <p class="aside" data-i18n="front.roles.aside"></p>
+  <div id="roles-list" class="roles"></div>
+</section>
+
+<footer class="foot">
+  <a class="btn btn-solid" href="/board" data-i18n="front.foot.cta"></a>
+  <p data-i18n="front.foot.note"></p>
+</footer>
+
+<script src="/static/i18n.js"></script>
+<script src="/static/front.js"></script>
+</body>
+</html>

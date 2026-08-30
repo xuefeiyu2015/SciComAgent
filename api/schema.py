@@ -258,6 +258,43 @@ class CheckFlag(BaseModel):
     suggestion: str = Field(description="Concrete faithful fix.")
 
 
+class FlagSpan(BaseModel):
+    """Where one overstatement flag's quote sits inside a draft's text.
+
+    Produced by api.highlight.locate_flags so a reviewer UI can paint the exact
+    offending run of characters without re-deriving it from the quote. Offsets
+    index the ORIGINAL field text (never a normalized copy), so
+    `text[start:end]` always slices back to real draft content.
+    """
+
+    start: int = Field(description="Inclusive character offset into the field's text.")
+    end: int = Field(description="Exclusive character offset into the field's text.")
+    flag_index: int = Field(
+        description="Index of the flag this span was located for; -1 when the "
+        "span is not a flag at all (a passage located on request)."
+    )
+    field: str = Field(
+        description="Which part of the draft: 'body', 'cover_copy', or 'title:<n>'."
+    )
+
+
+class HedgedSpan(BaseModel):
+    """A sentence whose evidence is itself uncertain.
+
+    Produced by api.highlight.locate_hedged for any sentence citing a ledger
+    entry of medium/low confidence. Distinct from an OverreachFlag: the
+    sentence is sourced CORRECTLY — it is the source that is shaky — so a
+    reviewer treats it differently, and the board colours it differently.
+    """
+
+    start: int = Field(description="Inclusive character offset into the field's text.")
+    end: int = Field(description="Exclusive character offset into the field's text.")
+    field: str = Field(description="'body', 'cover_copy', or 'title:<n>'.")
+    claim_ids: list[str] = Field(
+        default_factory=list, description="The hedged ledger ids this sentence rests on."
+    )
+
+
 class Notice(BaseModel):
     """A non-draft message from the pipeline (e.g. why fetch failed).
 
