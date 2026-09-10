@@ -65,6 +65,7 @@ class NoticeCode(str, Enum):
     fetch_error = "fetch_error"  # network failure / unreachable link
     draft_error = "draft_error"  # pipeline-internal: one platform's draft crashed
     background_error = "background_error"  # background search skipped; drafts unaffected
+    glossary_error = "glossary_error"      # term lookup skipped; drafts fall back to raw terms
     style_error = "style_error"  # style distillation skipped; drafts fall back to default voice
     running = "running"          # async job accepted; result not ready yet
     unknown_session = "unknown_session"  # no job for that session_id (expired/lost)
@@ -153,6 +154,86 @@ class BackgroundMaterial(BaseModel):
     )
     relation: str = Field(
         default="", description="Why this helps frame the paper's story."
+    )
+
+
+class TermGloss(BaseModel):
+    """What one technical term MEANS, in the reader's language.
+
+    The drafter is told to strip jargon but also that it may not reach for
+    outside knowledge — so without this it cannot honestly replace "28.4 BLEU"
+    with anything, and copying the number through is its only faithful move.
+    This is the material that makes the substitution possible.
+
+    Wording help, never a fact: a gloss can never license a number, magnitude,
+    or comparison in a draft (CLAUDE.md rule #1 still binds).
+    """
+
+    term: str = Field(description="The term as it appears in the ledger (e.g. 'BLEU').")
+    claim_ids: list[str] = Field(
+        default_factory=list, description="Ledger entries the term appears in."
+    )
+    plain: str = Field(
+        description="One sentence: what it means, in the run language, no jargon."
+    )
+    analogy: str = Field(
+        default="", description="Optional everyday comparison a reader already knows."
+    )
+    source_title: str = Field(default="", description="Title of the backing source.")
+    source_url: str = Field(default="", description="URL of the backing source; '' when unsourced.")
+    kind: SourceKind = Field(
+        default=SourceKind.web, description="Which source family backed it."
+    )
+    sourced: bool = Field(
+        default=True,
+        description="False when no retrieved source backed the gloss and it "
+        "came from the model's own knowledge — surfaced to the human, not hidden.",
+    )
+
+
+class NumberAnchor(BaseModel):
+    """How to make one quantity feel real, without asserting a new one.
+
+    A ledger claim reading "8 GPUs, 3.5 days, 41.8 BLEU" is where a draft stops
+    being a story and becomes a spec sheet. The anchor gives the drafter a way
+    to say what that quantity MEANS to a person ("算力小实验室也负担得起").
+
+    Enforced in code, not just prompted: an anchor containing any numeral is
+    discarded by api.glossary, so it can never smuggle in a figure the ledger
+    does not have.
+    """
+
+    claim_id: str = Field(description="Ledger id this anchor is about.")
+    anchor: str = Field(
+        description="Framing for the quantity, in the run language. Numeral-free."
+    )
+
+
+class Glossary(BaseModel):
+    """Everything the researcher's term pass found. Drafter-only framing."""
+
+    terms: list[TermGloss] = Field(default_factory=list)
+    anchors: list[NumberAnchor] = Field(default_factory=list)
+
+
+class JargonFlag(BaseModel):
+    """A term that survived into a draft and a reader cannot parse.
+
+    Deliberately NOT an OverreachFlag: a metric name is a readability defect,
+    not an overstatement, and the board colours the two differently. Offsets
+    follow FlagSpan's contract so the span can be painted directly.
+    """
+
+    term: str = Field(description="The offending term, verbatim from the draft.")
+    category: str = Field(description="metric | notation | internal | benchmark | neuro.")
+    field: str = Field(description="'body', 'cover_copy', or 'title:<n>'.")
+    start: int = Field(description="Inclusive character offset into the field's text.")
+    end: int = Field(description="Exclusive character offset into the field's text.")
+    platform: Platform | None = Field(
+        default=None, description="Platform the flag came from."
+    )
+    suggestion: str = Field(
+        default="", description="The glossary's plain meaning, when one was found."
     )
 
 
@@ -316,6 +397,16 @@ class AgentOutput(BaseModel):
     background_materials: list[BackgroundMaterial] = Field(
         default_factory=list,
         description="External context shown to the drafter (framing only; audit trail).",
+    )
+    glossary: Glossary = Field(
+        default_factory=lambda: Glossary(),
+        description="Plain meanings and scale anchors shown to the drafter "
+        "(framing only; audit trail — includes any unsourced gloss).",
+    )
+    jargon_flags: list[JargonFlag] = Field(
+        default_factory=list,
+        description="Unreadable terms still present in the drafts. Readability, "
+        "not faithfulness — distinct from overreach_flags.",
     )
     style_profile: StyleProfile | None = Field(
         default=None,
