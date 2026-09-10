@@ -34,6 +34,8 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from api.background import gather_background
+from api.glossary import build_glossary
+from api.jargon import JargonHit, scan_draft
 from api.config_loader import resolve_setting
 from api.check import check_faithfulness
 from api.draft import draft_platform
@@ -44,6 +46,8 @@ from api.schema import (
     AgentInput,
     AgentOutput,
     BackgroundMaterial,
+    Glossary,
+    JargonFlag,
     CheckFlag,
     Claim,
     Notice,
@@ -124,10 +128,17 @@ def run(inp: AgentInput, on_event: EventSink | None = None) -> AgentOutput:
 
     notices: list[Notice] = []
     background: list[BackgroundMaterial] = []
+    glossary = Glossary()
     if inp.background:
         background = _background_or_notice(card, inp, notices)
+        # Same switch as the story background: the researcher is one agent, so
+        # it has one dial. Its two passes fail independently, though.
+        glossary = _glossary_or_notice(ledger, card, inp, notices)
     _emit(on_event, ProgressEvent(
         stage="background", message=f"{len(background)} background materials"
+    ))
+    _emit(on_event, ProgressEvent(
+        stage="glossary", message=f"{len(glossary.terms)} terms explained"
     ))
 
     # Distilled ONCE per run, then shared by every platform's draft + redrafts.
@@ -136,18 +147,24 @@ def run(inp: AgentInput, on_event: EventSink | None = None) -> AgentOutput:
         stage="style", message="voice ready" if style else "default voice"
     ))
 
-    drafted = _draft_all(inp, ledger, card, background, style, notices, on_event)
+    drafted = _draft_all(
+        inp, ledger, card, background, style, glossary, notices, on_event
+    )
 
     # Reassembled in the order the caller asked for — completion order, which
     # the thread pool decides, must never leak into the result.
     platform_outputs: list[PlatformOutput] = []
     overreach_flags: list[OverreachFlag] = []
+    jargon_flags: list[JargonFlag] = []
     for platform in inp.platforms:
         if platform not in drafted:
             continue
-        draft, flags = drafted[platform]
+        draft, flags, leftover = drafted[platform]
         platform_outputs.append(draft)
         overreach_flags.extend(_to_overreach(flag, draft.platform) for flag in flags)
+        jargon_flags.extend(
+            _to_jargon_flag(hit, draft.platform, glossary) for hit in leftover
+        )
 
     _emit(on_event, ProgressEvent(
         stage="done", message=f"{len(platform_outputs)} drafts ready"
@@ -158,6 +175,8 @@ def run(inp: AgentInput, on_event: EventSink | None = None) -> AgentOutput:
         claim_ledger=ledger,
         overreach_flags=overreach_flags,
         background_materials=background,
+        glossary=glossary,
+        jargon_flags=jargon_flags,
         style_profile=style,
         notices=notices,
     )
@@ -169,9 +188,10 @@ def _draft_all(
     card: dict,
     background: list[BackgroundMaterial],
     style: StyleProfile | None,
+    glossary: Glossary,
     notices: list[Notice],
     on_event: EventSink | None,
-) -> dict[Platform, tuple[PlatformOutput, list[CheckFlag]]]:
+) -> dict[Platform, tuple[PlatformOutput, list[CheckFlag], list[JargonHit]]]:
     """Draft every platform concurrently; one failure must not sink the others.
 
     Each platform is an independent draft/check/redraft chain over shared
@@ -179,19 +199,20 @@ def _draft_all(
     cleanly. `notices` is only ever appended to from this thread — the
     `as_completed` loop — so it needs no lock of its own.
     """
-    drafted: dict[Platform, tuple[PlatformOutput, list[CheckFlag]]] = {}
+    drafted: dict[Platform, tuple[PlatformOutput, list[CheckFlag], list[JargonHit]]] = {}
     workers = max(1, min(len(inp.platforms), _draft_workers()))
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="draft") as pool:
         futures = {
-            pool.submit(_draft_one, platform, ledger, card, inp, background, style):
-                platform
+            pool.submit(
+                _draft_one, platform, ledger, card, inp, background, style, glossary
+            ): platform
             for platform in inp.platforms
         }
         for future in as_completed(futures):
             platform = futures[future]
             try:
-                draft, flags = future.result()
+                draft, flags, leftover = future.result()
             except Exception as err:  # one platform failing must not sink the others
                 notices.append(
                     Notice(
@@ -200,7 +221,7 @@ def _draft_all(
                     )
                 )
                 continue
-            drafted[platform] = (draft, flags)
+            drafted[platform] = (draft, flags, leftover)
             _emit(on_event, ProgressEvent(
                 stage=f"draft:{_platform_name(platform)}",
                 message=f"{_platform_name(platform)} draft ready",
@@ -320,41 +341,67 @@ def _draft_one(
     inp: AgentInput,
     background: list[BackgroundMaterial],
     style: StyleProfile | None = None,
-) -> tuple[PlatformOutput, list[CheckFlag]]:
+    glossary: Glossary | None = None,
+) -> tuple[PlatformOutput, list[CheckFlag], list[JargonHit]]:
     """Draft one platform, then check + redraft until clean or out of attempts.
 
     Drafting and checking use DIFFERENT models and prompts (CLAUDE.md rule #3):
     `draft_platform` runs the drafter role, `check_faithfulness` the reviewer.
-    The angle (the card's `contribution`), the background materials and the
-    learned voice profile (all framing/voice only) go to every draft attempt,
-    including redrafts; the checker never sees any of them — it stays
-    ledger-only (plus the card for context), so a background-, angle- or
-    style-derived overstatement is flagged like any other.
+    The angle (the card's `contribution`), the background materials, the
+    glossary and the learned voice profile (all framing/wording only) go to
+    every draft attempt, including redrafts; the checker never sees any of them
+    — it stays ledger-only (plus the card for context), so a background-,
+    angle-, glossary- or style-derived overstatement is flagged like any other.
 
-    Returns the final draft plus whatever flags remain after the last check —
-    those become the human-facing overstatement flags.
+    Two independent things can send a draft back. The reviewer catches
+    overstatement; `api.jargon` catches unreadability, which the reviewer by
+    design cannot see — it passed a draft reading "28.4 BLEU" with zero flags,
+    because that draft was perfectly faithful. Both feed the SAME redraft loop,
+    so catching jargon costs no model calls beyond the cap already in place.
+
+    Returns the final draft, the flags remaining after the last check, and the
+    banned jargon still present — the human-facing flags of each kind.
     """
     angle = str(card.get("contribution", "")) if card else ""
     draft = draft_platform(
-        platform, ledger, inp, background=background, angle=angle, style=style
+        platform, ledger, inp, background=background, angle=angle, style=style,
+        glossary=glossary,
     )
     flags = check_faithfulness(draft, ledger, card, inp.language)
+    jargon = _banned_jargon(draft)
     for _ in range(MAX_REDRAFTS):
-        if not flags:
+        if not flags and not jargon:
             break
         draft = draft_platform(
-            platform, ledger, inp, fix=_flags_to_fix(flags),
-            background=background, angle=angle, style=style,
+            platform, ledger, inp, fix=_flags_to_fix(flags, jargon, glossary),
+            background=background, angle=angle, style=style, glossary=glossary,
         )
         flags = check_faithfulness(draft, ledger, card, inp.language)
-    return draft, flags
+        jargon = _banned_jargon(draft)
+    return draft, flags, jargon
 
 
-def _flags_to_fix(flags: list[CheckFlag]) -> str:
-    """Render check flags as revision notes for `draft_platform`'s `fix` arg.
+def _banned_jargon(draft: PlatformOutput) -> list[JargonHit]:
+    """The terms in a draft a reader cannot parse and the style card forbids.
 
-    One bullet per flag, in the run's language (the CheckFlag fields are already
-    written in it). Empty quote/suggestion are skipped gracefully.
+    Only the banned tier sends a draft back. A nominated acronym is a lookup
+    target, not a defect: writing `LSTM` is fine once the draft explains it,
+    and redrafting over it would punish the drafter for doing the right thing.
+    """
+    return [hit for hit in scan_draft(draft) if hit.banned]
+
+
+def _flags_to_fix(
+    flags: list[CheckFlag],
+    jargon: list[JargonHit] | None = None,
+    glossary: Glossary | None = None,
+) -> str:
+    """Render check + jargon findings as notes for `draft_platform`'s `fix` arg.
+
+    One bullet per finding, in the run's language (the CheckFlag fields are
+    already written in it). Empty quote/suggestion are skipped gracefully. A
+    jargon note carries the term's plain meaning when the glossary has one, so
+    the redraft is told what to write, not merely what to delete.
     """
     lines: list[str] = []
     for flag in flags:
@@ -367,7 +414,58 @@ def _flags_to_fix(flags: list[CheckFlag]) -> str:
         if flag.suggestion:
             parts.append(f"Fix: {flag.suggestion}")
         lines.append("- " + " ".join(parts))
+
+    meanings = {t.term: t.plain for t in (glossary.terms if glossary else [])}
+    for term in dict.fromkeys(hit.term for hit in (jargon or [])):
+        note = (
+            f'- "{term}" — a reader cannot parse this; it must not appear in the '
+            "draft. Write what it means instead."
+        )
+        if meanings.get(term):
+            note += f" It means: {meanings[term]}"
+        lines.append(note)
     return "\n".join(lines)
+
+
+def _glossary_or_notice(
+    ledger: list[Claim], card: dict, inp: AgentInput, notices: list[Notice]
+) -> Glossary:
+    """Look up the ledger's terms; a failure must NOT sink the run.
+
+    Same contract as `_background_or_notice`: the drafts are better with a
+    glossary and still valid without one, so a search or model failure degrades
+    to no glossary plus one glossary_error Notice.
+    """
+    try:
+        return build_glossary(ledger, card, inp.language)
+    except Exception as err:
+        notices.append(
+            Notice(
+                code=NoticeCode.glossary_error,
+                message=f"term lookup skipped — {err}",
+            )
+        )
+        return Glossary()
+
+
+def _to_jargon_flag(
+    hit: JargonHit, platform: Platform, glossary: Glossary
+) -> JargonFlag:
+    """Map a surviving jargon hit to the outward flag, gloss attached.
+
+    Kept apart from OverreachFlag on purpose: this is a readability defect, not
+    an overstatement, and a reviewer treats the two differently.
+    """
+    meaning = next((t.plain for t in glossary.terms if t.term == hit.term), "")
+    return JargonFlag(
+        term=hit.term,
+        category=hit.category,
+        field=hit.field,
+        start=hit.start,
+        end=hit.end,
+        platform=platform,
+        suggestion=meaning,
+    )
 
 
 def _to_overreach(flag: CheckFlag, platform: Platform) -> OverreachFlag:

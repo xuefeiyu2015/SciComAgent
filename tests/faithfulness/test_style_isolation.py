@@ -130,7 +130,8 @@ def test_checker_never_receives_the_profile_and_still_flags(monkeypatch):
 
     seen_style = []
 
-    def drafter(platform, ledger, inp, fix=None, background=None, angle=None, style=None):
+    def drafter(platform, ledger, inp, fix=None, background=None, angle=None,
+                style=None, glossary=None):
         seen_style.append(style)
         # the drafter borrows the voice AND (wrongly) an example-article fact
         return PlatformOutput(platform=platform,
