@@ -1,0 +1,104 @@
+# Jargon lexicon — terms a curious non-expert cannot read.
+#
+# Read by api/jargon.py. Two consumers, one list:
+#   - the glossary pass looks these up so the drafter learns what they MEAN;
+#   - the post-draft check flags any that survived into a draft.
+#
+# Everything here is BANNED in a draft: api/prompts/draft.md already forbids
+# metric names, complexity notation and model internals outright, so their
+# presence is a defect rather than a judgement call. Terms a reader merely
+# might not know (unglossed acronyms) are picked up by the heuristic in
+# api/jargon.py instead — those are lookup targets, not defects.
+#
+# Matching is CASE-SENSITIVE and token-bounded: `blue` is a colour, `BLEU` is a
+# metric, and `BLEUPRINT` is neither. Extend by hand — no code change needed.
+
+metric:
+  - BLEU
+  - ROUGE
+  - METEOR
+  - chrF
+  - F1
+  - "micro-F1"
+  - "macro-F1"
+  - ROC-AUC
+  - AUROC
+  - AUPRC
+  - mAP
+  - IoU
+  - perplexity
+  - PPL
+  - WER
+  - CER
+  - MRR
+  - NDCG
+  - RMSE
+  - MAE
+  - "R²"
+  - "Cohen's d"
+  - "d-prime"
+  - SNR
+
+notation:
+  - d_k
+  - d_v
+  - d_model
+  - dₖ
+  - "n²"
+  - argmax
+  - argmin
+
+internal:
+  - softmax
+  - logits
+  - logit
+  - "positional encoding"
+  - "layer normalization"
+  - "layer norm"
+  - LayerNorm
+  - "residual connection"
+  - "feed-forward network"
+  - "multi-head attention"
+  - "self-attention"
+  - "attention head"
+  - "dot-product attention"
+  - "scaled dot-product"
+  - backpropagation
+  - "cross-entropy"
+  - "label smoothing"
+  - "beam search"
+  - "dropout"
+  - "hidden state"
+  - "latent space"
+
+benchmark:
+  - WMT
+  - WSJ
+  - GLUE
+  - SuperGLUE
+  - SQuAD
+  - ImageNet
+  - COCO
+  - CIFAR
+  - MNIST
+  - "Penn Treebank"
+  - LibriSpeech
+
+# Neuroscience — this repo's operator works in the field and the lexicon is the
+# one part of the detector that does not generalize on its own.
+neuro:
+  - PSTH
+  - LFP
+  - "ΔF/F"
+  - dF/F
+  - AAV
+  - fMRI
+  - BOLD
+  - EEG
+  - MEG
+  - ISI
+  - PCA
+  - TDR
+  - LFADS
+  - "spike raster"
+  - "peri-stimulus"
