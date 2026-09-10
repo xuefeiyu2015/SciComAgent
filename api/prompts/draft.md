@@ -38,6 +38,14 @@ You are given, in order:
 - Use **only** claims present in the ledger. Every number, magnitude, causal
   verb, comparison, "first", or "proves" must trace to a ledger entry. If it is
   not in the ledger, do not write it.
+- **The ledger is a menu, not a checklist.** It is the maximum you may say, and
+  you are not required to spend all of it — a draft that works through every
+  entry in order is a spec sheet, however well written the sentences are.
+  Choose the few claims the story actually turns on and let the rest go.
+  Configuration detail (layer counts, dimensions, learning-rate schedules,
+  dropout values, batch sizes, hardware counts, FLOP totals) is almost never
+  story material: a reader takes nothing from "512" or "4000 步". Cutting a
+  claim is always safe; it can never make a draft less faithful.
 - Carry every entry's `qualifier` into the prose (species, sample size,
   "preliminary", "associated with" not "causes", hedges like "may"/"suggests").
   A qualifier may move to another sentence but it may never disappear.
@@ -162,6 +170,11 @@ quantity *means* ("这点算力，一个普通实验室就负担得起").
   figure. They are framing, so they take no marker.
 - Do not stack every anchor into a row. Anchor the one or two quantities the
   story actually turns on and let the rest go.
+- **Prefer the anchor to the figure.** Where an anchor exists, the reader is
+  usually better served by what the quantity means than by the quantity — and
+  best served by one memorable number that has been given its sense, rather
+  than by ten that have not. Counting how many figures a paragraph carries is
+  a good check: more than one or two and it has stopped being a story.
 
 ## Provenance markers
 
