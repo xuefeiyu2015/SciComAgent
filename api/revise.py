@@ -26,9 +26,8 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from api.config_loader import get_model
-from api.draft import red_lines
+from api.draft import dials, red_lines
 from api.jsonio import invoke_json
-from api.lang import language_label
 from api.schema import AgentInput, Claim, Platform
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "revise.md"
@@ -97,18 +96,10 @@ def revise_sentence(
 def _system_prompt(inp: AgentInput) -> str:
     """Base revise prompt + the red lines + this run's dials."""
     return "\n\n".join(
-        [_prompt(), "# Red lines\n\n" + red_lines(), _dials(inp)]
-    )
-
-
-def _dials(inp: AgentInput) -> str:
-    """The run's parameters, so the rewrite matches the prose around it."""
-    return (
-        "# Dials (parameters for this draft)\n\n"
-        f"- Language: write entirely in {language_label(inp.language)}.\n"
-        f"- Audience: {inp.audience}.\n"
-        f"- Liveliness: {inp.liveliness}/5 "
-        "(1 = sober and plain, 5 = very lively) — tone only, never the facts."
+        # `dials` is imported, not copied: this block used to be duplicated
+        # here verbatim, and a rewrite drifting from the draft around it is
+        # exactly the drift that duplication causes. Same reason as red_lines.
+        [_prompt(), "# Red lines\n\n" + red_lines(), dials(inp)]
     )
 
 

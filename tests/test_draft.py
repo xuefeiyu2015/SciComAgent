@@ -11,15 +11,24 @@ when present carrying the fact boundary in the SYSTEM prompt only.
 
 from __future__ import annotations
 
-from api.draft import _filter_markers, _human_payload, _system_prompt, _voice_layer
+from api.draft import (
+    _filter_markers,
+    _human_payload,
+    _system_prompt,
+    _voice_layer,
+    dials,
+)
 from api.schema import (
     AgentInput,
     BackgroundMaterial,
     Claim,
+    Glossary,
+    NumberAnchor,
     Platform,
     SourceKind,
     SourceType,
     StyleProfile,
+    TermGloss,
 )
 
 
@@ -224,3 +233,93 @@ def test_every_ledger_claim_may_keep_its_citation(monkeypatch):
     assert "(c1)" in out.body   # high confidence keeps its citation
     assert "(c2)" in out.body   # so does low
     assert "c9" not in out.body  # an id that is not in the ledger never survives
+
+
+# --- glossary: the material that makes stripping jargon possible --------------
+
+_GLOSSARY = Glossary(
+    terms=[
+        TermGloss(
+            term="BLEU",
+            claim_ids=["c1"],
+            plain="给机器翻译自动打分的指标。",
+            analogy="像自动阅卷老师。",
+            source_url="https://en.wikipedia.org/wiki/BLEU",
+            kind=SourceKind.web,
+            sourced=True,
+        )
+    ],
+    anchors=[NumberAnchor(claim_id="c1", anchor="这点算力，普通实验室就负担得起。")],
+)
+
+
+def test_payload_without_glossary_is_unchanged():
+    """Absent a glossary the payload must be byte-identical to before."""
+    assert _human_payload(_LEDGER, None) == _human_payload(_LEDGER, None, None, None, None)
+    assert _human_payload(_LEDGER, None) == _human_payload(
+        _LEDGER, None, None, None, Glossary()
+    )
+    assert "GLOSSARY" not in _human_payload(_LEDGER, None)
+
+
+def test_payload_glossary_block_is_labeled_wording_help_not_facts():
+    payload = _human_payload(_LEDGER, None, None, None, _GLOSSARY)
+
+    assert "GLOSSARY" in payload
+    assert "BLEU" in payload
+    assert "NOT facts" in payload
+
+
+def test_payload_carries_the_scale_anchors():
+    payload = _human_payload(_LEDGER, None, None, None, _GLOSSARY)
+
+    assert "SCALE ANCHORS" in payload
+    assert "普通实验室就负担得起" in payload
+
+
+def test_payload_anchors_absent_when_there_are_none():
+    only_terms = Glossary(terms=_GLOSSARY.terms)
+
+    assert "SCALE ANCHORS" not in _human_payload(_LEDGER, None, None, None, only_terms)
+
+
+def test_payload_order_ledger_then_glossary_then_fix():
+    payload = _human_payload(_LEDGER, "- fix this", [_MATERIAL], "angle", _GLOSSARY)
+
+    assert payload.index("Claim ledger") < payload.index("BACKGROUND MATERIALS")
+    assert payload.index("BACKGROUND MATERIALS") < payload.index("GLOSSARY")
+    assert payload.index("GLOSSARY") < payload.index("Revision notes")
+
+
+# --- liveliness: the dial has to buy more than emoji --------------------------
+
+def _input(liveliness: int) -> AgentInput:
+    return AgentInput(
+        source_type=SourceType.url, source="https://example.org/p", liveliness=liveliness
+    )
+
+
+def test_liveliness_extremes_render_different_instructions():
+    """The whole bug: 1 and 5 used to differ by a single digit."""
+    assert dials(_input(1)) != dials(_input(5))
+
+
+def test_high_liveliness_asks_for_a_narrative():
+    text = dials(_input(5))
+
+    assert "narrative" in text.lower()
+
+
+def test_low_liveliness_does_not_ask_for_a_narrative():
+    assert "narrative" not in dials(_input(1)).lower()
+
+
+def test_every_liveliness_value_still_states_the_fact_boundary():
+    for value in range(1, 6):
+        assert "never the facts" in dials(_input(value))
+
+
+def test_dials_still_carry_language_and_audience():
+    text = dials(_input(3))
+
+    assert "Language:" in text and "Audience:" in text
