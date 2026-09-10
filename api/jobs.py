@@ -75,8 +75,11 @@ _JOBS: dict[str, "_JobRecord"] = {}
 _LOCK = threading.Lock()
 _POOL = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="scicomm-job")
 
-# Fixed pipeline stages before drafting starts: fetch+ledger, background, style.
-_PRELUDE_STEPS = 3
+# Fixed pipeline stages before drafting starts: fetch+ledger, background,
+# glossary, style. Kept in step with the ProgressEvents api.pipeline.run emits —
+# steps_done is clamped to steps_total, so an uncounted stage would silently eat
+# a platform's share of the progress bar.
+_PRELUDE_STEPS = 4
 
 
 @dataclass

@@ -243,3 +243,24 @@ def test_notice_is_recorded_on_the_running_handle(monkeypatch):
     finally:
         release.set()
         jobs.wait(session_id, 5)
+
+
+def test_prelude_steps_matches_the_stages_the_pipeline_emits():
+    """The progress bar tops out early if these drift apart.
+
+    api.pipeline.run emits one ProgressEvent per prelude stage before drafting
+    starts; steps_done is clamped to steps_total, so an uncounted stage silently
+    eats a platform's share of the bar.
+    """
+    import inspect
+
+    from api import pipeline
+
+    source = inspect.getsource(pipeline.run)
+    emitted = {
+        stage
+        for stage in ("ledger", "background", "glossary", "style")
+        if f'stage="{stage}"' in source
+    }
+
+    assert len(emitted) == jobs._PRELUDE_STEPS

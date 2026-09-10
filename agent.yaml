@@ -20,8 +20,8 @@ tools:
       platforms:  { required: false, default: [news, xhs], allowed: [news, wechat, xhs], description: "`wechat` is an ALIAS for `xhs` — they share one style card and are drafted once; the output is labelled `xhs`" }
       language:   { required: false, default: zh, allowed: [zh, en] }
       audience:   { required: false, default: general_public }
-      liveliness: { required: false, default: 3, min: 1, max: 5 }
-      background: { required: false, default: true, description: "Gather external background materials (web/arXiv/scholarly APIs) as framing context for the drafts" }
+      liveliness: { required: false, default: 3, min: 1, max: 5, description: "Tone AND shape. 1 = sober and plain; 4-5 additionally ask for a narrative rather than a list of findings. Never the facts" }
+      background: { required: false, default: true, description: "Run the researcher: external background materials for story framing, AND a glossary of what the paper's terms and quantities mean. Framing and wording only, never facts" }
       wait_seconds: { required: false, default: 10, min: 0, max: 25, description: "How long to hold the call open for a fast run before returning a session_id instead. Clamped server-side" }
     # Return contract (see AgentOutput in api/schema.py). Never auto-published.
     output:
@@ -29,6 +29,8 @@ tools:
       claim_ledger:         "Source-grounded claims with evidence + qualifier"
       overreach_flags:      "Statements that over-claim vs. the ledger (for a human)"
       background_materials: "External context shown to the drafter (framing only, never facts; audit trail)"
+      glossary:             "Plain-language meanings for the paper's jargon, plus scale anchors for its quantities (wording only, never facts; audit trail — an unsourced entry is marked)"
+      jargon_flags:         "Terms a reader cannot parse that are still in a draft. Readability, not faithfulness — distinct from overreach_flags"
       style_profile:        "Learned voice distilled from api/styles/examples/ and applied to the drafts (voice & structure only, never facts; audit trail). Absent when the folder is empty"
       session_id:           "Async job handle; present when status=running, and echoed on the partial and final results"
       status:               { allowed: [ok, needs_review, failed, running], description: "Coarse outcome; running = still drafting, poll job_status" }
