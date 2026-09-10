@@ -283,6 +283,19 @@ class StyleProfile(BaseModel):
 
 # --- output -----------------------------------------------------------------
 
+class ClaimKind(str, Enum):
+    """Whether a claim is what the study FOUND or how it was CONDUCTED.
+
+    Both are equally sourced and equally true; they differ in what a reader can
+    do with them. A finding is story material. A descriptive statistic about
+    the experiment — subjects, sessions, trials, block durations — describes
+    the apparatus, and a paragraph of them reads as a methods section.
+    """
+
+    finding = "finding"  # what the study showed
+    method = "method"    # how it was run: counts, durations, descriptive stats
+
+
 class Claim(BaseModel):
     """One claim-ledger entry: a statement bound to its source and qualifier."""
 
@@ -298,6 +311,13 @@ class Claim(BaseModel):
     confidence: ConfidenceLevel = Field(
         default=ConfidenceLevel.low,
         description="How strongly the source card supports the claim.",
+    )
+    kind: ClaimKind = Field(
+        default=ClaimKind.finding,
+        description="Finding vs. descriptive detail of how the study was run. "
+        "A drafting hint only — it never affects whether the claim is usable, "
+        "and it is not shown to the reviewer. Defaults to `finding` so an "
+        "untagged claim is never silently suppressed.",
     )
 
 
@@ -376,6 +396,24 @@ class HedgedSpan(BaseModel):
     )
 
 
+class DensityFlag(BaseModel):
+    """A paragraph carrying so many figures it reads as a methods section.
+
+    A third readability problem, distinct from both siblings: the prose is
+    faithful (unlike an OverreachFlag) and every word is readable (unlike a
+    JargonFlag) — there is simply too much arithmetic in one place for anyone
+    to follow.
+    """
+
+    field: str = Field(description="Which part of the draft; currently always 'body'.")
+    index: int = Field(description="Zero-based paragraph index within that field.")
+    figures: int = Field(description="How many figures the paragraph carries.")
+    excerpt: str = Field(default="", description="Start of the paragraph, for locating it.")
+    platform: Platform | None = Field(
+        default=None, description="Platform the flag came from."
+    )
+
+
 class Notice(BaseModel):
     """A non-draft message from the pipeline (e.g. why fetch failed).
 
@@ -407,6 +445,11 @@ class AgentOutput(BaseModel):
         default_factory=list,
         description="Unreadable terms still present in the drafts. Readability, "
         "not faithfulness — distinct from overreach_flags.",
+    )
+    density_flags: list[DensityFlag] = Field(
+        default_factory=list,
+        description="Paragraphs still reciting figures like a methods section. "
+        "Readability, not faithfulness.",
     )
     style_profile: StyleProfile | None = Field(
         default=None,

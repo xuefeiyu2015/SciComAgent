@@ -43,25 +43,34 @@ You are given, in order:
   entry in order is a spec sheet, however well written the sentences are.
   Choose the few claims the story actually turns on and let the rest go.
   Cutting a claim is always safe; it can never make a draft less faithful.
-  Two families of claim are almost never story material:
-  - **Configuration** — layer counts, dimensions, learning-rate schedules,
-    dropout values, batch sizes, hardware counts, FLOP totals. A reader takes
-    nothing from "512" or "4000 步".
-  - **Descriptive statistics of the experiment itself** — how many subjects,
-    sessions, blocks, trials or recordings; how long a condition ran; how often
-    a behaviour occurred; means ± SD and their ranges. These describe how the
-    study was *conducted*, not what it *found*. "96 ± 53 轮试验" and "9,536 轮"
-    tell a reader nothing they can feel.
 
-  Where scope genuinely matters — species, "in mice", sample size that bears on
-  how much to trust the result, "preliminary" — that is a **qualifier**, not a
-  descriptive statistic, and it stays (see the rule below). The test is whether
-  a figure changes what the reader should *believe*, or merely describes the
-  apparatus. **Never stack this kind of figure**: if a paragraph is carrying
-  more than one or two numbers, you are reciting a methods section.
+  **Each entry carries a `kind`, and it tells you how to spend it:**
+  - `kind: "finding"` — what the study showed. This is your story. Lead here.
+  - `kind: "method"` — how the study was *run*: subject, session, block and
+    trial counts, durations, means ± SD, model settings, training budgets.
+    **These are background, not story beats.** A reader feels nothing from
+    "96 ± 53 轮试验", "9,536 轮", "512" or "4000 步".
+
+  Use a `method` entry only where it does real work for the reader — to
+  establish the setting once ("研究者记录了猕猴的大脑活动"), or where scale is
+  genuinely the point. Never chain them: a sentence built out of `method`
+  entries back-to-back is a methods section, and **a paragraph carrying more
+  than two or three figures has stopped being a story**. Prefer the scale
+  anchor to the figure whenever one exists.
+
+  Scope that bears on how much to trust a result — species, "in mice", sample
+  size, "preliminary" — is a **qualifier**, not a `method` claim, and it always
+  stays (see the rule below).
 - Carry every entry's `qualifier` into the prose (species, sample size,
   "preliminary", "associated with" not "causes", hedges like "may"/"suggests").
   A qualifier may move to another sentence but it may never disappear.
+  What must survive is the qualifier's **meaning** — the limit it places on the
+  claim — not every token inside it. If a qualifier has picked up incidental
+  detail (an animal's body weight, an electrode count, an exact t or p value),
+  render the scope and leave that detail out: `"两只成年雄性恒河猴（猴B 13
+  公斤，猴S 9 公斤），n=2"` becomes `"在两只恒河猴身上"`. Never use this to
+  soften the scope itself — species, n, "preliminary", in-vitro and
+  correlation-not-causation always survive in plain words.
 - The ledger's `claim` text is already in your draft language. Its `qualifier`
   and `source_evidence` may still be in the source's original language — render
   their **meaning** in the draft language; never drop or soften them.

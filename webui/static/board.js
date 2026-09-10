@@ -979,6 +979,21 @@ function renderApparatus() {
     rail.append(section);
   }
 
+  const dense = result.density_flags || [];
+  if (dense.length) {
+    const section = el('section', 'jargon');
+    section.innerHTML = `<h2>${esc(t('ledger.density'))}</h2>
+      <p class="note">${esc(t('ledger.densityNote'))}</p>`;
+    dense.forEach((flag) => {
+      const node = el('div', 'gloss');
+      node.innerHTML = `<span class="gloss-term">${esc(t('ledger.densityItem', {
+        n: flag.index + 1, count: flag.figures,
+      }))}</span><span class="gloss-plain">${esc(flag.excerpt)}</span>`;
+      section.append(node);
+    });
+    rail.append(section);
+  }
+
   const jargon = result.jargon_flags || [];
   if (jargon.length) {
     const section = el('section', 'jargon');

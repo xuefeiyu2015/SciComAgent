@@ -23,7 +23,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from api.config_loader import get_model
 from api.jsonio import invoke_json
 from api.lang import language_label
-from api.schema import Claim, ConfidenceLevel, Language
+from api.schema import Claim, ClaimKind, ConfidenceLevel, Language
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "ledger.md"
 
@@ -95,9 +95,23 @@ def _parse_ledger(data: dict[str, Any]) -> list[Claim]:
                 source_evidence=source_evidence,
                 qualifier=str(entry.get("qualifier", "")),
                 confidence=_confidence(entry.get("confidence")),
+                kind=_kind(entry.get("kind")),
             )
         )
     return claims
+
+
+def _kind(value: Any) -> ClaimKind:
+    """Coerce a model-supplied kind to the enum, defaulting to `finding`.
+
+    `finding` is the safe default: it leaves the claim fully usable as story
+    material. Defaulting to `method` would quietly drop real results from every
+    draft the moment the extractor omitted the field.
+    """
+    try:
+        return ClaimKind(str(value).strip().lower())
+    except ValueError:
+        return ClaimKind.finding
 
 
 def _confidence(value: Any) -> ConfidenceLevel:

@@ -29,6 +29,7 @@ from api.schema import (
     AgentOutput,
     BackgroundMaterial,
     Claim,
+    DensityFlag,
     Glossary,
     JargonFlag,
     Notice,
@@ -86,6 +87,11 @@ def render_markdown(
             parts.append(_render_flags(_flags_for(out.overreach_flags, draft.platform)))
             parts.append(
                 _render_jargon(_jargon_for(out.jargon_flags, draft.platform))
+            )
+            parts.append(
+                _render_density(
+                    [f for f in out.density_flags if f.platform == draft.platform]
+                )
             )
 
     if not drafts and include_provenance:
@@ -206,6 +212,18 @@ def _render_jargon(flags: list[JargonFlag]) -> str:
     for flag in flags:
         fix = f" → {flag.suggestion.strip()}" if flag.suggestion.strip() else ""
         lines.append(f"- `{flag.term}` ({flag.category}, {flag.field}){fix}")
+    return "\n".join(lines)
+
+
+def _render_density(flags: list[DensityFlag]) -> str:
+    """Paragraphs still reciting figures. Readability, like the jargon block."""
+    if not flags:
+        return ""
+    lines = ["**🔢 数字过密 / Reciting figures:**"]
+    for flag in flags:
+        lines.append(
+            f"- 第 {flag.index + 1} 段：{flag.figures} 个数字 —— 「{flag.excerpt}…」"
+        )
     return "\n".join(lines)
 
 

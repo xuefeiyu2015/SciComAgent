@@ -35,6 +35,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from api.background import gather_background
 from api.glossary import build_glossary, lookup_terms
+from api.density import DenseParagraph, find_dense
 from api.jargon import JargonHit, scan_draft
 from api.config_loader import resolve_setting
 from api.check import check_faithfulness
@@ -46,6 +47,7 @@ from api.schema import (
     AgentInput,
     AgentOutput,
     BackgroundMaterial,
+    DensityFlag,
     Glossary,
     JargonFlag,
     CheckFlag,
@@ -156,15 +158,17 @@ def run(inp: AgentInput, on_event: EventSink | None = None) -> AgentOutput:
     platform_outputs: list[PlatformOutput] = []
     overreach_flags: list[OverreachFlag] = []
     jargon_flags: list[JargonFlag] = []
+    density_flags: list[DensityFlag] = []
     for platform in inp.platforms:
         if platform not in drafted:
             continue
-        draft, flags, leftover = drafted[platform]
+        draft, flags, leftover, dense = drafted[platform]
         platform_outputs.append(draft)
         overreach_flags.extend(_to_overreach(flag, draft.platform) for flag in flags)
         jargon_flags.extend(
             _to_jargon_flag(hit, draft.platform, glossary) for hit in leftover
         )
+        density_flags.extend(_to_density_flag(p, draft.platform) for p in dense)
 
     _emit(on_event, ProgressEvent(
         stage="done", message=f"{len(platform_outputs)} drafts ready"
@@ -177,6 +181,7 @@ def run(inp: AgentInput, on_event: EventSink | None = None) -> AgentOutput:
         background_materials=background,
         glossary=glossary,
         jargon_flags=jargon_flags,
+        density_flags=density_flags,
         style_profile=style,
         notices=notices,
     )
@@ -191,7 +196,8 @@ def _draft_all(
     glossary: Glossary,
     notices: list[Notice],
     on_event: EventSink | None,
-) -> dict[Platform, tuple[PlatformOutput, list[CheckFlag], list[JargonHit]]]:
+) -> dict[Platform, tuple[PlatformOutput, list[CheckFlag], list[JargonHit],
+           list[DenseParagraph]]]:
     """Draft every platform concurrently; one failure must not sink the others.
 
     Each platform is an independent draft/check/redraft chain over shared
@@ -199,7 +205,10 @@ def _draft_all(
     cleanly. `notices` is only ever appended to from this thread — the
     `as_completed` loop — so it needs no lock of its own.
     """
-    drafted: dict[Platform, tuple[PlatformOutput, list[CheckFlag], list[JargonHit]]] = {}
+    drafted: dict[
+        Platform,
+        tuple[PlatformOutput, list[CheckFlag], list[JargonHit], list[DenseParagraph]],
+    ] = {}
     workers = max(1, min(len(inp.platforms), _draft_workers()))
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="draft") as pool:
@@ -212,7 +221,7 @@ def _draft_all(
         for future in as_completed(futures):
             platform = futures[future]
             try:
-                draft, flags, leftover = future.result()
+                draft, flags, leftover, dense = future.result()
             except Exception as err:  # one platform failing must not sink the others
                 notices.append(
                     Notice(
@@ -221,7 +230,7 @@ def _draft_all(
                     )
                 )
                 continue
-            drafted[platform] = (draft, flags, leftover)
+            drafted[platform] = (draft, flags, leftover, dense)
             _emit(on_event, ProgressEvent(
                 stage=f"draft:{_platform_name(platform)}",
                 message=f"{_platform_name(platform)} draft ready",
@@ -342,7 +351,7 @@ def _draft_one(
     background: list[BackgroundMaterial],
     style: StyleProfile | None = None,
     glossary: Glossary | None = None,
-) -> tuple[PlatformOutput, list[CheckFlag], list[JargonHit]]:
+) -> tuple[PlatformOutput, list[CheckFlag], list[JargonHit], list[DenseParagraph]]:
     """Draft one platform, then check + redraft until clean or out of attempts.
 
     Drafting and checking use DIFFERENT models and prompts (CLAUDE.md rule #3):
@@ -369,16 +378,18 @@ def _draft_one(
     )
     flags = check_faithfulness(draft, ledger, card, inp.language)
     jargon = _banned_jargon(draft)
+    dense = find_dense(draft)
     for _ in range(MAX_REDRAFTS):
-        if not flags and not jargon:
+        if not flags and not jargon and not dense:
             break
         draft = draft_platform(
-            platform, ledger, inp, fix=_flags_to_fix(flags, jargon, glossary),
+            platform, ledger, inp, fix=_flags_to_fix(flags, jargon, glossary, dense),
             background=background, angle=angle, style=style, glossary=glossary,
         )
         flags = check_faithfulness(draft, ledger, card, inp.language)
         jargon = _banned_jargon(draft)
-    return draft, flags, jargon
+        dense = find_dense(draft)
+    return draft, flags, jargon, dense
 
 
 def _banned_jargon(draft: PlatformOutput) -> list[JargonHit]:
@@ -395,6 +406,7 @@ def _flags_to_fix(
     flags: list[CheckFlag],
     jargon: list[JargonHit] | None = None,
     glossary: Glossary | None = None,
+    dense: list[DenseParagraph] | None = None,
 ) -> str:
     """Render check + jargon findings as notes for `draft_platform`'s `fix` arg.
 
@@ -424,6 +436,13 @@ def _flags_to_fix(
         if meanings.get(term):
             note += f" It means: {meanings[term]}"
         lines.append(note)
+
+    for paragraph in dense or []:
+        lines.append(
+            f"- 第 {paragraph.index + 1} 段带了 {paragraph.figures} 个数字"
+            f"（「{paragraph.excerpt}…」）—— 这读起来像方法学章节。"
+            "只留下故事真正需要的那一两个数字，其余用尺度说明代替或直接删掉。"
+        )
     return "\n".join(lines)
 
 
@@ -480,6 +499,17 @@ def _to_jargon_flag(
         end=hit.end,
         platform=platform,
         suggestion=meaning,
+    )
+
+
+def _to_density_flag(paragraph: DenseParagraph, platform: Platform) -> DensityFlag:
+    """Map a dense paragraph to the outward flag."""
+    return DensityFlag(
+        field=paragraph.field,
+        index=paragraph.index,
+        figures=paragraph.figures,
+        excerpt=paragraph.excerpt,
+        platform=platform,
     )
 
 

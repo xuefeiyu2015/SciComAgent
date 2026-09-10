@@ -587,3 +587,39 @@ def test_no_notice_when_there_was_nothing_to_look_up(monkeypatch):
     out = run(_input(platforms=[Platform.news], background=True))
 
     assert NoticeCode.glossary_error not in [n.code for n in out.notices]
+
+
+# --- density gate -------------------------------------------------------------
+
+_DENSE = "猴子在100轮里，用8到9个阶段学会了5到16个模板，成功率65%和67%。"
+
+
+def test_a_paragraph_reciting_figures_triggers_a_redraft(monkeypatch):
+    calls = _stub_steps(monkeypatch, body_seq=[_DENSE, "它们学得非常快。"])
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert len(calls) == 2
+    assert out.density_flags == []
+
+
+def test_surviving_density_surfaces_as_its_own_flag(monkeypatch):
+    """Not overreach and not jargon — a third, distinct readability problem."""
+    _stub_steps(monkeypatch, body_seq=[_DENSE] * 6)
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert out.overreach_flags == []
+    assert out.jargon_flags == []
+    assert len(out.density_flags) == 1
+    assert out.density_flags[0].platform == Platform.news
+    assert out.density_flags[0].figures > 3
+
+
+def test_a_normal_paragraph_does_not_trigger_a_redraft(monkeypatch):
+    calls = _stub_steps(monkeypatch, body_seq=["它们在几轮尝试后就学会了任务。"])
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert len(calls) == 1
+    assert out.density_flags == []

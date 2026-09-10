@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage
 
 from api import ledger
 from api.ledger import _parse_ledger, build_ledger
-from api.schema import Claim, ConfidenceLevel, Language
+from api.schema import Claim, ClaimKind, ConfidenceLevel, Language
 
 # Two entries: one well-sourced, one with empty evidence (must be dropped).
 _LEDGER_JSON = """{"claims": [
@@ -93,3 +93,33 @@ def test_parse_defaults_invalid_confidence_to_low():
 
 def test_parse_empty_ledger():
     assert _parse_ledger({"claims": []}) == []
+
+
+# --- claim kind: what the study FOUND vs how it was CONDUCTED -----------------
+
+def test_kind_is_parsed_from_the_model():
+    claims = _parse_ledger({"claims": [
+        {"claim": "模板在 LPFC 中被表征", "source_evidence": "p3", "kind": "finding"},
+        {"claim": "两只恒河猴，每期 5–16 个模板", "source_evidence": "p4", "kind": "method"},
+    ]})
+
+    assert [c.kind for c in claims] == [ClaimKind.finding, ClaimKind.method]
+
+
+def test_kind_defaults_to_finding_when_absent():
+    """The safe default: an untagged claim stays usable as story material.
+
+    Defaulting to `method` would silently suppress real findings from every
+    draft the moment the extractor forgot the field.
+    """
+    claims = _parse_ledger({"claims": [{"claim": "x", "source_evidence": "p3"}]})
+
+    assert claims[0].kind is ClaimKind.finding
+
+
+def test_unknown_kind_falls_back_to_finding():
+    claims = _parse_ledger({"claims": [
+        {"claim": "x", "source_evidence": "p3", "kind": "nonsense"}
+    ]})
+
+    assert claims[0].kind is ClaimKind.finding
