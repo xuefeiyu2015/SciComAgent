@@ -12,13 +12,17 @@ from api.schema import (
     BackgroundMaterial,
     Claim,
     ConfidenceLevel,
+    Glossary,
+    JargonFlag,
     Notice,
     NoticeCode,
+    NumberAnchor,
     OverreachFlag,
     Platform,
     PlatformOutput,
     Status,
     StyleProfile,
+    TermGloss,
 )
 
 _STYLE = StyleProfile(
@@ -227,3 +231,58 @@ def test_review_view_shows_citations_as_carets():
     assert "缩小了23%^c1。" in text
     assert "又一句^c1,c2。" in text
     assert "(c1)" not in text
+
+
+# --- glossary and jargon surfacing --------------------------------------------
+
+def test_glossary_section_marks_an_unsourced_gloss():
+    """The audit that matters: which meanings had no source behind them."""
+    out = AgentOutput(
+        platform_outputs=[PlatformOutput(platform=Platform.news, body="b")],
+        glossary=Glossary(
+            terms=[
+                TermGloss(term="BLEU", plain="翻译的自动评分。",
+                          source_title="Wikipedia",
+                          source_url="https://en.wikipedia.org/wiki/BLEU", sourced=True),
+                TermGloss(term="d_k", plain="一个内部维度。", sourced=False),
+            ]
+        ),
+    )
+
+    md = render_markdown(out)
+
+    assert "术语与尺度" in md
+    assert "https://en.wikipedia.org/wiki/BLEU" in md
+    assert "unsourced" in md
+    assert md.index("BLEU") < md.index("unsourced")  # the mark lands on d_k
+
+
+def test_scale_anchors_are_rendered():
+    out = AgentOutput(
+        platform_outputs=[PlatformOutput(platform=Platform.news, body="b")],
+        glossary=Glossary(anchors=[NumberAnchor(claim_id="c5", anchor="小实验室也负担得起。")]),
+    )
+
+    assert "小实验室也负担得起" in render_markdown(out)
+
+
+def test_jargon_flags_render_apart_from_overstatement():
+    out = AgentOutput(
+        platform_outputs=[PlatformOutput(platform=Platform.news, body="28.4 BLEU")],
+        jargon_flags=[
+            JargonFlag(term="BLEU", category="metric", field="body", start=5, end=9,
+                       platform=Platform.news, suggestion="翻译的自动评分。")
+        ],
+    )
+
+    md = render_markdown(out)
+
+    assert "Unexplained jargon" in md
+    assert "翻译的自动评分" in md
+    assert "无过度声明" in md  # still a clean bill on faithfulness
+
+
+def test_no_glossary_renders_no_glossary_section():
+    out = AgentOutput(platform_outputs=[PlatformOutput(platform=Platform.news, body="b")])
+
+    assert "术语与尺度" not in render_markdown(out)

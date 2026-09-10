@@ -29,6 +29,8 @@ from api.schema import (
     AgentOutput,
     BackgroundMaterial,
     Claim,
+    Glossary,
+    JargonFlag,
     Notice,
     OverreachFlag,
     Platform,
@@ -82,6 +84,9 @@ def render_markdown(
         parts.append(_render_draft(draft))
         if include_provenance:
             parts.append(_render_flags(_flags_for(out.overreach_flags, draft.platform)))
+            parts.append(
+                _render_jargon(_jargon_for(out.jargon_flags, draft.platform))
+            )
 
     if not drafts and include_provenance:
         parts.append("_(this result carries no platform drafts)_")
@@ -94,6 +99,8 @@ def render_markdown(
             parts.append(_render_ledger(out.claim_ledger))
         if out.background_materials:
             parts.append(_render_sources(out.background_materials))
+        if out.glossary.terms or out.glossary.anchors:
+            parts.append(_render_glossary(out.glossary))
         if out.style_profile is not None:
             parts.append(_render_style(out.style_profile))
         rest = _render_notices(out.notices, header="Notices")
@@ -186,6 +193,45 @@ def _render_flags(flags: list[OverreachFlag], header: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def _render_jargon(flags: list[JargonFlag]) -> str:
+    """Unreadable terms left in a draft. Readability, not faithfulness.
+
+    Kept visually apart from the overstatement flags because a human acts on
+    them differently: an overstatement is a correctness problem, a metric name
+    is a "your reader just bounced" problem.
+    """
+    if not flags:
+        return ""
+    lines = ["**📖 术语未翻译 / Unexplained jargon:**"]
+    for flag in flags:
+        fix = f" → {flag.suggestion.strip()}" if flag.suggestion.strip() else ""
+        lines.append(f"- `{flag.term}` ({flag.category}, {flag.field}){fix}")
+    return "\n".join(lines)
+
+
+def _render_glossary(glossary: Glossary) -> str:
+    """What the researcher looked up, and how well backed each meaning is.
+
+    The audit that matters here is the ⚠ one: a gloss with no retrieved source
+    behind it came from the model's own knowledge, and a human should be able
+    to see which of the plain-language rewrites rest on that.
+    """
+    lines = ["## 术语与尺度 / Glossary and scale"]
+    for term in glossary.terms:
+        mark = "" if term.sourced else " ⚠️ 无来源 / unsourced"
+        if term.sourced and term.source_url.strip():
+            title = term.source_title.strip() or term.source_url.strip()
+            source = f" — [{title}]({term.source_url.strip()})"
+        else:
+            source = ""
+        lines.append(f"- **{term.term}**: {term.plain.strip()}{source}{mark}")
+        if term.analogy.strip():
+            lines.append(f"  - {term.analogy.strip()}")
+    for anchor in glossary.anchors:
+        lines.append(f"- `{anchor.claim_id}` 尺度 / scale: {anchor.anchor.strip()}")
+    return "\n".join(lines)
+
+
 def _render_ledger(claims: list[Claim]) -> str:
     """Compact claim ledger: id, claim, confidence, and qualifier."""
     lines = ["## 依据清单 / Claim ledger"]
@@ -245,6 +291,11 @@ def _render_notices(notices: list[Notice], header: str | None = None) -> str:
         src = f" ({n.source_url})" if n.source_url else ""
         lines.append(f"- [{n.code.value}] {n.message}{src}")
     return "\n".join(lines)
+
+
+def _jargon_for(flags: list[JargonFlag], platform: Platform) -> list[JargonFlag]:
+    """Jargon flags belonging to one platform's draft."""
+    return [f for f in flags if f.platform == platform]
 
 
 def _flags_for(flags: list[OverreachFlag], platform: Platform) -> list[OverreachFlag]:
