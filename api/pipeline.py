@@ -34,7 +34,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from api.background import gather_background
-from api.glossary import build_glossary
+from api.glossary import build_glossary, lookup_terms
 from api.jargon import JargonHit, scan_draft
 from api.config_loader import resolve_setting
 from api.check import check_faithfulness
@@ -437,7 +437,7 @@ def _glossary_or_notice(
     to no glossary plus one glossary_error Notice.
     """
     try:
-        return build_glossary(ledger, card, inp.language)
+        glossary = build_glossary(ledger, card, inp.language)
     except Exception as err:
         notices.append(
             Notice(
@@ -446,6 +446,21 @@ def _glossary_or_notice(
             )
         )
         return Glossary()
+
+    # An empty glossary is normal for plain-language prose, but empty WITH
+    # terms to look up means the researcher dropped them — the drafter has
+    # just lost the words it needs to strip that jargon. Silent loss is the
+    # worst outcome here, so say so rather than let the drafts degrade quietly.
+    missed = lookup_terms(ledger)
+    if missed and not glossary.terms:
+        notices.append(
+            Notice(
+                code=NoticeCode.glossary_error,
+                message="no plain-language meanings came back for "
+                f"{', '.join(missed)} — drafts may keep those terms",
+            )
+        )
+    return glossary
 
 
 def _to_jargon_flag(

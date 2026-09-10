@@ -42,10 +42,23 @@ You are given, in order:
   you are not required to spend all of it — a draft that works through every
   entry in order is a spec sheet, however well written the sentences are.
   Choose the few claims the story actually turns on and let the rest go.
-  Configuration detail (layer counts, dimensions, learning-rate schedules,
-  dropout values, batch sizes, hardware counts, FLOP totals) is almost never
-  story material: a reader takes nothing from "512" or "4000 步". Cutting a
-  claim is always safe; it can never make a draft less faithful.
+  Cutting a claim is always safe; it can never make a draft less faithful.
+  Two families of claim are almost never story material:
+  - **Configuration** — layer counts, dimensions, learning-rate schedules,
+    dropout values, batch sizes, hardware counts, FLOP totals. A reader takes
+    nothing from "512" or "4000 步".
+  - **Descriptive statistics of the experiment itself** — how many subjects,
+    sessions, blocks, trials or recordings; how long a condition ran; how often
+    a behaviour occurred; means ± SD and their ranges. These describe how the
+    study was *conducted*, not what it *found*. "96 ± 53 轮试验" and "9,536 轮"
+    tell a reader nothing they can feel.
+
+  Where scope genuinely matters — species, "in mice", sample size that bears on
+  how much to trust the result, "preliminary" — that is a **qualifier**, not a
+  descriptive statistic, and it stays (see the rule below). The test is whether
+  a figure changes what the reader should *believe*, or merely describes the
+  apparatus. **Never stack this kind of figure**: if a paragraph is carrying
+  more than one or two numbers, you are reciting a methods section.
 - Carry every entry's `qualifier` into the prose (species, sample size,
   "preliminary", "associated with" not "causes", hedges like "may"/"suggests").
   A qualifier may move to another sentence but it may never disappear.

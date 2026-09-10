@@ -37,8 +37,17 @@ For each term, one sentence a curious 15-year-old would understand.
    An unsourced gloss is fine and will be marked as such for the human; a
    fabricated source is not.
 
-Skip a term you cannot explain honestly. A missing gloss is recoverable; a
-wrong one gets published.
+**Every term in `terms` needs an entry.** The search is a convenience, not a
+gate: `hits` are generic web results and will often cover none of the terms at
+all. That is the ordinary case, not a failure — a field's own acronyms (LPFC,
+FEF, PSTH, ΔF/F) rarely surface in a general search. When that happens you
+still explain the term from your own knowledge, with no `source_url`. Returning
+an empty list because nothing was retrieved is the single worst outcome here:
+the writer is then forced to print the raw acronym at the reader.
+
+The only term to skip is one whose meaning you genuinely do not know — not one
+you merely could not find a link for. A missing gloss is recoverable; a wrong
+one gets published.
 
 ## `numeric_claims` — anchors that make a quantity feel real
 
@@ -72,5 +81,6 @@ Return **only** a single JSON object — no prose, no markdown fences:
  "anchors": [{"claim_id": "c5", "anchor": "..."}]}
 ```
 
-`analogy` and `source_url` may be omitted. Return empty lists rather than
-inventing anything: `{"terms": [], "anchors": []}`.
+`analogy` and `source_url` may be omitted — `terms` and `plain` never are.
+Return an empty list only when there was genuinely nothing to explain, never
+merely because the search came back unhelpful.

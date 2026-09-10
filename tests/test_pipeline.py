@@ -555,3 +555,35 @@ def test_clean_draft_produces_no_jargon_flags(monkeypatch):
     out = run(_input(platforms=[Platform.news]))
 
     assert out.jargon_flags == []
+
+
+def test_a_glossary_that_comes_back_empty_despite_targets_is_reported(monkeypatch):
+    """Silent loss is the worst outcome: the drafter loses the words it needed
+    to strip the jargon, and nothing tells the operator it happened."""
+    _stub_steps(monkeypatch)
+    monkeypatch.setattr(
+        pipeline, "build_ledger",
+        lambda card, language: [Claim(id="c1", claim="LPFC 与 BLEU 的关系",
+                                      source_evidence="e", qualifier="")],
+    )
+    monkeypatch.setattr(pipeline, "build_glossary", lambda ledger, card, lang: Glossary())
+
+    out = run(_input(platforms=[Platform.news], background=True))
+
+    assert NoticeCode.glossary_error in [n.code for n in out.notices]
+    assert out.platform_outputs  # still only a degradation, never a failure
+
+
+def test_no_notice_when_there_was_nothing_to_look_up(monkeypatch):
+    """Plain prose with no jargon in it is a success, not a failure."""
+    _stub_steps(monkeypatch)
+    monkeypatch.setattr(
+        pipeline, "build_ledger",
+        lambda card, language: [Claim(id="c1", claim="翻译质量明显提升。",
+                                      source_evidence="e", qualifier="")],
+    )
+    monkeypatch.setattr(pipeline, "build_glossary", lambda ledger, card, lang: Glossary())
+
+    out = run(_input(platforms=[Platform.news], background=True))
+
+    assert NoticeCode.glossary_error not in [n.code for n in out.notices]
