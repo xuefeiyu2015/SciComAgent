@@ -951,6 +951,63 @@ function renderApparatus() {
     rail.append(sources);
   }
 
+  const glossary = result.glossary || {};
+  if ((glossary.terms || []).length || (glossary.anchors || []).length) {
+    const section = el('section');
+    section.innerHTML = `<h2>${esc(t('ledger.glossary'))}</h2>
+      <p class="note">${esc(t('ledger.glossaryNote'))}</p>`;
+    (glossary.terms || []).forEach((term) => {
+      const node = el('div', 'gloss');
+      const title = term.sourced && term.source_url
+        ? `<a href="${esc(term.source_url)}" target="_blank" rel="noopener">${esc(term.term)}</a>`
+        : esc(term.term);
+      // An unsourced gloss came from the researcher's own knowledge. That is
+      // allowed, but a human has to be able to see which ones they are.
+      const mark = term.sourced
+        ? '' : `<span class="gloss-unsourced">${esc(t('ledger.unsourced'))}</span>`;
+      node.innerHTML = `<span class="gloss-term">${title}</span>${mark}
+        <span class="gloss-plain">${esc(term.plain)}</span>`;
+      if (term.analogy) node.innerHTML += `<span class="gloss-analogy">${esc(term.analogy)}</span>`;
+      section.append(node);
+    });
+    (glossary.anchors || []).forEach((anchor) => {
+      const node = el('div', 'gloss');
+      node.innerHTML = `<span class="claim-id">${esc(anchor.claim_id)}</span>
+        <span class="gloss-plain">${esc(anchor.anchor)}</span>`;
+      section.append(node);
+    });
+    rail.append(section);
+  }
+
+  const dense = result.density_flags || [];
+  if (dense.length) {
+    const section = el('section', 'jargon');
+    section.innerHTML = `<h2>${esc(t('ledger.density'))}</h2>
+      <p class="note">${esc(t('ledger.densityNote'))}</p>`;
+    dense.forEach((flag) => {
+      const node = el('div', 'gloss');
+      node.innerHTML = `<span class="gloss-term">${esc(t('ledger.densityItem', {
+        n: flag.index + 1, count: flag.figures,
+      }))}</span><span class="gloss-plain">${esc(flag.excerpt)}</span>`;
+      section.append(node);
+    });
+    rail.append(section);
+  }
+
+  const jargon = result.jargon_flags || [];
+  if (jargon.length) {
+    const section = el('section', 'jargon');
+    section.innerHTML = `<h2>${esc(t('ledger.jargon'))}</h2>
+      <p class="note">${esc(t('ledger.jargonNote'))}</p>`;
+    jargon.forEach((flag) => {
+      const node = el('div', 'gloss');
+      node.innerHTML = `<span class="gloss-term">${esc(flag.term)}</span>
+        <span class="gloss-plain">${esc(flag.suggestion || '')}</span>`;
+      section.append(node);
+    });
+    rail.append(section);
+  }
+
 }
 
 /* ── completing the review ──────────────────────────────────────────── */

@@ -28,6 +28,7 @@ from api.markers import MARKER_RE, split_ids
 from api.schema import (
     AgentInput,
     BackgroundMaterial,
+    Glossary,
     Claim,
     Platform,
     PlatformOutput,
@@ -91,6 +92,7 @@ def draft_platform(
     background: list[BackgroundMaterial] | None = None,
     angle: str | None = None,
     style: StyleProfile | None = None,
+    glossary: Glossary | None = None,
 ) -> PlatformOutput:
     """Draft one platform's content from the claim ledger.
 
@@ -99,6 +101,8 @@ def draft_platform(
         ledger: the claim ledger — the ONLY facts the draft may use.
         inp: request carrying the dials (language, audience, liveliness).
         fix: optional faithfulness-check feedback to address in a redraft.
+        glossary: optional plain meanings + scale anchors (api.glossary) —
+            wording help, never facts.
         background: optional external materials (api.background) — framing
             context only, never a source of facts.
         angle: optional one-line statement of the paper's primary contribution
@@ -120,7 +124,7 @@ def draft_platform(
         model,
         [
             SystemMessage(content=_system_prompt(platform, inp, style)),
-            HumanMessage(content=_human_payload(ledger, fix, background, angle)),
+            HumanMessage(content=_human_payload(ledger, fix, background, angle, glossary)),
         ],
     )
     # Every claim a sentence rests on may keep its marker — that citation is
@@ -149,7 +153,7 @@ def _system_prompt(
     voice = _voice_layer(style)
     if voice:
         layers.append(voice)
-    layers += ["# Red lines\n\n" + red_lines(), _dials(inp)]
+    layers += ["# Red lines\n\n" + red_lines(), dials(inp)]
     return "\n\n".join(layers)
 
 
@@ -194,15 +198,44 @@ def _voice_layer(style: StyleProfile | None) -> str:
     )
 
 
-def _dials(inp: AgentInput) -> str:
-    """Render the language/audience/liveliness parameters for this draft."""
+# What each liveliness setting actually asks for. Before this table the dial
+# rendered identical text at 1 and 5 apart from the digit, and was scoped "tone
+# only" — so it could add exclamation marks but could not turn a list of
+# findings into a story, which is what an operator setting it to 5 wants.
+# Shape, never facts: the red lines are appended after this block and win.
+_LIVELINESS: dict[int, str] = {
+    1: "sober and plain — plain declarative sentences, no rhetorical flourish.",
+    2: "mostly plain, with a little warmth.",
+    3: "balanced — readable and human, neither dry nor showy.",
+    4: "lively, and NARRATIVE: carry the reader through connected prose rather "
+       "than a list of findings.",
+    5: "very lively, and NARRATIVE: open on a story spine — how things were, "
+       "what was stuck, what changed — built from the background materials and "
+       "the glossary, then carry the reader through in connected prose. A "
+       "bulleted feature list is a failure at this setting, however energetic.",
+}
+
+
+def dials(inp: AgentInput) -> str:
+    """Render the language/audience/liveliness parameters for this draft.
+
+    Public and shared: api.revise imports it so the two paths cannot drift,
+    the same way both modules share `red_lines`.
+
+    Args:
+        inp: the request carrying the dials.
+
+    Returns:
+        The `# Dials` prompt block, with liveliness resolved to an instruction.
+    """
     language = language_label(inp.language)
+    setting = _LIVELINESS.get(inp.liveliness, _LIVELINESS[3])
     return (
         "# Dials (parameters for this draft)\n\n"
         f"- Language: write entirely in {language}.\n"
         f"- Audience: {inp.audience}.\n"
-        f"- Liveliness: {inp.liveliness}/5 "
-        "(1 = sober and plain, 5 = very lively) — tone only, never the facts."
+        f"- Liveliness: {inp.liveliness}/5 — {setting}\n"
+        "  Liveliness sets tone and shape, never the facts."
     )
 
 
@@ -211,11 +244,13 @@ def _human_payload(
     fix: str | None,
     background: list[BackgroundMaterial] | None = None,
     angle: str | None = None,
+    glossary: Glossary | None = None,
 ) -> str:
-    """The ledger (the only facts), optional angle, background, revision notes.
+    """The ledger (the only facts), optional angle, background, glossary, notes.
 
-    With no angle, no background and no fix the payload is byte-identical to the
-    pre-background pipeline — redrafts and existing callers are unaffected.
+    With no angle, no background, no glossary and no fix the payload is
+    byte-identical to the pre-background pipeline — redrafts and existing
+    callers are unaffected.
     """
     payload = (
         "Claim ledger (the ONLY facts you may use), as JSON:\n"
@@ -238,6 +273,31 @@ def _human_payload(
             "paper's results.\n"
             + json.dumps(
                 [m.model_dump(mode="json") for m in background], ensure_ascii=False
+            )
+        )
+    if glossary and glossary.terms:
+        payload += (
+            "\n\nGLOSSARY — what the ledger's technical terms MEAN, in plain "
+            "words. This is wording help, NOT facts. USE IT: when a ledger claim "
+            "names a metric, a benchmark, or a piece of model machinery, write "
+            "the meaning from this glossary instead of the term. A gloss never "
+            "licenses a number, magnitude, or comparison — those still come "
+            "only from the ledger above. An entry marked `\"sourced\": false` "
+            "came from the researcher's own knowledge rather than a retrieved "
+            "source: still fine for wording, never something to attribute.\n"
+            + json.dumps(
+                [t.model_dump(mode="json") for t in glossary.terms], ensure_ascii=False
+            )
+        )
+    if glossary and glossary.anchors:
+        payload += (
+            "\n\nSCALE ANCHORS — how to make a quantity feel real to a reader, "
+            "keyed by ledger id. A recital of figures is what makes a draft dull; "
+            "use these to say what a number MEANS. They assert no figure of their "
+            "own and must not be presented as findings.\n"
+            + json.dumps(
+                [a.model_dump(mode="json") for a in glossary.anchors],
+                ensure_ascii=False,
             )
         )
     if fix and fix.strip():

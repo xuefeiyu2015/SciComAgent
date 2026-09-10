@@ -17,6 +17,7 @@ from api.schema import (
     BackgroundMaterial,
     CheckFlag,
     Claim,
+    Glossary,
     Language,
     NoticeCode,
     Platform,
@@ -24,6 +25,7 @@ from api.schema import (
     SourceType,
     Status,
     StyleProfile,
+    TermGloss,
     TopicAbstraction,
 )
 
@@ -43,7 +45,7 @@ def _input(**kw) -> AgentInput:
 
 def _stub_steps(
     monkeypatch, *, ok=True, code="ok", reason="", flags_seq=None, materials=None,
-    style=None,
+    style=None, glossary=None, body_seq=None,
 ):
     """Stub every pipeline step; record (platform, fix, background) per draft.
 
@@ -62,14 +64,21 @@ def _stub_steps(
         lambda topic, card, language: list(materials or []),
     )
     monkeypatch.setattr(pipeline, "load_style_profile", lambda: style)
+    monkeypatch.setattr(
+        pipeline, "build_glossary",
+        lambda ledger, card, language: glossary or Glossary(),
+    )
 
     draft_calls: list[tuple[Platform, str | None, list | None]] = []
+    bodies = list(body_seq or [])
 
     def fake_draft(
-        platform, ledger, inp, fix=None, background=None, angle=None, style=None
+        platform, ledger, inp, fix=None, background=None, angle=None, style=None,
+        glossary=None,
     ):
         draft_calls.append((platform, fix, background))
-        return PlatformOutput(platform=platform, body="draft", title_options=["t"])
+        body = bodies.pop(0) if bodies else "draft"
+        return PlatformOutput(platform=platform, body=body, title_options=["t"])
 
     monkeypatch.setattr(pipeline, "draft_platform", fake_draft)
 
@@ -175,7 +184,8 @@ def test_card_contribution_passed_as_angle_to_every_draft(monkeypatch):
     angles: list[str | None] = []
 
     def capture_draft(
-        platform, ledger, inp, fix=None, background=None, angle=None, style=None
+        platform, ledger, inp, fix=None, background=None, angle=None, style=None,
+        glossary=None,
     ):
         angles.append(angle)
         return PlatformOutput(platform=platform, body="d", title_options=["t"])
@@ -230,7 +240,8 @@ def test_style_profile_reaches_every_draft_and_is_surfaced(monkeypatch):
     styles: list[StyleProfile | None] = []
 
     def capture_draft(
-        platform, ledger, inp, fix=None, background=None, angle=None, style=None
+        platform, ledger, inp, fix=None, background=None, angle=None, style=None,
+        glossary=None,
     ):
         styles.append(style)
         return PlatformOutput(platform=platform, body="d", title_options=["t"])
@@ -365,7 +376,7 @@ def test_platforms_are_drafted_concurrently(monkeypatch):
     _stub_steps(monkeypatch, flags_seq=[[], []])
 
     def blocking_draft(platform, ledger, inp, fix=None, background=None,
-                       angle=None, style=None):
+                       angle=None, style=None, glossary=None):
         barrier.wait()  # BrokenBarrierError if the others never arrive
         return PlatformOutput(platform=platform, body="draft")
 
@@ -385,7 +396,7 @@ def test_output_order_follows_requested_platforms(monkeypatch):
     _stub_steps(monkeypatch, flags_seq=[[], []])
 
     def staggered(platform, ledger, inp, fix=None, background=None,
-                  angle=None, style=None):
+                  angle=None, style=None, glossary=None):
         if platform is Platform.xhs:      # finishes first
             first_done.set()
         else:
@@ -403,7 +414,7 @@ def test_one_platform_failing_does_not_sink_the_others(monkeypatch):
     _stub_steps(monkeypatch, flags_seq=[[], []])
 
     def half_broken(platform, ledger, inp, fix=None, background=None,
-                    angle=None, style=None):
+                    angle=None, style=None, glossary=None):
         if platform is Platform.news:
             raise RuntimeError("drafter exploded")
         return PlatformOutput(platform=platform, body="draft")
@@ -439,3 +450,176 @@ def test_broken_progress_listener_does_not_sink_the_run(monkeypatch):
 
     assert out.status == Status.needs_review
     assert [p.platform for p in out.platform_outputs] == [Platform.news]
+
+
+# --- glossary wiring ----------------------------------------------------------
+
+_GLOSSARY = Glossary(terms=[TermGloss(term="BLEU", plain="翻译的自动评分。")])
+
+
+def test_glossary_reaches_every_draft_and_is_surfaced(monkeypatch):
+    seen: list = []
+
+    _stub_steps(monkeypatch, glossary=_GLOSSARY)
+
+    def capture(platform, ledger, inp, fix=None, background=None, angle=None,
+               style=None, glossary=None):
+        seen.append(glossary)
+        return PlatformOutput(platform=platform, body="draft", title_options=["t"])
+
+    monkeypatch.setattr(pipeline, "draft_platform", capture)
+
+    out = run(_input(platforms=[Platform.news, Platform.xhs], background=True))
+
+    assert len(seen) == 2
+    assert all(g is not None and g.terms[0].term == "BLEU" for g in seen)
+    assert out.glossary.terms[0].term == "BLEU"
+
+
+def test_glossary_failure_degrades_with_notice(monkeypatch):
+    _stub_steps(monkeypatch)
+
+    def boom(ledger, card, language):
+        raise RuntimeError("wikipedia down")
+
+    monkeypatch.setattr(pipeline, "build_glossary", boom)
+
+    out = run(_input(platforms=[Platform.news], background=True))
+
+    assert out.platform_outputs  # a lookup failure must never sink the run
+    assert out.glossary.terms == []
+    codes = [n.code for n in out.notices]
+    assert NoticeCode.glossary_error in codes
+
+
+def test_background_false_skips_the_glossary_too(monkeypatch):
+    """One researcher, one switch."""
+    _stub_steps(monkeypatch)
+
+    def must_not_run(*a, **k):
+        raise AssertionError("glossary must not run when background is off")
+
+    monkeypatch.setattr(pipeline, "build_glossary", must_not_run)
+
+    out = run(_input(platforms=[Platform.news], background=False))
+
+    assert out.platform_outputs
+
+
+# --- jargon flags -------------------------------------------------------------
+
+def test_jargon_in_a_draft_triggers_a_redraft(monkeypatch):
+    """A metric name is a defect, and the existing redraft loop repairs it."""
+    calls = _stub_steps(monkeypatch, body_seq=["它取得了 28.4 BLEU。", "翻译质量明显提升。"])
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert len(calls) == 2  # drafted, flagged as unreadable, redrafted
+    assert out.jargon_flags == []  # the redraft came back clean
+
+
+def test_surviving_jargon_surfaces_as_flags_not_overreach(monkeypatch):
+    """Readability is not faithfulness — the board colours them differently."""
+    _stub_steps(monkeypatch, body_seq=["BLEU"] * 6)
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert out.overreach_flags == []
+    assert [f.term for f in out.jargon_flags] == ["BLEU"]
+    assert out.jargon_flags[0].platform == Platform.news
+    assert out.jargon_flags[0].field == "body"
+
+
+def test_jargon_flag_carries_the_gloss_as_its_suggestion(monkeypatch):
+    """The fix is already in hand — say what the term should have been."""
+    _stub_steps(monkeypatch, body_seq=["BLEU"] * 6, glossary=_GLOSSARY)
+
+    out = run(_input(platforms=[Platform.news], background=True))
+
+    assert out.jargon_flags[0].suggestion == "翻译的自动评分。"
+
+
+def test_nominated_acronym_does_not_trigger_a_redraft(monkeypatch):
+    """LSTM is worth glossing, but writing it is not a defect."""
+    calls = _stub_steps(monkeypatch, body_seq=["LSTM 曾经是主流。"])
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert len(calls) == 1
+    assert out.jargon_flags == []
+
+
+def test_clean_draft_produces_no_jargon_flags(monkeypatch):
+    _stub_steps(monkeypatch, body_seq=["翻译质量明显提升。"])
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert out.jargon_flags == []
+
+
+def test_a_glossary_that_comes_back_empty_despite_targets_is_reported(monkeypatch):
+    """Silent loss is the worst outcome: the drafter loses the words it needed
+    to strip the jargon, and nothing tells the operator it happened."""
+    _stub_steps(monkeypatch)
+    monkeypatch.setattr(
+        pipeline, "build_ledger",
+        lambda card, language: [Claim(id="c1", claim="LPFC 与 BLEU 的关系",
+                                      source_evidence="e", qualifier="")],
+    )
+    monkeypatch.setattr(pipeline, "build_glossary", lambda ledger, card, lang: Glossary())
+
+    out = run(_input(platforms=[Platform.news], background=True))
+
+    assert NoticeCode.glossary_error in [n.code for n in out.notices]
+    assert out.platform_outputs  # still only a degradation, never a failure
+
+
+def test_no_notice_when_there_was_nothing_to_look_up(monkeypatch):
+    """Plain prose with no jargon in it is a success, not a failure."""
+    _stub_steps(monkeypatch)
+    monkeypatch.setattr(
+        pipeline, "build_ledger",
+        lambda card, language: [Claim(id="c1", claim="翻译质量明显提升。",
+                                      source_evidence="e", qualifier="")],
+    )
+    monkeypatch.setattr(pipeline, "build_glossary", lambda ledger, card, lang: Glossary())
+
+    out = run(_input(platforms=[Platform.news], background=True))
+
+    assert NoticeCode.glossary_error not in [n.code for n in out.notices]
+
+
+# --- density gate -------------------------------------------------------------
+
+_DENSE = "猴子在100轮里，用8到9个阶段学会了5到16个模板，成功率65%和67%。"
+
+
+def test_a_paragraph_reciting_figures_triggers_a_redraft(monkeypatch):
+    calls = _stub_steps(monkeypatch, body_seq=[_DENSE, "它们学得非常快。"])
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert len(calls) == 2
+    assert out.density_flags == []
+
+
+def test_surviving_density_surfaces_as_its_own_flag(monkeypatch):
+    """Not overreach and not jargon — a third, distinct readability problem."""
+    _stub_steps(monkeypatch, body_seq=[_DENSE] * 6)
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert out.overreach_flags == []
+    assert out.jargon_flags == []
+    assert len(out.density_flags) == 1
+    assert out.density_flags[0].platform == Platform.news
+    assert out.density_flags[0].figures > 3
+
+
+def test_a_normal_paragraph_does_not_trigger_a_redraft(monkeypatch):
+    calls = _stub_steps(monkeypatch, body_seq=["它们在几轮尝试后就学会了任务。"])
+
+    out = run(_input(platforms=[Platform.news]))
+
+    assert len(calls) == 1
+    assert out.density_flags == []

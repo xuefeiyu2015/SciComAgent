@@ -121,9 +121,12 @@ def _human_payload(
 ) -> str:
     """The ledger (the contract), the source card (context), and the drafts.
 
-    `confidence` is deliberately stripped from the ledger here: a claim being
+    The ledger is rebuilt key-by-key rather than dumped, so drafting hints
+    cannot leak into the review. `confidence` is stripped because a claim being
     hedged is not an overreach, and leaving it in tempts the reviewer to flag by
-    confidence. The reviewer judges meaning, not the confidence label.
+    confidence; `kind` is stripped because whether a claim is a finding or a
+    descriptive statistic has no bearing on whether the draft overstates it.
+    The reviewer judges meaning, not our labels for it.
     """
     ledger_json = json.dumps(
         [

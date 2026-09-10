@@ -23,6 +23,10 @@
   --flag:       #D6342C;   /* overstatement — nothing else */
   --verified:   #1B7A5A;   /* verified — nothing else */
   --hedged:     #9A6B0F;   /* the evidence itself is uncertain — nothing else */
+  --jargon:     #5B4B8A;   /* the reader cannot parse it — nothing else.
+                              Deliberately not --flag: unreadable is not the
+                              same problem as unfaithful, and the two must not
+                              read as one colour. */
 
   --sans:  "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
   --serif: "Source Serif 4", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
@@ -484,6 +488,26 @@ sup.cite + sup.cite::before { content: ","; opacity: .55; }
 .source { font-size: 13px; margin-bottom: 9px; line-height: 1.5; }
 .source a { color: var(--ink); }
 .source span { display: block; color: var(--muted); font-size: 12px; }
+
+/* a looked-up term: what it is, then what it means underneath */
+.gloss { font-size: 13px; margin-bottom: 9px; line-height: 1.5; }
+.gloss-term { font-weight: 600; color: var(--ink); }
+.gloss-term a { color: var(--ink); }
+.gloss-plain { display: block; color: var(--muted); font-size: 12px; }
+.gloss-analogy { display: block; color: var(--muted); font-size: 12px; font-style: italic; }
+/* a term that survived into the draft: its own colour, never the flag red */
+.jargon .gloss-term { color: var(--jargon); font-family: var(--mono); }
+
+.gloss-unsourced {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--hedged);
+  border-radius: 2px;
+  color: var(--hedged);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+}
 
 /* ── tether: the signature ───────────────────────────────────────────── */
 

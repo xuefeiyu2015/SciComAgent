@@ -26,11 +26,41 @@ careful archivist, not a writer — you record only what the card supports.
    "in vitro", "associated with" vs "causes", "correlation not causation", and
    hedges ("may", "suggests") MUST stay attached — put them in `qualifier`.
    Never strip a qualifier to make a finding sound cleaner or stronger.
+
+   **`qualifier` is scope, not description.** It answers "how far does this
+   result reach, and how much should I trust it?" — and it is carried verbatim
+   into public drafts, so anything you put here a reader will be made to read.
+   Keep it to what changes the answer. Incidental characteristics of the
+   subjects or apparatus do not: animal body weights and ages, equipment
+   models, electrode counts, session identifiers, exact statistics
+   (t values, r values, exact p, CIs). Those belong in `source_evidence`,
+   or in the `claim` of a `method` entry — not stapled to a finding.
+   - ✅ `"in rhesus macaques (n=2), preliminary"`
+   - ❌ `"Two adult male rhesus macaques (monkey B, 13 kg; monkey S, 9 kg);
+        performance above chance after 15 trials"` — species and n are scope;
+        the weights and the trial count are not.
 5. **`confidence`** is one of:
    - `high` — an explicit, clearly-stated result or number in the card;
    - `medium` — stated but hedged ("may", "suggests", "preliminary");
    - `low` — implied or uncertain.
-6. **Language split.** A language directive follows. Write each `claim` in the
+6. **`kind`** — what the entry IS, so a writer knows what to lead with:
+   - `finding` — what the study showed: a result, an effect, a comparison, a
+     mechanism, a limitation of the result. **Default to this when unsure.**
+   - `method` — how the study was *conducted*: how many subjects, sessions,
+     blocks, trials or recordings; how long a condition ran; how often a
+     behaviour occurred; means ± SD and their ranges; model/architecture
+     settings and training budgets.
+
+   Both are equally true and equally sourced — `method` does not mean lesser,
+   and it never means "leave it out of the ledger". It means a reader learns
+   nothing they can feel from "96 ± 53 轮试验" on its own. Note the split is
+   about the CLAIM, not the number: "在 65% 的试验里选中最优项" describes how
+   the animals behaved during the task and is `method`; "大模型的翻译质量比此前
+   最佳结果高出 2 分以上" is a result and is `finding`.
+
+   Scope that bears on how much to trust a result — species, n, "preliminary",
+   "in vitro" — belongs in `qualifier` as always, never in `kind`.
+7. **Language split.** A language directive follows. Write each `claim` in the
    requested language as a faithful translation (strengthen nothing), but keep
    `source_evidence` and `qualifier` **verbatim in the card's original
    language** so they stay checkable against the source.
@@ -42,11 +72,12 @@ exactly like:
 
 ```
 {"claims": [
-  {"claim": "...", "source_evidence": "...", "qualifier": "...", "confidence": "high|medium|low"}
+  {"claim": "...", "source_evidence": "...", "qualifier": "...",
+   "confidence": "high|medium|low", "kind": "finding|method"}
 ]}
 ```
 
-Use these four keys per entry and nothing else — do **not** include an `id`
+Use these five keys per entry and nothing else — do **not** include an `id`
 field (it is assigned downstream). Use `""` for `qualifier` only when the card
 truly states none. If the card supports no checkable claims, return
 `{"claims": []}`. Do not invent entries to fill the ledger.
