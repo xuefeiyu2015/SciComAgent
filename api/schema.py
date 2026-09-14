@@ -62,6 +62,7 @@ class NoticeCode(str, Enum):
     need_pdf = "need_pdf"        # source exists but access blocked -> ask for PDF
     too_short = "too_short"      # reachable but too little text -> ask for PDF
     not_a_paper = "not_a_paper"  # not a research paper -> check the link
+    rate_limited = "rate_limited"  # the site is throttling us -> wait, or supply the PDF
     fetch_error = "fetch_error"  # network failure / unreachable link
     draft_error = "draft_error"  # pipeline-internal: one platform's draft crashed
     background_error = "background_error"  # background search skipped; drafts unaffected

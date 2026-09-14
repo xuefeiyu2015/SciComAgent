@@ -317,7 +317,9 @@ function reportTerminal(result) {
   const notice = (result.notices || [])[0];
   const message = notice ? notice.message : t('dialog.noClaims');
   turn(t('board.speaker'), `${esc(message)}`);
-  if (notice && (notice.code === 'need_pdf' || notice.code === 'too_short')) {
+  // A rate limit is offered the same escape hatch as a paywall: uploading the
+  // PDF skips the fetch, which is the fastest way past a host saying "later".
+  if (notice && ['need_pdf', 'too_short', 'rate_limited'].includes(notice.code)) {
     turn(t('board.speaker'), esc(t('dialog.needPdf')));
     state.slots.source = null;
     state.slots.source_type = null;

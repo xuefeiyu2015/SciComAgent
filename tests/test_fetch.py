@@ -178,6 +178,90 @@ def test_paywall_403_requests_pdf(monkeypatch):
     assert "PDF" in result.reason
 
 
+# --- rate limiting ------------------------------------------------------------
+
+def _throttling(status=429, retry_after=None, succeed_after=None):
+    """A host that returns `status` until `succeed_after` attempts have been made."""
+    calls = {"n": 0}
+
+    def get(url, *a, **k):
+        calls["n"] += 1
+        if succeed_after is not None and calls["n"] > succeed_after:
+            page = (f"<html><body><article><h1>Study</h1><p>{_PAPER_BODY}</p>"
+                    "</article></body></html>")
+            return _fake_response(page.encode(), "text/html", url=str(url))
+        resp = _fake_response(b"<html>Attention Required</html>", "text/html",
+                              url=str(url))
+        resp.status_code = status
+        if retry_after is not None:
+            resp.headers["retry-after"] = str(retry_after)
+        return resp
+
+    return get, calls
+
+
+def test_a_rate_limit_is_waited_out_not_failed(monkeypatch):
+    """HTTP 429 means "slow down", not "gone" — asking again usually works."""
+    get, calls = _throttling(succeed_after=1)
+    monkeypatch.setattr(fetch.httpx, "get", get)
+    monkeypatch.setattr(fetch.time, "sleep", lambda s: None)
+
+    result = fetch_source("https://www.biorxiv.org/content/10.1/2026.01.01v1", "url")
+
+    assert result.ok, result.reason
+    assert calls["n"] == 2, "it should have tried again"
+
+
+def test_a_persistent_rate_limit_says_the_link_is_fine(monkeypatch):
+    """The reported confusion: "could not fetch" sent the human to check a URL
+    that was never the problem."""
+    get, calls = _throttling()
+    monkeypatch.setattr(fetch.httpx, "get", get)
+    monkeypatch.setattr(fetch.time, "sleep", lambda s: None)
+
+    result = fetch_source("https://www.biorxiv.org/content/10.1/2026.01.01v1", "url")
+
+    assert not result.ok
+    assert result.code == "rate_limited"
+    assert "the link is fine" in result.reason
+    assert "PDF" in result.reason, "the way past it must be in the message"
+    assert calls["n"] == fetch._RATE_LIMIT_RETRIES + 1
+
+
+def test_a_server_asking_us_to_wait_is_obeyed_within_reason(monkeypatch):
+    waited = []
+    get, _calls = _throttling(retry_after=5, succeed_after=1)
+    monkeypatch.setattr(fetch.httpx, "get", get)
+    monkeypatch.setattr(fetch.time, "sleep", lambda s: waited.append(s))
+
+    fetch_source("https://www.biorxiv.org/content/10.1/2026.01.01v1", "url")
+
+    assert waited == [5.0]
+
+
+def test_an_absurd_retry_after_does_not_hold_a_run_hostage(monkeypatch):
+    waited = []
+    get, _calls = _throttling(retry_after=3600, succeed_after=1)
+    monkeypatch.setattr(fetch.httpx, "get", get)
+    monkeypatch.setattr(fetch.time, "sleep", lambda s: waited.append(s))
+
+    fetch_source("https://www.biorxiv.org/content/10.1/2026.01.01v1", "url")
+
+    assert waited == [fetch._RATE_LIMIT_MAX_WAIT_S]
+
+
+def test_a_paywall_is_not_retried(monkeypatch):
+    """403 will say 403 again; waiting only wastes the human's time."""
+    get, calls = _throttling(status=403)
+    monkeypatch.setattr(fetch.httpx, "get", get)
+    monkeypatch.setattr(fetch.time, "sleep", lambda s: pytest.fail("must not wait"))
+
+    result = fetch_source("https://www.cell.com/neuron/fulltext/S0896", "url")
+
+    assert result.code == "need_pdf"
+    assert calls["n"] == 1
+
+
 def test_unknown_source_type_raises():
     with pytest.raises(ValueError):
         fetch_source("whatever", "ftp")
