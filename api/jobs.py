@@ -21,6 +21,12 @@ Two honesty guarantees, since in-process state can always be lost:
   a previous life of this one) is reported as ``lost`` with a message saying
   so, rather than as a baffling "unknown session".
 
+`start_redraft` puts the same registry behind a re-entry of the pipeline: the
+paper, its ledger and its card come from an earlier session_id, the caller
+supplies only the dials that change, and the redraft gets a session_id of its
+own. The original run is never overwritten — it stays in history, and the
+redraft is itself redraftable.
+
 /api owns this because it is business logic; mcp_server only wraps it.
 """
 
@@ -31,11 +37,12 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from api.pipeline import run
+from api.pipeline import EventSink, redraft, run
 from api.schema import (
     AgentInput,
     AgentOutput,
@@ -45,7 +52,9 @@ from api.schema import (
     NoticeCode,
     Platform,
     ProgressEvent,
+    REDRAFTABLE_DIALS,
     Status,
+    merge_dials,
 )
 
 _log = logging.getLogger(__name__)
@@ -107,6 +116,68 @@ def start(inp: AgentInput) -> str:
     The pipeline executes on a worker thread; nothing about `inp` is validated
     here beyond what AgentInput already guarantees.
     """
+    return _submit(inp, lambda on_event: run(inp, on_event=on_event))
+
+
+def start_redraft(session_id: str, changes: dict) -> str:
+    """Accept a redraft of an earlier run and return its OWN session_id.
+
+    This is what makes the agent a loop rather than a one-shot drafter. The
+    paper, the ledger and the card all come from `session_id`; the caller
+    supplies only the dials that change.
+
+    The new job records its own request and card sidecars, exactly as a first
+    run does, so the redraft is itself redraftable — "now in English" can be
+    followed by "and also for Xiaohongshu" without going back to the URL.
+
+    Args:
+        session_id: the run being redrafted.
+        changes: dial values to apply, filtered by `schema.REDRAFTABLE_DIALS`.
+
+    Returns:
+        A new session_id to poll. The original run is untouched and stays in
+        history — a redraft never overwrites what a human already reviewed.
+
+    Raises:
+        LookupError: the run cannot be reopened — the id expired, it came from
+            another instance, its request sidecar was never recorded, or it is
+            still drafting. The message says which.
+        ValueError: `changes` asks for nothing this may touch, or for a value
+            that is not valid for its field.
+    """
+    before = read_request(session_id)
+    prev = result(session_id)
+    if before is None or prev is None:
+        raise LookupError(_lost_message(session_id))
+    if prev.status is Status.running:
+        raise LookupError(
+            f"job {session_id} is still drafting — poll `job_status` and "
+            "redraft it once it reports state=done"
+        )
+
+    after = merge_dials(before, changes)
+    if after == before:
+        raise ValueError(
+            "nothing to redraft: none of those are things a redraft can change "
+            f"({', '.join(sorted(REDRAFTABLE_DIALS))})"
+        )
+
+    # Missing card -> redraft() falls back to a full run. That is slower, not
+    # wrong, so it is not worth refusing over.
+    card = read_card(session_id) or {}
+    return _submit(
+        after,
+        lambda on_event: redraft(prev, before, after, card, on_event=on_event),
+    )
+
+
+def _submit(inp: AgentInput, work: Callable[[EventSink], AgentOutput]) -> str:
+    """Register a job for `work` and hand back its session_id immediately.
+
+    `work` is whatever produces the AgentOutput — a first run or a redraft.
+    Everything downstream of here (progress, partials, the mirror, the request
+    sidecar, eviction) is identical for both, which is the point of the seam.
+    """
     session_id = f"j_{_INSTANCE}_{uuid.uuid4().hex[:8]}"
     now = time.time()
     record = _JobRecord(
@@ -124,7 +195,7 @@ def start(inp: AgentInput) -> str:
         _evict_locked()
         _JOBS[session_id] = record
     _write_request(session_id, inp)
-    record.future = _POOL.submit(_execute, session_id, inp)
+    record.future = _POOL.submit(_execute, session_id, work)
     return session_id
 
 
@@ -202,22 +273,22 @@ def result(session_id: str) -> AgentOutput | None:
 
 # --- execution --------------------------------------------------------------
 
-def _execute(session_id: str, inp: AgentInput) -> None:
-    """Worker body: run the pipeline, recording progress and the outcome."""
+def _execute(session_id: str, work: Callable[[EventSink], AgentOutput]) -> None:
+    """Worker body: do the work, recording progress and the outcome."""
     record = _get(session_id)
     if record is None:  # evicted before it ever started
         return
 
     _update(record, state=JobState.running, stage="fetch", message="fetching source")
     try:
-        output = run(inp, on_event=lambda event: _on_event(record, event))
+        output = work(lambda event: _on_event(record, event))
     except Exception as err:  # a crash is a result, not an exception to lose
         output = AgentOutput(
             status=Status.failed,
             notices=[
                 Notice(
                     code=NoticeCode.fetch_error,
-                    message=f"generate failed: {err}",
+                    message=f"the run failed: {err}",
                 )
             ],
         )
@@ -451,6 +522,6 @@ def _is_safe_session_id(session_id: str) -> bool:
 
 
 __all__ = [
-    "start", "wait", "status", "result", "read_request", "read_card", "jobs_dir",
-    "Platform",
+    "start", "start_redraft", "wait", "status", "result", "read_request",
+    "read_card", "jobs_dir", "Platform",
 ]

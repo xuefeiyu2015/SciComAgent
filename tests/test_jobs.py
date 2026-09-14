@@ -19,6 +19,7 @@ from api.schema import (
     AgentOutput,
     Claim,
     JobState,
+    Language,
     Notice,
     NoticeCode,
     Platform,
@@ -204,6 +205,131 @@ def test_an_unwritable_card_never_sinks_the_run(monkeypatch):
     jobs.wait(session_id, 5)
 
     assert jobs.status(session_id).state is JobState.done
+
+
+# --- redrafting an earlier run ----------------------------------------------
+
+def _finish_a_run(monkeypatch, card=None, **input_kw):
+    """Run and finish one job, so there is something to redraft."""
+    def emitting(inp, on_event=None):
+        if on_event is not None:
+            on_event(ProgressEvent(stage="ledger", ledger=[], card=card or {}))
+        return _finished()
+
+    _stub_run(monkeypatch, emitting)
+    session_id = jobs.start(_input(**input_kw))
+    jobs.wait(session_id, 5)
+    return session_id
+
+
+def test_a_redraft_reopens_the_paper_and_gets_its_own_id(monkeypatch):
+    first = _finish_a_run(monkeypatch, card={"title": "t"})
+    seen = {}
+
+    def fake_redraft(prev, before, after, card, on_event=None):
+        seen.update(before=before, after=after, card=card, prev=prev)
+        return _finished()
+
+    monkeypatch.setattr(jobs, "redraft", fake_redraft)
+    second = jobs.start_redraft(first, {"language": "en"})
+    jobs.wait(second, 5)
+
+    assert second != first
+    assert jobs.status(second).state is JobState.done
+    assert seen["before"].language is Language.zh
+    assert seen["after"].language is Language.en
+    assert seen["after"].source == seen["before"].source, "same paper"
+    assert seen["card"] == {"title": "t"}
+
+
+def test_a_redraft_is_itself_redraftable(monkeypatch):
+    """The loop closes: 'now in English' can be followed by 'and for xhs'."""
+    first = _finish_a_run(monkeypatch, card={"title": "t"})
+    monkeypatch.setattr(
+        jobs, "redraft",
+        lambda prev, before, after, card, on_event=None: _finished(),
+    )
+
+    second = jobs.start_redraft(first, {"language": "en"})
+    jobs.wait(second, 5)
+
+    assert jobs.read_request(second).language is Language.en
+    third = jobs.start_redraft(second, {"platforms": ["xhs"]})
+    jobs.wait(third, 5)
+    assert jobs.read_request(third).platforms == [Platform.xhs]
+
+
+def test_a_redraft_never_overwrites_what_was_reviewed(monkeypatch):
+    first = _finish_a_run(monkeypatch, card={"title": "t"})
+    monkeypatch.setattr(
+        jobs, "redraft",
+        lambda prev, before, after, card, on_event=None: _finished(),
+    )
+
+    second = jobs.start_redraft(first, {"liveliness": 5})
+    jobs.wait(second, 5)
+
+    assert jobs.status(first).state is JobState.done
+    assert jobs.result(first) is not None
+    assert jobs.read_request(first).liveliness == 3, "the original dials stand"
+
+
+def test_a_redraft_cannot_change_the_paper(monkeypatch):
+    first = _finish_a_run(monkeypatch, card={"title": "t"})
+    seen = {}
+    monkeypatch.setattr(
+        jobs, "redraft",
+        lambda prev, before, after, card, on_event=None: seen.update(after=after)
+        or _finished(),
+    )
+
+    second = jobs.start_redraft(
+        first, {"language": "en", "source": "http://some-other-paper"}
+    )
+    jobs.wait(second, 5)
+
+    assert seen["after"].source == "http://paper"
+
+
+def test_a_redraft_of_nothing_is_refused(monkeypatch):
+    first = _finish_a_run(monkeypatch)
+
+    with pytest.raises(ValueError):
+        jobs.start_redraft(first, {"source": "http://elsewhere"})
+    with pytest.raises(ValueError):
+        jobs.start_redraft(first, {})
+
+
+def test_an_out_of_range_dial_is_refused_before_anything_starts(monkeypatch):
+    first = _finish_a_run(monkeypatch)
+
+    with pytest.raises(ValueError):
+        jobs.start_redraft(first, {"liveliness": 99})
+
+
+def test_redrafting_a_run_this_process_lost_says_so():
+    with pytest.raises(LookupError, match="generate"):
+        jobs.start_redraft("j_other_deadbeef", {"language": "en"})
+
+
+def test_a_run_still_drafting_cannot_be_redrafted(monkeypatch):
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow(inp, on_event=None):
+        started.set()
+        release.wait(5)
+        return _finished()
+
+    _stub_run(monkeypatch, slow)
+    session_id = jobs.start(_input())
+    try:
+        assert started.wait(5)
+        with pytest.raises(LookupError, match="still drafting"):
+            jobs.start_redraft(session_id, {"language": "en"})
+    finally:
+        release.set()
+        jobs.wait(session_id, 5)
 
 
 # --- unknown / lost ids -----------------------------------------------------

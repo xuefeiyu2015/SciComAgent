@@ -121,6 +121,43 @@ class AgentInput(BaseModel):
         return seen
 
 
+# Dials a redraft may change. `source` and `source_type` are deliberately
+# ABSENT: a redraft writes the same paper again, and nothing proposed by a model
+# in conversation may quietly turn it into a different one.
+REDRAFTABLE_DIALS = frozenset(
+    {"platforms", "language", "audience", "liveliness", "background"}
+)
+
+
+def merge_dials(before: AgentInput, changes: dict) -> AgentInput:
+    """The previous request with `changes` applied — whitelisted and validated.
+
+    One place, so the conversation's proposal and the job that runs it can
+    never disagree about what a dial change means. Keys outside
+    REDRAFTABLE_DIALS are dropped silently rather than refused: a model asking
+    for a different `source` is asking for a different paper, and the answer is
+    to ignore that part, not to fail the whole request.
+
+    Args:
+        before: the request being redrafted.
+        changes: proposed dial values, in AgentInput's own vocabulary.
+
+    Returns:
+        A new AgentInput. Round-tripping through validation is the point —
+        an out-of-range `liveliness` raises here, and the `wechat -> xhs`
+        collapse still fires, exactly as it would for a first run.
+
+    Raises:
+        ValueError: when nothing in `changes` is a dial this may touch, or when
+            a value is not valid for its field (pydantic's ValidationError is
+            a ValueError).
+    """
+    wanted = {k: v for k, v in changes.items() if k in REDRAFTABLE_DIALS}
+    if not wanted:
+        return before.model_copy(deep=True)
+    return AgentInput.model_validate({**before.model_dump(), **wanted})
+
+
 # --- background research path -------------------------------------------------
 
 class TopicAbstraction(BaseModel):
