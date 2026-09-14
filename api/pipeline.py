@@ -124,8 +124,12 @@ def run(inp: AgentInput, on_event: EventSink | None = None) -> AgentOutput:
     card, ledger, early = _fetch_and_build_ledger(inp)
     if early is not None:
         return early
+    # The card rides along: a listener that keeps it can redraft this paper
+    # later — another language, another platform — without paying for the
+    # fetch and the extraction a second time.
     _emit(on_event, ProgressEvent(
-        stage="ledger", message=f"{len(ledger)} claims sourced", ledger=ledger
+        stage="ledger", message=f"{len(ledger)} claims sourced", ledger=ledger,
+        card=card or {},
     ))
 
     notices: list[Notice] = []

@@ -27,6 +27,7 @@ def _isolate_job_mirrors(tmp_path, monkeypatch):
     """Point every job artifact at a throwaway directory for this test."""
     monkeypatch.setattr(jobs, "_JOBS_DIR", tmp_path / "jobs")
     monkeypatch.setattr(jobs, "_REQUESTS_DIR", tmp_path / "jobs" / "requests", raising=False)
+    monkeypatch.setattr(jobs, "_CARDS_DIR", tmp_path / "jobs" / "cards", raising=False)
     yield tmp_path
 
     # Reaching into _JOBS is deliberate: this is the safety net, and it has to

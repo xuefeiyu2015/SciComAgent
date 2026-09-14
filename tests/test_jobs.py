@@ -9,6 +9,7 @@ reporting for ids this process has never heard of.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -159,6 +160,50 @@ def test_partial_result_is_readable_mid_run(monkeypatch):
     finally:
         release.set()
         jobs.wait(session_id, 5)
+
+
+# --- the source card, kept for a later redraft ------------------------------
+
+def test_the_source_card_is_kept_so_the_paper_can_be_redrafted(monkeypatch):
+    card = {"contribution": "mice got better", "findings": ["23% smaller"]}
+
+    def emitting(inp, on_event=None):
+        on_event(ProgressEvent(stage="ledger", ledger=[], card=card))
+        return _finished()
+
+    _stub_run(monkeypatch, emitting)
+    session_id = jobs.start(_input())
+    jobs.wait(session_id, 5)
+
+    assert jobs.read_card(session_id) == card
+
+
+def test_a_run_that_recorded_no_card_reads_none(monkeypatch):
+    """Runs mirrored before the sidecar existed must stay loadable."""
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input())
+    jobs.wait(session_id, 5)
+
+    assert jobs.read_card(session_id) is None
+    assert jobs.read_card("j_nope_nothing") is None
+    assert jobs.read_card("../../etc/passwd") is None
+
+
+def test_an_unwritable_card_never_sinks_the_run(monkeypatch):
+    def explode(path, *a, **k):
+        raise OSError("read-only filesystem")
+
+    def emitting(inp, on_event=None):
+        on_event(ProgressEvent(stage="ledger", ledger=[], card={"a": 1}))
+        return _finished()
+
+    monkeypatch.setattr(Path, "write_text", explode)
+    _stub_run(monkeypatch, emitting)
+    session_id = jobs.start(_input())
+    jobs.wait(session_id, 5)
+
+    assert jobs.status(session_id).state is JobState.done
 
 
 # --- unknown / lost ids -----------------------------------------------------

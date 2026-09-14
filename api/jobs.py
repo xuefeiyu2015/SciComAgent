@@ -60,6 +60,12 @@ _JOBS_DIR = _REPO_ROOT / "outputs" / "jobs"
 # the MCP output contract that agent.yaml documents.
 _REQUESTS_DIR = _JOBS_DIR / "requests"
 
+# The source card each run extracted, kept for the same reason and in the same
+# shape as the request: together they are everything a redraft needs to write
+# this paper again without fetching it. Its own directory, so that anything
+# globbing the mirrors cannot pick it up.
+_CARDS_DIR = _JOBS_DIR / "cards"
+
 # Identifies THIS process. An id that doesn't carry it was minted elsewhere.
 _INSTANCE = uuid.uuid4().hex[:6]
 
@@ -259,6 +265,12 @@ def _on_event(record: _JobRecord, event: ProgressEvent) -> None:
         progress.result_available = bool(
             record.partial.platform_outputs or record.partial.claim_ledger
         )
+        session_id = progress.session_id
+
+    # Outside the lock: this touches the filesystem, and nothing else in the
+    # job needs to wait on a disk write to read its own progress.
+    if event.card:
+        _write_card(session_id, event.card)
 
 
 def _update(record: _JobRecord, **fields) -> None:
@@ -357,6 +369,39 @@ def read_request(session_id: str) -> AgentInput | None:
         return None
 
 
+def _write_card(session_id: str, card: dict) -> None:
+    """Record what the paper said. Best effort — never sink a run over it."""
+    if not _is_safe_session_id(session_id):
+        return
+    try:
+        _CARDS_DIR.mkdir(parents=True, exist_ok=True)
+        (_CARDS_DIR / f"{session_id}.json").write_text(
+            json.dumps(card, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as err:
+        _log.debug("job %s: could not record the source card (%s)", session_id, err)
+
+
+def read_card(session_id: str) -> dict | None:
+    """The source card behind a run, or None when it was never recorded.
+
+    Same contract as `read_request`: a run from before this existed, or one
+    whose sidecar could not be written, has no card. That is normal — a caller
+    without one redrafts the slow way, from the source.
+    """
+    if not _is_safe_session_id(session_id):
+        return None
+    path = _CARDS_DIR / f"{session_id}.json"
+    try:
+        if not path.exists():
+            return None
+        card = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as err:  # corrupt or unreadable is the same as absent
+        _log.debug("job %s: unreadable card sidecar (%s)", session_id, err)
+        return None
+    return card if isinstance(card, dict) else None
+
+
 # --- disk mirror ------------------------------------------------------------
 
 def _mirror_path(session_id: str) -> Path:
@@ -405,4 +450,7 @@ def _is_safe_session_id(session_id: str) -> bool:
     )
 
 
-__all__ = ["start", "wait", "status", "result", "read_request", "jobs_dir", "Platform"]
+__all__ = [
+    "start", "wait", "status", "result", "read_request", "read_card", "jobs_dir",
+    "Platform",
+]

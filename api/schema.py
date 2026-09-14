@@ -520,3 +520,9 @@ class ProgressEvent(BaseModel):
     draft: PlatformOutput | None = None
     flags: list[OverreachFlag] = Field(default_factory=list)
     ledger: list[Claim] = Field(default_factory=list)
+    card: dict = Field(
+        default_factory=dict,
+        description="The source card this run extracted, carried on the ledger "
+        "milestone. A listener may keep it so the SAME paper can be redrafted "
+        "later without fetching and extracting it again.",
+    )
