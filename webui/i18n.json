@@ -252,7 +252,12 @@
     "front.sell.4.title": "出稿不是终点",
     "front.sell.4.body": "稿子出来以后还能接着说：换成英文、再来个小红书版、写活泼一点、写给临床医生看。论文不会重读一遍，依据清单照旧沿用——只有换语言才需要重建，因为清单本身是用那门语言写的。",
     "board.earlierVersion": "先前的版本",
-    "chat.rerunKept": "这次重写没成。「{label}」原样留着，一个字都没丢。"
+    "chat.rerunKept": "这次重写没成。「{label}」原样留着，一个字都没丢。",
+    "chat.restateHead": "论文这次读不到了，但依据还在。",
+    "chat.restateNote": "第一次跑的时候，每条依据都从原文里逐句摘了下来，还是论文自己的英文。我可以照着这些原文，把台账改用新语言重述一遍，再据此起草——不需要再去抓论文。出处是沿用过来的，不是重新读的；数字会在代码里逐条核对，凡是依据里没有的数字一律不采用。要这样做吗？",
+    "chat.restateGo": "照依据重述",
+    "chat.restateStay": "算了",
+    "board.restatedBanner": "这一版的台账是照第一次存下的原文依据重述的，没有重新读论文。依据原样未动；发布前请对着台账核一遍措辞。"
   },
   "en": {
     "app.name": "ScicomAgent",
@@ -507,6 +512,11 @@
     "front.sell.4.title": "The draft is not the end",
     "front.sell.4.body": "Once a draft exists you can keep going: in English, also for Xiaohongshu, livelier, written for clinicians. The paper is not read again and the claim ledger is reused — only a language change rebuilds it, because the ledger is written in that language.",
     "board.earlierVersion": "earlier version",
-    "chat.rerunKept": "That rewrite did not land. “{label}” is still here, exactly as it was — nothing was lost."
+    "chat.rerunKept": "That rewrite did not land. “{label}” is still here, exactly as it was — nothing was lost.",
+    "chat.restateHead": "I cannot read the paper again — but the evidence is still here.",
+    "chat.restateNote": "When this paper was first read, every claim's evidence was quoted from it verbatim, in the paper's own words — and that is still here. I can restate the ledger in the new language from those quotes and draft from it, with no fetch at all. The provenance would be carried over rather than read fresh, and every number is checked in code against its own evidence. Shall I?",
+    "chat.restateGo": "Restate from the evidence",
+    "chat.restateStay": "No, leave it",
+    "board.restatedBanner": "This version's ledger was restated from evidence stored on the first read, not from the paper itself. The evidence is untouched — check the wording against it before publishing."
   }
 }

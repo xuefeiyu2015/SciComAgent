@@ -278,7 +278,8 @@ def test_redraft_passes_only_the_settings_that_were_given(monkeypatch):
     seen = {}
     monkeypatch.setattr(
         jobs, "start_redraft",
-        lambda sid, changes: seen.update(sid=sid, changes=changes) or "j_x_2",
+        lambda sid, changes, allow_restate=False:
+        seen.update(sid=sid, changes=changes) or "j_x_2",
     )
     monkeypatch.setattr(jobs, "wait", lambda sid, timeout: True)
     monkeypatch.setattr(jobs, "result", lambda sid: AgentOutput(
@@ -295,7 +296,8 @@ def test_redraft_passes_only_the_settings_that_were_given(monkeypatch):
 
 def test_redraft_hands_back_its_own_session_id(monkeypatch):
     """Poll the redraft, not the run it came from."""
-    monkeypatch.setattr(jobs, "start_redraft", lambda sid, changes: "j_x_2")
+    monkeypatch.setattr(jobs, "start_redraft",
+                        lambda sid, changes, allow_restate=False: "j_x_2")
     monkeypatch.setattr(jobs, "wait", lambda sid, timeout: False)
 
     out = redraft(session_id="j_x_1", language="en", wait_seconds=0)
@@ -306,7 +308,7 @@ def test_redraft_hands_back_its_own_session_id(monkeypatch):
 
 
 def test_redrafting_a_run_that_is_gone_says_to_start_over(monkeypatch):
-    def lost(sid, changes):
+    def lost(sid, changes, allow_restate=False):
         raise LookupError("No such job here: call `generate` again.")
 
     monkeypatch.setattr(jobs, "start_redraft", lost)
@@ -319,7 +321,7 @@ def test_redrafting_a_run_that_is_gone_says_to_start_over(monkeypatch):
 
 
 def test_redraft_never_crashes(monkeypatch):
-    def boom(sid, changes):
+    def boom(sid, changes, allow_restate=False):
         raise RuntimeError("the registry is on fire")
 
     monkeypatch.setattr(jobs, "start_redraft", boom)

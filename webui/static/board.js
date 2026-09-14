@@ -26,6 +26,7 @@ const state = {
   decisions: {},      // "platform:flagIndex" -> "accepted" | "rewritten"
   archive: [],        // earlier versions in this conversation, oldest first
   replacing: null,    // the run a redraft would replace, until it actually lands
+  lastChanges: null,  // the dials of the redraft in flight, to repeat an offer
   settings: null,
   providers: [],
   history: [],
@@ -273,7 +274,12 @@ async function loadResult() {
       const kept = state.replacing;
       state.replacing = null;
       restoreRun(kept);
-      turn(t('board.speaker'), esc(t('chat.rerunKept', { label: kept.label })));
+      const node = turn(t('board.speaker'), esc(t('chat.rerunKept', { label: kept.label })));
+      // The source is gone, but the ledger kept the paper's own words. That is
+      // an offer, not an ending.
+      if ((incoming.notices || []).some((n) => n.code === 'can_restate')) {
+        node.append(restateOffer(state.lastChanges || {}));
+      }
       renderBoard();
       renderApparatus();
     }
@@ -424,6 +430,12 @@ function renderBoard() {
       if (first) showCitation(first);
     });
   });
+
+  if ((state.result.notices || []).some((n) => n.code === 'restated')) {
+    const banner = el('div', 'restated-banner');
+    banner.textContent = t('board.restatedBanner');
+    board.prepend(banner);
+  }
 
   // Oldest at the top, the one you are reviewing at the bottom. A redraft adds
   // to this paper; it does not replace what you already read.
@@ -1696,12 +1708,14 @@ function dialText(dial, value) {
    being replaced is SNAPSHOTTED, and it only moves into the stack once the new
    one has actually landed. If the redraft fails, the snapshot comes straight
    back. The conversation stays either way — that is the point of a loop. */
-async function startRedraft(changes) {
+async function startRedraft(changes, allowRestate = false) {
   const node = turn(t('board.speaker'),
     `<div class="progress">${esc(t('chat.rerunRunning'))}</div><div class="progress-bar"><i style="width:4%"></i></div>`);
   let body;
   try {
-    body = await postJSON('/api/redraft', { session_id: state.sessionId, changes });
+    body = await postJSON('/api/redraft', {
+      session_id: state.sessionId, changes, allow_restate: allowRestate,
+    });
   } catch (err) {
     node.remove();
     turn(t('board.speaker'), `<span style="color:var(--flag)">${esc(err.message)}</span>`);
@@ -1709,9 +1723,29 @@ async function startRedraft(changes) {
   }
   clearInterval(state.polling);
   state.replacing = snapshotRun();
+  state.lastChanges = changes;   // so a `can_restate` offer can repeat the ask
   Object.assign(state.slots, changes);
   state.sessionId = body.session_id;
   poll(node);
+}
+
+/* The paper is out of reach, but its evidence is not. Offer the trade in
+   plain words and let the human decide — carrying provenance over instead of
+   reading it fresh is exactly the kind of call this agent never makes alone. */
+function restateOffer(changes) {
+  const box = el('div', 'slip');
+  box.innerHTML = `<div class="turn-label">${esc(t('chat.restateHead'))}</div>`
+    + `<p class="note">${esc(t('chat.restateNote'))}</p>`;
+  const go = el('button', 'btn btn-solid');
+  go.textContent = t('chat.restateGo');
+  go.onclick = () => { box.remove(); startRedraft(changes, true); };
+  const stay = el('button', 'btn btn-quiet');
+  stay.textContent = t('chat.restateStay');
+  stay.onclick = () => { box.remove(); toast(t('chat.rerunDropped')); };
+  const actions = el('div', 'chips');
+  actions.append(go, stay);
+  box.append(actions);
+  return box;
 }
 
 /* An edit arrives as a PROPOSAL. Nothing reaches the draft without Apply. */

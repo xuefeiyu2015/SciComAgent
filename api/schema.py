@@ -63,6 +63,8 @@ class NoticeCode(str, Enum):
     too_short = "too_short"      # reachable but too little text -> ask for PDF
     not_a_paper = "not_a_paper"  # not a research paper -> check the link
     rate_limited = "rate_limited"  # the site is throttling us -> wait, or supply the PDF
+    can_restate = "can_restate"    # source unreachable, but the ledger can be restated -> ask
+    restated = "restated"          # this ledger was restated from stored evidence, not re-read
     fetch_error = "fetch_error"  # network failure / unreachable link
     draft_error = "draft_error"  # pipeline-internal: one platform's draft crashed
     background_error = "background_error"  # background search skipped; drafts unaffected

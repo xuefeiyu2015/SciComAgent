@@ -227,6 +227,8 @@ async def redraft_route(request: Request) -> JSONResponse:
     changes = body.get("changes")
     if not isinstance(changes, dict):
         raise _HttpError(400, "expected 'changes' to be an object of dials")
+    # Only ever true because a human clicked it on a `can_restate` offer.
+    allow_restate = bool(body.get("allow_restate"))
 
     # The same refusal as `generate`, for the same reason: a redraft is a full
     # draft-and-check chain, and a check that grades its own work is worthless.
@@ -239,7 +241,9 @@ async def redraft_route(request: Request) -> JSONResponse:
         )
 
     try:
-        return JSONResponse({"session_id": jobs.start_redraft(session_id, changes)})
+        return JSONResponse(
+            {"session_id": jobs.start_redraft(session_id, changes, allow_restate)}
+        )
     except LookupError as err:
         raise _HttpError(404, str(err)) from err
     except ValueError as err:

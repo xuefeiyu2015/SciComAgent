@@ -27,6 +27,16 @@ uv run python -m webui.app     # http://127.0.0.1:8080
   - a **lookup** — it searches, and shows you what it found with its sources,
     or what it searched for and did not find.
 
+  When a redraft needs to read the paper again and cannot — an old run with no
+  stored card, behind a link that is now rate-limiting or down — it does not
+  just fail. The ledger keeps each claim's `source_evidence` **verbatim, in the
+  paper's own language**, so the agent offers to restate the ledger from that
+  and draft without the source. You decide: the provenance is carried over
+  rather than read fresh. Evidence is never rewritten, no claim may state a
+  number its own evidence does not (checked in code), and anything that fails
+  the check keeps its original wording and is named in a notice. The result
+  carries a `restated` banner so a reviewer knows what they are looking at.
+
   The conversation survives a redraft. "Now in English" only makes sense after
   the sentences before it.
 - The rail lists **past runs**, newest first — click one to reopen its draft,

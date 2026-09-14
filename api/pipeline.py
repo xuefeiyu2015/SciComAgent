@@ -35,6 +35,7 @@ draft + provenance (claim ledger) + overstatement flags for review.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -57,6 +58,7 @@ from api.schema import (
     JargonFlag,
     CheckFlag,
     Claim,
+    ClaimKind,
     Notice,
     NoticeCode,
     OverreachFlag,
@@ -66,10 +68,15 @@ from api.schema import (
     Status,
     StyleProfile,
 )
+from api.restate import restate_ledger
 from api.style import load_style_profile
 from api.topic import abstract_topic
 
 _log = logging.getLogger(__name__)
+
+# Whether a claim carries a figure worth listing as a key number on a card
+# rebuilt from a ledger.
+_NUMBERISH = re.compile(r"\d")
 
 # Redraft attempts after the first draft, while faithfulness flags remain.
 MAX_REDRAFTS = 2
@@ -310,6 +317,7 @@ def redraft(
     after: AgentInput,
     card: dict,
     on_event: EventSink | None = None,
+    allow_restate: bool = False,
 ) -> AgentOutput:
     """Write the SAME paper again with different dials.
 
@@ -347,15 +355,20 @@ def redraft(
             or missing means the paper itself is no longer in hand, and the
             redraft falls back to a full run — the only path that fetches.
         on_event: as `run` — the same four prelude milestones are emitted on
-            either path, so a progress bar does not need to know which one it
+            every path, so a progress bar does not need to know which one it
             got.
+        allow_restate: what to do when there is no card AND the source cannot
+            be fetched. False (the default) returns the fetch failure with a
+            `can_restate` notice, so a human can be asked. True takes the
+            offer: the ledger is restated in the new language from the paper's
+            own stored evidence (`api.restate`), and the result is marked.
 
     Returns:
         An AgentOutput shaped exactly like `run`'s — including `no_claims` when
         a rebuilt ledger comes back empty. Never raises, never auto-publishes.
     """
     if not _can_reuse(prev, before, after, card):
-        return run(after, on_event)
+        return _without_the_card(prev, after, on_event, allow_restate)
 
     same_language = before.language == after.language
     if same_language:
@@ -407,6 +420,144 @@ def redraft(
     return _assemble(
         after, drafted, ledger, background, glossary, style, notices, on_event
     )
+
+
+def _without_the_card(
+    prev: AgentOutput,
+    after: AgentInput,
+    on_event: EventSink | None,
+    allow_restate: bool,
+) -> AgentOutput:
+    """No card, so the paper has to be read again — unless it cannot be.
+
+    The ordinary answer is a full run. What this adds is the case where that
+    run cannot happen: the link is behind a rate limit, or down, or gone. The
+    paper is unreachable, but the PART OF IT THAT MATTERS is not — the ledger
+    still carries the verbatim evidence every claim was drawn from.
+
+    So a dead fetch is not the end of the conversation. It comes back as an
+    offer (`can_restate`), and a human decides whether provenance carried over
+    from stored evidence is good enough for what they are about to publish.
+    That is exactly the kind of call this agent never makes on its own.
+    """
+    if allow_restate and prev.claim_ledger:
+        return _restate_and_draft(prev, after, on_event)
+
+    out = run(after, on_event)
+    if out.status is not Status.failed or not prev.claim_ledger:
+        return out
+
+    out.notices.append(
+        Notice(
+            code=NoticeCode.can_restate,
+            message=(
+                f"The paper could not be read again, but this run's ledger still "
+                f"holds the evidence its {len(prev.claim_ledger)} claims came "
+                "from, in the paper's own words. I can restate those claims in "
+                "the new language and draft from them, without the source. The "
+                "provenance would be carried over rather than read fresh — your "
+                "call."
+            ),
+        )
+    )
+    return out
+
+
+def _restate_and_draft(
+    prev: AgentOutput, after: AgentInput, on_event: EventSink | None
+) -> AgentOutput:
+    """The offer, taken: restate the ledger, then draft from it as usual.
+
+    Everything downstream is the ordinary pipeline — the researcher runs, the
+    drafter writes, the reviewer audits, the redraft loop tightens — so this is
+    not a lesser kind of draft. What differs is where the ledger came from, and
+    the output says so in a notice that survives into `render` and onto the
+    board.
+
+    The researcher works from a card built out of the ledger itself. It is a
+    thinner card than the extractor's, and honestly so: it holds what was
+    kept of the paper, which is what this whole path is about.
+    """
+    ledger, kept = restate_ledger(prev.claim_ledger, after.language)
+    _emit(on_event, ProgressEvent(
+        stage="ledger",
+        message=f"{len(ledger) - len(kept)} claims restated in {after.language.value}",
+        ledger=ledger,
+    ))
+
+    notices = [
+        Notice(
+            code=NoticeCode.restated,
+            message=(
+                "The source could not be read again, so these claims were "
+                "restated from the evidence the first run stored — quoted from "
+                "the paper, in its own words. The evidence is untouched and no "
+                "claim states a number its evidence does not. Check the wording "
+                "against the ledger before publishing."
+            ),
+        )
+    ]
+    if kept:
+        # A mixed-language ledger is honest; a SILENTLY mixed one is not. These
+        # entries were refused — most often for stating a number their evidence
+        # does not — so they stand as first written, in the old language.
+        notices.append(
+            Notice(
+                code=NoticeCode.restated,
+                message=(
+                    f"{len(kept)} claim(s) could not be restated safely and are "
+                    f"unchanged, still in the previous language: "
+                    f"{', '.join(kept)}. Anything a draft cites from them is "
+                    "still sourced, but the wording did not carry over."
+                ),
+            )
+        )
+    card = _card_from_ledger(ledger, prev)
+    background: list[BackgroundMaterial] = []
+    glossary = Glossary()
+    if after.background:
+        background = _background_or_notice(card, after, notices)
+        glossary = _glossary_or_notice(ledger, card, after, notices)
+    _emit(on_event, ProgressEvent(
+        stage="background", message=f"{len(background)} background materials"
+    ))
+    _emit(on_event, ProgressEvent(
+        stage="glossary", message=f"{len(glossary.terms)} terms explained"
+    ))
+
+    style = _style_or_notice(notices)
+    _emit(on_event, ProgressEvent(
+        stage="style", message="voice ready" if style else "default voice"
+    ))
+
+    drafted = _draft_all(
+        after, ledger, card, background, style, glossary, notices, on_event
+    )
+    return _assemble(
+        after, drafted, ledger, background, glossary, style, notices, on_event
+    )
+
+
+def _card_from_ledger(ledger: list[Claim], prev: AgentOutput) -> dict:
+    """A source card assembled from what the ledger kept of the paper.
+
+    The evidence quotes ARE the paper, as much of it as was ever retained, and
+    they are in the source's own language — which is what the topic abstraction
+    wants anyway, since it writes English search queries. The angle comes from
+    the first finding, the same role `contribution` plays for a real card.
+    """
+    findings = [c for c in ledger if c.kind is ClaimKind.finding]
+    return {
+        "title": prev.platform_outputs[0].title_options[0]
+        if prev.platform_outputs and prev.platform_outputs[0].title_options
+        else "",
+        "contribution": findings[0].claim if findings else "",
+        "findings": [c.source_evidence for c in findings],
+        "key_numbers": [c.claim for c in ledger if _NUMBERISH.search(c.claim)],
+        "methods": [c.source_evidence for c in ledger if c.kind is ClaimKind.method],
+        "limitations": [],
+        "key_figures": [],
+    }
 
 
 def _can_reuse(

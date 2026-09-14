@@ -492,7 +492,7 @@ def test_redraft_starts_a_new_run_and_returns_its_id(client, monkeypatch):
     seen = {}
     monkeypatch.setattr(
         webui.jobs, "start_redraft",
-        lambda sid, changes: seen.update(sid=sid, changes=changes) or "j_a_2",
+        lambda sid, changes, restate=False: seen.update(sid=sid, changes=changes) or "j_a_2",
     )
 
     body = client.post(
@@ -504,7 +504,7 @@ def test_redraft_starts_a_new_run_and_returns_its_id(client, monkeypatch):
 
 
 def test_redrafting_a_run_that_is_gone_is_a_404(client, monkeypatch):
-    def lost(sid, changes):
+    def lost(sid, changes, restate=False):
         raise LookupError("No such job: call generate again.")
 
     monkeypatch.setattr(webui.jobs, "start_redraft", lost)
@@ -516,7 +516,7 @@ def test_redrafting_a_run_that_is_gone_is_a_404(client, monkeypatch):
 
 
 def test_redrafting_nothing_is_a_400(client, monkeypatch):
-    def nothing(sid, changes):
+    def nothing(sid, changes, restate=False):
         raise ValueError("nothing to redraft")
 
     monkeypatch.setattr(webui.jobs, "start_redraft", nothing)
@@ -533,7 +533,7 @@ def test_redrafting_nothing_is_a_400(client, monkeypatch):
 def test_a_redraft_cannot_grade_its_own_work_either(client, monkeypatch):
     """Same refusal as generate: a redraft is a full draft-and-check chain."""
     called = []
-    monkeypatch.setattr(webui.jobs, "start_redraft", lambda *a: called.append(a))
+    monkeypatch.setattr(webui.jobs, "start_redraft", lambda *a, **k: called.append(a))
     monkeypatch.setattr(webui.settings, "drafter_reviewer_distinct", lambda: False)
 
     resp = client.post(

@@ -252,6 +252,130 @@ def test_a_different_paper_is_never_a_redraft(monkeypatch):
     assert spy["fetch"] == 1
 
 
+# --- the paper is out of reach ------------------------------------------------
+
+def test_an_unfetchable_paper_offers_the_ledger_instead_of_just_failing(monkeypatch):
+    """A run with no card CAN only re-read the paper. When that fails, the
+    evidence the first run stored is still a way through — so say so."""
+    _stub_steps(monkeypatch)
+    monkeypatch.setattr(
+        pipeline, "fetch_source",
+        lambda source, source_type: FetchResult(
+            ok=False, code="rate_limited", reason="the site is rate-limiting us"),
+    )
+
+    out = redraft(_previous(), _input(language=Language.zh),
+                  _input(language=Language.en), {})
+
+    assert out.status == Status.failed
+    codes = [n.code for n in out.notices]
+    assert NoticeCode.rate_limited in codes
+    assert NoticeCode.can_restate in codes
+
+
+def test_the_offer_is_not_taken_on_the_agents_own_say_so(monkeypatch):
+    """Carrying provenance over instead of reading it fresh is a human's call."""
+    spy = _stub_steps(monkeypatch)
+    restated = []
+    monkeypatch.setattr(pipeline, "restate_ledger",
+                        lambda ledger, language: (restated.append(language) or ledger, []))
+    monkeypatch.setattr(
+        pipeline, "fetch_source",
+        lambda source, source_type: FetchResult(ok=False, code="fetch_error", reason="down"),
+    )
+
+    redraft(_previous(), _input(language=Language.zh), _input(language=Language.en), {})
+
+    assert restated == [], "it must ask, not decide"
+    assert spy["draft"] == 0
+
+
+def test_no_offer_when_there_is_no_ledger_to_restate(monkeypatch):
+    _stub_steps(monkeypatch)
+    monkeypatch.setattr(
+        pipeline, "fetch_source",
+        lambda source, source_type: FetchResult(ok=False, code="fetch_error", reason="down"),
+    )
+
+    out = redraft(_previous(claim_ledger=[]), _input(language=Language.zh),
+                  _input(language=Language.en), {})
+
+    assert NoticeCode.can_restate not in [n.code for n in out.notices]
+
+
+def test_taking_the_offer_drafts_from_the_restated_ledger(monkeypatch):
+    spy = _stub_steps(monkeypatch)
+    seen = {}
+
+    def fake_restate(ledger, language):
+        seen["language"] = language
+        return [c.model_copy(update={"claim": "restated in en"}) for c in ledger], []
+
+    monkeypatch.setattr(pipeline, "restate_ledger", fake_restate)
+
+    out = redraft(_previous(), _input(language=Language.zh),
+                  _input(language=Language.en), {}, allow_restate=True)
+
+    assert spy["fetch"] == 0, "the whole point is not needing the paper"
+    assert seen["language"] is Language.en
+    assert out.status == Status.needs_review
+    assert out.claim_ledger[0].claim == "restated in en"
+    assert spy["check"] == 1, "the reviewer still audits it"
+
+
+def test_a_restated_draft_says_so(monkeypatch):
+    """A human reviewing this must know the provenance was carried over."""
+    _stub_steps(monkeypatch)
+    monkeypatch.setattr(pipeline, "restate_ledger",
+                        lambda ledger, language: (ledger, []))
+
+    out = redraft(_previous(), _input(language=Language.zh),
+                  _input(language=Language.en), {}, allow_restate=True)
+
+    assert NoticeCode.restated in [n.code for n in out.notices]
+
+
+def test_a_restated_run_researches_from_what_the_ledger_kept(monkeypatch):
+    """The user's ask: the researcher still finds background for the new draft,
+    working from the evidence rather than the paper."""
+    spy = _stub_steps(monkeypatch)
+    monkeypatch.setattr(pipeline, "restate_ledger",
+                        lambda ledger, language: (ledger, []))
+
+    out = redraft(_previous(), _input(language=Language.zh),
+                  _input(language=Language.en, background=True), {},
+                  allow_restate=True)
+
+    assert spy["gather_background"] == 1
+    assert spy["build_glossary"] == 1
+    assert out.background_materials == _MATERIALS
+
+
+def test_the_card_rebuilt_from_a_ledger_carries_the_papers_own_words(monkeypatch):
+    """The evidence quotes are the source language, which is what the topic
+    abstraction wants — it writes English search queries."""
+    card = pipeline._card_from_ledger(_LEDGER, _previous())
+
+    assert card["findings"] == [c.source_evidence for c in _LEDGER]
+    assert card["contribution"] == _LEDGER[0].claim
+
+
+
+def test_claims_that_could_not_be_restated_are_named(monkeypatch):
+    """Handing a human a quietly half-translated ledger is the failure mode
+    this notice exists to prevent."""
+    _stub_steps(monkeypatch)
+    monkeypatch.setattr(pipeline, "restate_ledger",
+                        lambda ledger, language: (ledger, ["c7", "c9"]))
+
+    out = redraft(_previous(), _input(language=Language.zh),
+                  _input(language=Language.en), {}, allow_restate=True)
+
+    stuck = [n for n in out.notices if "c7, c9" in n.message]
+    assert stuck, [n.message for n in out.notices]
+    assert stuck[0].code is NoticeCode.restated
+
+
 # --- the researcher switch ----------------------------------------------------
 
 def test_turning_the_researcher_off_drops_what_it_found(monkeypatch):

@@ -226,7 +226,7 @@ def test_a_redraft_reopens_the_paper_and_gets_its_own_id(monkeypatch):
     first = _finish_a_run(monkeypatch, card={"title": "t"})
     seen = {}
 
-    def fake_redraft(prev, before, after, card, on_event=None):
+    def fake_redraft(prev, before, after, card, on_event=None, allow_restate=False):
         seen.update(before=before, after=after, card=card, prev=prev)
         return _finished()
 
@@ -247,7 +247,7 @@ def test_a_redraft_is_itself_redraftable(monkeypatch):
     first = _finish_a_run(monkeypatch, card={"title": "t"})
     monkeypatch.setattr(
         jobs, "redraft",
-        lambda prev, before, after, card, on_event=None: _finished(),
+        lambda prev, before, after, card, on_event=None, allow_restate=False: _finished(),
     )
 
     second = jobs.start_redraft(first, {"language": "en"})
@@ -263,7 +263,7 @@ def test_a_redraft_never_overwrites_what_was_reviewed(monkeypatch):
     first = _finish_a_run(monkeypatch, card={"title": "t"})
     monkeypatch.setattr(
         jobs, "redraft",
-        lambda prev, before, after, card, on_event=None: _finished(),
+        lambda prev, before, after, card, on_event=None, allow_restate=False: _finished(),
     )
 
     second = jobs.start_redraft(first, {"liveliness": 5})
@@ -279,8 +279,8 @@ def test_a_redraft_cannot_change_the_paper(monkeypatch):
     seen = {}
     monkeypatch.setattr(
         jobs, "redraft",
-        lambda prev, before, after, card, on_event=None: seen.update(after=after)
-        or _finished(),
+        lambda prev, before, after, card, on_event=None, allow_restate=False:
+        seen.update(after=after) or _finished(),
     )
 
     second = jobs.start_redraft(

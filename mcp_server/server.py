@@ -151,6 +151,7 @@ def redraft(
     audience: str | None = None,
     liveliness: int | None = None,
     background: bool | None = None,
+    from_ledger: bool = False,
     wait_seconds: int = _DEFAULT_WAIT_S,
 ) -> AgentOutput:
     """Write an earlier run's paper AGAIN, with different settings.
@@ -182,6 +183,13 @@ def redraft(
         audience: intended reader.
         liveliness: tone liveliness, 1–5.
         background: whether to gather external background materials.
+        from_ledger: only meaningful after a redraft came back with a
+            `can_restate` notice, which means the paper could not be read
+            again. Setting it true restates the ledger in the new language
+            from the evidence the first run stored, and drafts from that.
+            ASK THE HUMAN BEFORE SETTING IT: the provenance is carried over
+            rather than read fresh, and that is their call, not yours. The
+            result carries a `restated` notice saying so.
         wait_seconds: how long to wait before handing back a session_id.
             Clamped to 0–25 seconds.
     """
@@ -194,7 +202,9 @@ def redraft(
     }
     try:
         new_id = jobs.start_redraft(
-            session_id, {k: v for k, v in changes.items() if v is not None}
+            session_id,
+            {k: v for k, v in changes.items() if v is not None},
+            allow_restate=from_ledger,
         )
     except LookupError as exc:
         return AgentOutput(

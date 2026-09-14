@@ -119,7 +119,9 @@ def start(inp: AgentInput) -> str:
     return _submit(inp, lambda on_event: run(inp, on_event=on_event))
 
 
-def start_redraft(session_id: str, changes: dict) -> str:
+def start_redraft(
+    session_id: str, changes: dict, allow_restate: bool = False
+) -> str:
     """Accept a redraft of an earlier run and return its OWN session_id.
 
     This is what makes the agent a loop rather than a one-shot drafter. The
@@ -133,6 +135,10 @@ def start_redraft(session_id: str, changes: dict) -> str:
     Args:
         session_id: the run being redrafted.
         changes: dial values to apply, filtered by `schema.REDRAFTABLE_DIALS`.
+        allow_restate: permission, already given by a human, to fall back to
+            restating the ledger from its stored evidence when the paper
+            cannot be read again. Default False: the run comes back with a
+            `can_restate` notice instead, so the human can be asked.
 
     Returns:
         A new session_id to poll. The original run is untouched and stays in
@@ -156,7 +162,9 @@ def start_redraft(session_id: str, changes: dict) -> str:
         )
 
     after = merge_dials(before, changes)
-    if after == before:
+    # A restate is itself the change: "do it anyway, from what you have" needs
+    # no new dials, and refusing it for asking twice would be absurd.
+    if after == before and not allow_restate:
         raise ValueError(
             "nothing to redraft: none of those are things a redraft can change "
             f"({', '.join(sorted(REDRAFTABLE_DIALS))})"
@@ -167,7 +175,10 @@ def start_redraft(session_id: str, changes: dict) -> str:
     card = read_card(session_id) or {}
     return _submit(
         after,
-        lambda on_event: redraft(prev, before, after, card, on_event=on_event),
+        lambda on_event: redraft(
+            prev, before, after, card,
+            on_event=on_event, allow_restate=allow_restate,
+        ),
     )
 
 
