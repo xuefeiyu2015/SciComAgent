@@ -166,17 +166,64 @@ def test_reused_background_reaches_the_drafter(monkeypatch):
 
 # --- the slow path: something went stale --------------------------------------
 
-def test_a_language_change_rebuilds_the_ledger(monkeypatch):
-    """The ledger is WRITTEN IN the run's language — it cannot be carried over."""
+def test_a_language_change_rebuilds_the_ledger_without_refetching(monkeypatch):
+    """The ledger is WRITTEN IN the run's language, so it cannot be carried
+    over — but the CARD is the paper, already read. Rebuild from that.
+
+    This is the difference between a redraft that works and one that dies on a
+    link that has since gone down."""
     spy = _stub_steps(monkeypatch)
     before = _input(language=Language.zh)
     after = _input(language=Language.en)
 
     out = redraft(_previous(), before, after, _CARD)
 
-    assert spy["fetch"] == 1
+    assert spy["fetch"] == 0, "a redraft must never depend on the source again"
     assert spy["build_ledger"] == 1
     assert out.claim_ledger[0].claim == "x-en"
+
+
+def test_an_unreachable_source_cannot_take_away_an_english_redraft(monkeypatch):
+    """The reported failure: biorxiv would not answer, and the redraft died —
+    taking the draft on screen with it."""
+    spy = _stub_steps(monkeypatch)
+
+    def dead(source, source_type):
+        raise AssertionError("the network must not be touched")
+
+    monkeypatch.setattr(pipeline, "fetch_source", dead)
+
+    out = redraft(_previous(), _input(language=Language.zh),
+                  _input(language=Language.en), _CARD)
+
+    assert out.status == Status.needs_review
+    assert out.platform_outputs
+    assert spy["build_ledger"] == 1
+
+
+def test_a_language_change_researches_again_in_the_new_language(monkeypatch):
+    """A material's `relation` is written in the run's language — carrying it
+    over would feed the drafter Chinese notes for an English draft."""
+    spy = _stub_steps(monkeypatch)
+
+    redraft(_previous(), _input(language=Language.zh),
+            _input(language=Language.en), _CARD)
+
+    assert spy["gather_background"] == 1
+    assert spy["build_glossary"] == 1
+
+
+def test_a_rebuilt_ledger_that_comes_back_empty_writes_nothing(monkeypatch):
+    """Same rule as a first run: nothing sourced, nothing written."""
+    spy = _stub_steps(monkeypatch)
+    monkeypatch.setattr(pipeline, "build_ledger", lambda card, language: [])
+
+    out = redraft(_previous(), _input(language=Language.zh),
+                  _input(language=Language.en), _CARD)
+
+    assert out.status == Status.no_claims
+    assert out.platform_outputs == []
+    assert spy["draft"] == 0, "no ledger, no drafter call"
 
 
 def test_no_card_means_the_paper_is_not_in_hand(monkeypatch):

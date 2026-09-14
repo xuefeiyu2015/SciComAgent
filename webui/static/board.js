@@ -24,6 +24,8 @@ const state = {
   spans: {},          // platform -> {flags, spans, unlocated}
   drafts: {},         // platform -> working copy, carrying human edits
   decisions: {},      // "platform:flagIndex" -> "accepted" | "rewritten"
+  archive: [],        // earlier versions in this conversation, oldest first
+  replacing: null,    // the run a redraft would replace, until it actually lands
   settings: null,
   providers: [],
   history: [],
@@ -166,6 +168,7 @@ function resetRun() {
   Object.assign(state, {
     slots: { source: null, source_type: null, platforms: null, language: null, liveliness: null },
     sessionId: null, result: null, spans: {}, drafts: {}, decisions: {}, polling: null, openKey: null,
+    archive: [], replacing: null,
   });
   $('#board').hidden = true;
   $('#apparatus').hidden = true;
@@ -176,20 +179,43 @@ function resetRun() {
   greeting();
 }
 
-/* Clear the draft under review, but KEEP the conversation and the dials.
+/* A version of this paper, as it stood when something replaced it. Everything
+   the board needs to keep painting it: its own ledger, its own flags, its own
+   edits. Snapshotted, never aliased — the live state keeps mutating. */
+function snapshotRun() {
+  return {
+    sessionId: state.sessionId,
+    result: state.result,
+    spans: state.spans,
+    drafts: state.drafts,
+    decisions: state.decisions,
+    slots: { ...state.slots },
+    label: versionLabel(state.slots, state.result),
+  };
+}
 
-   resetRun() is for starting a different paper: it wipes the transcript and
-   re-greets. A redraft must not — the human just asked for this in a sentence
-   that only makes sense in the context of what came before, and losing that
-   context would turn the loop back into a series of one-shot runs. */
-function softResetRun() {
+/* What to call a version in the stack: its language and its platforms. */
+function versionLabel(slots, result) {
+  const lang = t(slots.language === 'en' ? 'dialog.langEn' : 'dialog.langZh');
+  const platforms = (result.platform_outputs || [])
+    .map((d) => platformLabel(d.platform)).join(' · ');
+  return platforms ? `${lang} · ${platforms}` : lang;
+}
+
+/* A redraft failed. Put back exactly what was on screen before it started —
+   losing a finished draft to a link that has since gone down is the one
+   outcome a redraft must never have. */
+function restoreRun(snapshot) {
   clearInterval(state.polling);
   Object.assign(state, {
-    result: null, spans: {}, drafts: {}, decisions: {}, polling: null, openKey: null,
+    sessionId: snapshot.sessionId,
+    result: snapshot.result,
+    spans: snapshot.spans,
+    drafts: snapshot.drafts,
+    decisions: snapshot.decisions,
+    slots: { ...state.slots, ...snapshot.slots },
+    polling: null,
   });
-  $('#board').hidden = true;
-  $('#apparatus').hidden = true;
-  document.body.classList.remove('reviewing');
 }
 
 /* ── the run ────────────────────────────────────────────────────────── */
@@ -236,13 +262,38 @@ function poll(node) {
 
 async function loadResult() {
   const body = await api(`/api/job/${state.sessionId}/result`);
-  state.result = body.result;
+  const incoming = body.result;
+
+  // A run that produced nothing must not take the draft already on screen with
+  // it. Committing first and checking afterwards is how an unreachable link
+  // once erased a finished Chinese draft on the way to an English one.
+  if (incoming.status === 'failed' || incoming.status === 'no_claims') {
+    reportTerminal(incoming);
+    if (state.replacing) {
+      const kept = state.replacing;
+      state.replacing = null;
+      restoreRun(kept);
+      turn(t('board.speaker'), esc(t('chat.rerunKept', { label: kept.label })));
+      renderBoard();
+      renderApparatus();
+    }
+    return;
+  }
+
+  // It landed. Only now does the version it replaces move into the stack,
+  // where it stays visible above this one.
+  if (state.replacing) {
+    state.archive.push(state.replacing);
+    state.replacing = null;
+    state.spans = {};
+    state.drafts = {};
+    state.decisions = {};
+  }
+
+  state.result = incoming;
   state.spans = body.spans;
   state.result.platform_outputs.forEach((d) => { state.drafts[d.platform] = structuredClone(d); });
 
-  if (state.result.status === 'failed' || state.result.status === 'no_claims') {
-    return reportTerminal(state.result);
-  }
   // The conversation STAYS. `reviewing` caps the dialog so the manuscript gets
   // the room; it no longer replaces the agent you were just talking to.
   $('#board').hidden = false;
@@ -279,17 +330,19 @@ function flagKey(platform, index) { return `${platform}:${index}`; }
 
 const HEDGED = new Set(['medium', 'low']);
 
-/* Confidence by ledger id, so a citation can show how solid its evidence is. */
-function confidenceById() {
+/* Confidence by ledger id, so a citation can show how solid its evidence is.
+   Takes a ledger rather than reading the live one: an earlier version in the
+   stack has its own, and a rebuilt ledger is not the one it was painted with. */
+function confidenceById(ledger) {
   const map = {};
-  (state.result.claim_ledger || []).forEach((c) => { map[c.id] = c.confidence; });
+  (ledger || []).forEach((c) => { map[c.id] = c.confidence; });
   return map;
 }
 
 function renderBoard() {
   const board = $('#board');
   board.innerHTML = '';
-  const confidence = confidenceById();
+  const confidence = confidenceById(state.result.claim_ledger);
 
   state.result.platform_outputs.forEach((original) => {
     const platform = original.platform;
@@ -358,6 +411,9 @@ function renderBoard() {
     board.append(notices);
   }
   board.append(tallyBar());
+  // Bindings run while only the live version is in the DOM. The earlier
+  // versions go in afterwards, so their marks and citations never pick up a
+  // handler that would look them up in the live run's flags.
   board.querySelectorAll('.mark').forEach(bindMark);
   board.querySelectorAll('.cite').forEach(bindCite);
   board.querySelectorAll('.hedged').forEach((node) => {
@@ -366,6 +422,63 @@ function renderBoard() {
       if (first) showCitation(first);
     });
   });
+
+  // Oldest at the top, the one you are reviewing at the bottom. A redraft adds
+  // to this paper; it does not replace what you already read.
+  state.archive.slice().reverse().forEach((v) => board.prepend(archivedVersion(v)));
+}
+
+/* An earlier version of this paper, rendered as it stood. Its flags are still
+   painted — that is what it looked like when you were reading it — but nothing
+   here is clickable: its review is over, and its decisions are its own.
+
+   Reopen it from the History rail to work on it again. */
+function archivedVersion(snapshot) {
+  const section = el('section', 'archived');
+  const head = el('header', 'archived-head');
+  head.innerHTML = `<h2>${esc(snapshot.label)}</h2>`
+    + `<span class="count">${esc(t('board.earlierVersion'))}</span>`;
+  section.append(head);
+
+  const confidence = confidenceById(snapshot.result.claim_ledger);
+  (snapshot.result.platform_outputs || []).forEach((original) => {
+    const platform = original.platform;
+    // The working copy, so a human's accepted rewrites are what is preserved —
+    // not the draft as the model first wrote it.
+    const draft = snapshot.drafts[platform] || original;
+    const pack = snapshot.spans[platform] || { flags: [], spans: [], unlocated: [] };
+
+    const wrap = el('article', 'manuscript');
+    if (draft.title_options.length) {
+      wrap.append(fieldLabel(t('board.titles')));
+      const list = el('ol', 'titles');
+      draft.title_options.forEach((title, i) => {
+        const li = el('li');
+        li.innerHTML = paint(title, pack, platform, `title:${i}`, confidence);
+        list.append(li);
+      });
+      wrap.append(list);
+    }
+    if (draft.cover_copy) {
+      wrap.append(fieldLabel(t('board.cover')));
+      const cover = el('p', 'cover');
+      cover.innerHTML = paint(draft.cover_copy, pack, platform, 'cover_copy', confidence);
+      wrap.append(cover);
+    }
+    wrap.append(fieldLabel(t('board.body')));
+    const prose = el('div', 'prose');
+    prose.innerHTML = paint(draft.body, pack, platform, 'body', confidence);
+    wrap.append(prose);
+
+    if (draft.hashtags.length) {
+      wrap.append(fieldLabel(t('board.tags')));
+      const tags = el('p', 'tags');
+      tags.textContent = draft.hashtags.map((h) => `#${h.replace(/^[#＃]+/, '')}`).join(' ');
+      wrap.append(tags);
+    }
+    section.append(wrap);
+  });
+  return section;
 }
 
 function fieldLabel(text) {
@@ -1577,9 +1690,10 @@ function dialText(dial, value) {
   return String(value);
 }
 
-/* Write this paper again. The conversation STAYS — that is the whole point of
-   a loop — while the draft under review is cleared for the new one. The old
-   run is untouched on the server and stays in History. */
+/* Write this paper again. Nothing on screen is given up to do it: the version
+   being replaced is SNAPSHOTTED, and it only moves into the stack once the new
+   one has actually landed. If the redraft fails, the snapshot comes straight
+   back. The conversation stays either way — that is the point of a loop. */
 async function startRedraft(changes) {
   const node = turn(t('board.speaker'),
     `<div class="progress">${esc(t('chat.rerunRunning'))}</div><div class="progress-bar"><i style="width:4%"></i></div>`);
@@ -1591,7 +1705,8 @@ async function startRedraft(changes) {
     turn(t('board.speaker'), `<span style="color:var(--flag)">${esc(err.message)}</span>`);
     return;
   }
-  softResetRun();
+  clearInterval(state.polling);
+  state.replacing = snapshotRun();
   Object.assign(state.slots, changes);
   state.sessionId = body.session_id;
   poll(node);

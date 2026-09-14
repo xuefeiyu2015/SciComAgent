@@ -250,7 +250,9 @@
     "dialog.slipBackground": "查背景",
     "tool.redraft.desc": "把之前那次运行的论文按新设置重写一遍——换语言、换平台、换语气或换读者。同一篇论文不要再调一次 generate：来源、依据清单和论文内容都从 session_id 取，只有换语言才需要重建清单。永不发布。",
     "front.sell.4.title": "出稿不是终点",
-    "front.sell.4.body": "稿子出来以后还能接着说：换成英文、再来个小红书版、写活泼一点、写给临床医生看。论文不会重读一遍，依据清单照旧沿用——只有换语言才需要重建，因为清单本身是用那门语言写的。"
+    "front.sell.4.body": "稿子出来以后还能接着说：换成英文、再来个小红书版、写活泼一点、写给临床医生看。论文不会重读一遍，依据清单照旧沿用——只有换语言才需要重建，因为清单本身是用那门语言写的。",
+    "board.earlierVersion": "先前的版本",
+    "chat.rerunKept": "这次重写没成。「{label}」原样留着，一个字都没丢。"
   },
   "en": {
     "app.name": "ScicomAgent",
@@ -503,6 +505,8 @@
     "dialog.slipBackground": "Background research",
     "tool.redraft.desc": "Write an earlier run's paper again with different settings — another language, another platform, a different tone or reader. Don't call generate twice on the same paper: the source, its ledger and its content all come from the session_id, and only a language change rebuilds the ledger. It never publishes.",
     "front.sell.4.title": "The draft is not the end",
-    "front.sell.4.body": "Once a draft exists you can keep going: in English, also for Xiaohongshu, livelier, written for clinicians. The paper is not read again and the claim ledger is reused — only a language change rebuilds it, because the ledger is written in that language."
+    "front.sell.4.body": "Once a draft exists you can keep going: in English, also for Xiaohongshu, livelier, written for clinicians. The paper is not read again and the claim ledger is reused — only a language change rebuilds it, because the ledger is written in that language.",
+    "board.earlierVersion": "earlier version",
+    "chat.rerunKept": "That rewrite did not land. “{label}” is still here, exactly as it was — nothing was lost."
   }
 }

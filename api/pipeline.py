@@ -319,12 +319,17 @@ def redraft(
     ledger a second time.
 
     What may be reused is decided by what the dials mean, not by what is
-    convenient. The ledger is WRITTEN IN the run's language (`build_ledger(card,
-    inp.language)`), so a language change invalidates it and everything
-    downstream of it — that redraft is a full run. Everything else — platform,
-    liveliness, audience, the researcher switch — leaves the ledger, the
-    background and the glossary exactly as true as they were, so only the draft
-    and its checks run again.
+    convenient. The ledger is WRITTEN IN the run's language, so a language
+    change invalidates it — but not the paper behind it. The card IS the paper
+    as this agent already read it, so the new ledger is built from that, and
+    the network is never touched. Everything else — platform, liveliness,
+    audience, the researcher switch — leaves the ledger exactly as true as it
+    was, so only the draft and its checks run again.
+
+    Nothing here re-fetches. A source that has since gone unreachable — moved,
+    rate-limiting, briefly down — must not be able to take away a draft the
+    human already has. Only a run with no card falls back to `run`, because
+    then the paper genuinely is not in hand any more.
 
     Faithfulness is unchanged either way. The reused ledger is the same
     provenance the human already reviewed, every draft still goes through
@@ -340,34 +345,47 @@ def redraft(
         after: the request now, with the changed dials already merged in.
         card: the source card from `prev`'s run (`api.jobs.read_card`). Empty
             or missing means the paper itself is no longer in hand, and the
-            redraft falls back to a full run.
+            redraft falls back to a full run — the only path that fetches.
         on_event: as `run` — the same four prelude milestones are emitted on
             either path, so a progress bar does not need to know which one it
             got.
 
     Returns:
-        An AgentOutput shaped exactly like `run`'s. Never raises, never
-        auto-publishes.
+        An AgentOutput shaped exactly like `run`'s — including `no_claims` when
+        a rebuilt ledger comes back empty. Never raises, never auto-publishes.
     """
     if not _can_reuse(prev, before, after, card):
         return run(after, on_event)
 
-    ledger = prev.claim_ledger
+    same_language = before.language == after.language
+    if same_language:
+        ledger = prev.claim_ledger
+        message = f"{len(ledger)} claims reused"
+    else:
+        # Rebuilt, not re-extracted: the card is the paper, already read.
+        ledger = build_ledger(card, after.language)
+        message = f"{len(ledger)} claims rebuilt in {after.language.value}"
+        if not ledger:  # same rule as a first run: nothing sourced, nothing written
+            return AgentOutput(status=Status.no_claims, claim_ledger=[])
+
     # The card rides along again so the redraft's OWN job keeps a sidecar —
     # that is what makes a redraft itself redraftable.
     _emit(on_event, ProgressEvent(
-        stage="ledger", message=f"{len(ledger)} claims reused", ledger=ledger,
-        card=card,
+        stage="ledger", message=message, ledger=ledger, card=card,
     ))
 
     # Carried forward, not invented: if the researcher was skipped or came back
     # empty last time, the human should still be told why the drafts have no
-    # background, rather than shown a clean run that silently lacks it.
+    # background, rather than shown a clean run that silently lacks it. A
+    # rebuild starts clean — those notices were about a different ledger.
     notices = [
         n for n in prev.notices
-        if n.code in (NoticeCode.background_error, NoticeCode.glossary_error)
+        if same_language
+        and n.code in (NoticeCode.background_error, NoticeCode.glossary_error)
     ]
-    background, glossary = _reuse_or_gather(prev, before, after, card, ledger, notices)
+    background, glossary = _reuse_or_gather(
+        prev, before, after, card, ledger, notices, same_language
+    )
     _emit(on_event, ProgressEvent(
         stage="background", message=f"{len(background)} background materials"
     ))
@@ -394,19 +412,21 @@ def redraft(
 def _can_reuse(
     prev: AgentOutput, before: AgentInput, after: AgentInput, card: dict
 ) -> bool:
-    """Whether the previous run's ledger still holds for this request.
+    """Whether this redraft can work from what the earlier run left behind.
 
-    Four things must be true, and each failure means a different kind of stale:
-    the paper must still be in hand (`card`), there must be a ledger to reuse,
-    it must still be the same paper, and it must still be in the right
-    language. Anything else is a full run — correct, just slower.
+    Three things must be true: the paper must still be in hand (`card`), the
+    earlier run must have got somewhere (a ledger), and it must still be the
+    same paper. Language is deliberately NOT one of them — a language change
+    rebuilds the ledger from the card rather than fetching the paper again.
+
+    A false here is a full run: correct, slower, and the only path that needs
+    the network.
     """
     return bool(
         card
         and prev.claim_ledger
         and before.source == after.source
         and before.source_type == after.source_type
-        and before.language == after.language
     )
 
 
@@ -417,17 +437,22 @@ def _reuse_or_gather(
     card: dict,
     ledger: list[Claim],
     notices: list[Notice],
+    same_language: bool,
 ) -> tuple[list[BackgroundMaterial], Glossary]:
     """The researcher's output for this redraft: reused, gathered, or dropped.
 
-    Three cases, one per state of the `background` dial across the two runs.
-    Turning it OFF drops what the previous run gathered — the human asked for
-    drafts written without it. Turning it ON runs the researcher now, which the
-    card makes possible without re-fetching the paper.
+    Turning the dial OFF drops what the previous run gathered — the human asked
+    for drafts written without it. Turning it ON runs the researcher now, which
+    the card makes possible without re-fetching the paper.
+
+    A language change also re-runs it, even when the dial did not move: a
+    material's `relation` and a gloss's plain meaning are WRITTEN IN the run's
+    language, so carrying them over would feed the drafter Chinese notes for an
+    English draft.
     """
     if not after.background:
         return [], Glossary()
-    if before.background:
+    if before.background and same_language:
         return list(prev.background_materials), prev.glossary
     return (
         _background_or_notice(card, after, notices),
