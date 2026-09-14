@@ -22,6 +22,11 @@ since those are fully independent of one another. Model names come from config
 by ROLE inside each step; nothing is hardcoded here. The whole run stays in one
 language: `inp.language` threads through the ledger, every draft and every check.
 
+`redraft(...)` is the same pipeline re-entered: the same paper written again
+with different dials. It reuses the previous run's ledger when the dials that
+changed cannot have invalidated it, and falls back to a full `run` when they
+can. A finished run is therefore a starting point, not a terminus.
+
 Hard rules (CLAUDE.md): faithfulness flags surface to a human, and we NEVER
 auto-publish — a successful run always returns `status=needs_review` with the
 draft + provenance (claim ledger) + overstatement flags for review.
@@ -156,7 +161,26 @@ def run(inp: AgentInput, on_event: EventSink | None = None) -> AgentOutput:
     drafted = _draft_all(
         inp, ledger, card, background, style, glossary, notices, on_event
     )
+    return _assemble(
+        inp, drafted, ledger, background, glossary, style, notices, on_event
+    )
 
+
+def _assemble(
+    inp: AgentInput,
+    drafted: dict,
+    ledger: list[Claim],
+    background: list[BackgroundMaterial],
+    glossary: Glossary,
+    style: StyleProfile | None,
+    notices: list[Notice],
+    on_event: EventSink | None,
+) -> AgentOutput:
+    """Turn the per-platform results into the one outward AgentOutput.
+
+    Shared by `run` and `redraft` so both produce identical shapes — the board
+    and the MCP contract have one flag renderer each, not two.
+    """
     # Reassembled in the order the caller asked for — completion order, which
     # the thread pool decides, must never leak into the result.
     platform_outputs: list[PlatformOutput] = []
@@ -278,6 +302,137 @@ def _fetch_and_build_ledger(
     if not ledger:
         return card, [], AgentOutput(status=Status.no_claims, claim_ledger=[])
     return card, ledger, None
+
+
+def redraft(
+    prev: AgentOutput,
+    before: AgentInput,
+    after: AgentInput,
+    card: dict,
+    on_event: EventSink | None = None,
+) -> AgentOutput:
+    """Write the SAME paper again with different dials.
+
+    The loop the agent was missing. A finished run used to be terminal: the
+    only way to get an English version, another platform or a livelier tone was
+    to start over from the URL and pay for the fetch, the extraction and the
+    ledger a second time.
+
+    What may be reused is decided by what the dials mean, not by what is
+    convenient. The ledger is WRITTEN IN the run's language (`build_ledger(card,
+    inp.language)`), so a language change invalidates it and everything
+    downstream of it — that redraft is a full run. Everything else — platform,
+    liveliness, audience, the researcher switch — leaves the ledger, the
+    background and the glossary exactly as true as they were, so only the draft
+    and its checks run again.
+
+    Faithfulness is unchanged either way. The reused ledger is the same
+    provenance the human already reviewed, every draft still goes through
+    `check_faithfulness` with the reviewer model, and CLAUDE.md rule #3 holds
+    because drafting and checking are still different models with different
+    prompts. Nothing is auto-published.
+
+    Args:
+        prev: the finished output being redrafted — its ledger, background and
+            glossary are the reusable work.
+        before: the request that produced `prev`. Only its dials are read; it
+            is what makes "did the language change?" answerable.
+        after: the request now, with the changed dials already merged in.
+        card: the source card from `prev`'s run (`api.jobs.read_card`). Empty
+            or missing means the paper itself is no longer in hand, and the
+            redraft falls back to a full run.
+        on_event: as `run` — the same four prelude milestones are emitted on
+            either path, so a progress bar does not need to know which one it
+            got.
+
+    Returns:
+        An AgentOutput shaped exactly like `run`'s. Never raises, never
+        auto-publishes.
+    """
+    if not _can_reuse(prev, before, after, card):
+        return run(after, on_event)
+
+    ledger = prev.claim_ledger
+    # The card rides along again so the redraft's OWN job keeps a sidecar —
+    # that is what makes a redraft itself redraftable.
+    _emit(on_event, ProgressEvent(
+        stage="ledger", message=f"{len(ledger)} claims reused", ledger=ledger,
+        card=card,
+    ))
+
+    # Carried forward, not invented: if the researcher was skipped or came back
+    # empty last time, the human should still be told why the drafts have no
+    # background, rather than shown a clean run that silently lacks it.
+    notices = [
+        n for n in prev.notices
+        if n.code in (NoticeCode.background_error, NoticeCode.glossary_error)
+    ]
+    background, glossary = _reuse_or_gather(prev, before, after, card, ledger, notices)
+    _emit(on_event, ProgressEvent(
+        stage="background", message=f"{len(background)} background materials"
+    ))
+    _emit(on_event, ProgressEvent(
+        stage="glossary", message=f"{len(glossary.terms)} terms explained"
+    ))
+
+    # Re-read rather than reused: the distillation is cached on the example
+    # files themselves, so this costs nothing when they have not changed and
+    # picks them up when they have.
+    style = _style_or_notice(notices)
+    _emit(on_event, ProgressEvent(
+        stage="style", message="voice ready" if style else "default voice"
+    ))
+
+    drafted = _draft_all(
+        after, ledger, card, background, style, glossary, notices, on_event
+    )
+    return _assemble(
+        after, drafted, ledger, background, glossary, style, notices, on_event
+    )
+
+
+def _can_reuse(
+    prev: AgentOutput, before: AgentInput, after: AgentInput, card: dict
+) -> bool:
+    """Whether the previous run's ledger still holds for this request.
+
+    Four things must be true, and each failure means a different kind of stale:
+    the paper must still be in hand (`card`), there must be a ledger to reuse,
+    it must still be the same paper, and it must still be in the right
+    language. Anything else is a full run — correct, just slower.
+    """
+    return bool(
+        card
+        and prev.claim_ledger
+        and before.source == after.source
+        and before.source_type == after.source_type
+        and before.language == after.language
+    )
+
+
+def _reuse_or_gather(
+    prev: AgentOutput,
+    before: AgentInput,
+    after: AgentInput,
+    card: dict,
+    ledger: list[Claim],
+    notices: list[Notice],
+) -> tuple[list[BackgroundMaterial], Glossary]:
+    """The researcher's output for this redraft: reused, gathered, or dropped.
+
+    Three cases, one per state of the `background` dial across the two runs.
+    Turning it OFF drops what the previous run gathered — the human asked for
+    drafts written without it. Turning it ON runs the researcher now, which the
+    card makes possible without re-fetching the paper.
+    """
+    if not after.background:
+        return [], Glossary()
+    if before.background:
+        return list(prev.background_materials), prev.glossary
+    return (
+        _background_or_notice(card, after, notices),
+        _glossary_or_notice(ledger, card, after, notices),
+    )
 
 
 def extract_ledger_preview(inp: AgentInput) -> AgentOutput:
