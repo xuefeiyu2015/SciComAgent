@@ -440,6 +440,110 @@ def test_converse_needs_a_draft_to_talk_about(client, monkeypatch):
     assert called == []
 
 
+def test_conversing_knows_which_paper_it_is_talking_about(client, monkeypatch):
+    """Without the run's real request, a rerun's dials would be a diff against
+    a placeholder — and the agent could not honestly offer one at all."""
+    from api.converse import AgentReply
+    from api.schema import AgentInput, Language, SourceType
+
+    recorded = AgentInput(
+        source="https://example.org/the-paper",
+        source_type=SourceType.pdf,
+        language=Language.en,
+    )
+    monkeypatch.setattr(webui.jobs, "read_request", lambda sid: recorded)
+    monkeypatch.setattr(webui.jobs, "read_card", lambda sid: {"title": "t"})
+    seen = {}
+
+    def spy(message, drafts, ledger, flags, inp, transcript, **kw):
+        seen.update(inp=inp, card=kw.get("card"))
+        return AgentReply(kind="answer", message="ok")
+
+    monkeypatch.setattr(webui, "converse", spy)
+    client.post("/api/converse", json=_converse_body(session_id="j_a_1"))
+
+    assert seen["inp"].source == "https://example.org/the-paper"
+    assert seen["inp"].source_type is SourceType.pdf
+    assert seen["card"] == {"title": "t"}
+
+
+def test_conversing_about_a_run_with_no_sidecar_still_works(client, monkeypatch):
+    """A run mirrored before the sidecars existed can still be edited."""
+    from api.converse import AgentReply
+
+    monkeypatch.setattr(webui.jobs, "read_request", lambda sid: None)
+    monkeypatch.setattr(webui.jobs, "read_card", lambda sid: None)
+    seen = {}
+
+    def spy(message, drafts, ledger, flags, inp, transcript, **kw):
+        seen.update(inp=inp, card=kw.get("card"))
+        return AgentReply(kind="answer", message="ok")
+
+    monkeypatch.setattr(webui, "converse", spy)
+    resp = client.post("/api/converse", json=_converse_body(session_id="j_old_1"))
+
+    assert resp.status_code == 200
+    assert seen["card"] is None
+
+
+# --- redrafting ---------------------------------------------------------------
+
+def test_redraft_starts_a_new_run_and_returns_its_id(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        webui.jobs, "start_redraft",
+        lambda sid, changes: seen.update(sid=sid, changes=changes) or "j_a_2",
+    )
+
+    body = client.post(
+        "/api/redraft", json={"session_id": "j_a_1", "changes": {"language": "en"}}
+    ).json()
+
+    assert body["session_id"] == "j_a_2"
+    assert seen == {"sid": "j_a_1", "changes": {"language": "en"}}
+
+
+def test_redrafting_a_run_that_is_gone_is_a_404(client, monkeypatch):
+    def lost(sid, changes):
+        raise LookupError("No such job: call generate again.")
+
+    monkeypatch.setattr(webui.jobs, "start_redraft", lost)
+
+    resp = client.post("/api/redraft", json={"session_id": "j_a_1", "changes": {"language": "en"}})
+
+    assert resp.status_code == 404
+    assert "generate again" in resp.json()["error"]
+
+
+def test_redrafting_nothing_is_a_400(client, monkeypatch):
+    def nothing(sid, changes):
+        raise ValueError("nothing to redraft")
+
+    monkeypatch.setattr(webui.jobs, "start_redraft", nothing)
+
+    assert client.post(
+        "/api/redraft", json={"session_id": "j_a_1", "changes": {}}
+    ).status_code == 400
+    assert client.post("/api/redraft", json={"changes": {}}).status_code == 400
+    assert client.post(
+        "/api/redraft", json={"session_id": "j_a_1", "changes": "en"}
+    ).status_code == 400
+
+
+def test_a_redraft_cannot_grade_its_own_work_either(client, monkeypatch):
+    """Same refusal as generate: a redraft is a full draft-and-check chain."""
+    called = []
+    monkeypatch.setattr(webui.jobs, "start_redraft", lambda *a: called.append(a))
+    monkeypatch.setattr(webui.settings, "drafter_reviewer_distinct", lambda: False)
+
+    resp = client.post(
+        "/api/redraft", json={"session_id": "j_a_1", "changes": {"language": "en"}}
+    )
+
+    assert resp.status_code == 409
+    assert called == []
+
+
 def test_a_provider_failure_while_conversing_is_a_message_not_a_crash(client, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("provider is on fire")

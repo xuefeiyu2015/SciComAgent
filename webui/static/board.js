@@ -176,6 +176,22 @@ function resetRun() {
   greeting();
 }
 
+/* Clear the draft under review, but KEEP the conversation and the dials.
+
+   resetRun() is for starting a different paper: it wipes the transcript and
+   re-greets. A redraft must not — the human just asked for this in a sentence
+   that only makes sense in the context of what came before, and losing that
+   context would turn the loop back into a series of one-shot runs. */
+function softResetRun() {
+  clearInterval(state.polling);
+  Object.assign(state, {
+    result: null, spans: {}, drafts: {}, decisions: {}, polling: null, openKey: null,
+  });
+  $('#board').hidden = true;
+  $('#apparatus').hidden = true;
+  document.body.classList.remove('reviewing');
+}
+
 /* ── the run ────────────────────────────────────────────────────────── */
 
 async function startRun() {
@@ -904,6 +920,23 @@ function drawTether(anchor, claimId) {
 
 /* ── apparatus ──────────────────────────────────────────────────────── */
 
+/* One background material, as a cited card. Shared by the rail and by a
+   lookup in the conversation: what the researcher found looks the same
+   wherever it surfaces, and it always carries the source it came from.
+
+   The rail is an audit trail — which sources framed this draft — so it shows
+   titles. A lookup is an ANSWER, so it shows the snippet too. */
+function sourceCard(m, { snippet = false } = {}) {
+  const node = el('div', 'source');
+  const title = esc(m.source_title || m.source_url);
+  node.innerHTML = m.source_url
+    ? `<a href="${esc(m.source_url)}" target="_blank" rel="noopener">${title}</a>`
+    : title;
+  if (snippet && m.snippet) node.innerHTML += `<span>${esc(m.snippet)}</span>`;
+  if (m.relation) node.innerHTML += `<span>${esc(m.relation)}</span>`;
+  return node;
+}
+
 function renderApparatus() {
   const rail = $('#apparatus');
   const result = state.result;
@@ -939,15 +972,7 @@ function renderApparatus() {
     const sources = el('section');
     sources.innerHTML = `<h2>${esc(t('ledger.background'))}</h2>
       <p class="note">${esc(t('ledger.backgroundNote'))}</p>`;
-    result.background_materials.forEach((m) => {
-      const node = el('div', 'source');
-      const title = esc(m.source_title || m.source_url);
-      node.innerHTML = m.source_url
-        ? `<a href="${esc(m.source_url)}" target="_blank" rel="noopener">${title}</a>`
-        : title;
-      if (m.relation) node.innerHTML += `<span>${esc(m.relation)}</span>`;
-      sources.append(node);
-    });
+    result.background_materials.forEach((m) => sources.append(sourceCard(m)));
     rail.append(sources);
   }
 
@@ -1455,7 +1480,9 @@ function openFlagCount() {
   return total - Object.keys(state.decisions).length;
 }
 
-/* Ask the agent about the draft. It answers, or proposes one edit to apply. */
+/* Ask the agent about the draft. It answers, proposes one edit, proposes a
+   whole redraft, or goes and looks something up. Every kind is a PROPOSAL —
+   nothing reaches the draft, and no run starts, without the human saying so. */
 async function askAgent(message) {
   if (!state.result) { turn(t('board.speaker'), esc(t('chat.noDraft'))); return; }
   const pending = turn(t('board.speaker'), `<span class="thinking">${esc(t('chat.thinking'))}</span>`);
@@ -1464,9 +1491,15 @@ async function askAgent(message) {
   try {
     reply = await postJSON('/api/converse', {
       message,
+      // The session id is what lets the agent know WHICH PAPER this is: the
+      // server recovers the run's real request and card from it. Without one
+      // it can still edit a passage, but it cannot offer to write it again.
+      session_id: state.sessionId,
       drafts: Object.values(state.drafts),
       ledger: state.result.claim_ledger,
       flags: Object.values(state.spans).flatMap((pack) => pack.flags),
+      background_materials: state.result.background_materials || [],
+      glossary: state.result.glossary || {},
       language: state.slots.language || draftLanguage(),
       liveliness: state.slots.liveliness || 3,
       transcript: state.transcript.slice(-8),
@@ -1480,6 +1513,88 @@ async function askAgent(message) {
   pending.remove();
   const node = turn(t('board.speaker'), esc(reply.message), 'agent', reply.message);
   if (reply.kind === 'edit' && reply.replacement) node.append(proposal(reply));
+  if (reply.kind === 'rerun') node.append(rerunSlip(reply.changes, reply.before));
+  if (reply.kind === 'lookup') node.append(findings(reply));
+}
+
+/* What a lookup came back with. Empty is a real answer, and the queries are
+   shown either way — seeing WHAT was searched for is how you tell "there is
+   nothing out there" from "it asked the wrong question". */
+function findings(reply) {
+  const box = el('div', 'slip');
+  const queries = (reply.queries || []).join(' · ');
+  box.innerHTML = `<div class="turn-label">${esc(
+    (reply.materials || []).length ? t('chat.lookupFound') : t('chat.lookupEmpty')
+  )}</div><p class="note">${esc(queries)}</p>`;
+  (reply.materials || []).forEach((m) => box.append(sourceCard(m, { snippet: true })));
+  return box;
+}
+
+/* A redraft is minutes of work and real money, so it arrives as dials to
+   confirm — never as a run already going. */
+function rerunSlip(changes, before) {
+  const box = el('div', 'slip');
+  // `before` comes from the run's own recorded request, not from the board's
+  // slots — the slip has to show what will actually change, not what this tab
+  // happens to remember asking for.
+  const rows = Object.entries(changes || {})
+    .map(([dial, value]) => `<dt>${esc(t(`dialog.slip${dialKey(dial)}`))}</dt>`
+      + `<dd>${esc(dialText(dial, (before || {})[dial]))} → <b>${esc(dialText(dial, value))}</b></dd>`)
+    .join('');
+  box.innerHTML = `<div class="turn-label">${esc(t('chat.rerunHead'))}</div><dl>${rows}</dl>`;
+
+  const open = openFlagCount();
+  if (open) {
+    const warn = el('p', 'note');
+    warn.textContent = t('chat.rerunWarn', { count: open });
+    box.append(warn);
+  }
+
+  const go = el('button', 'btn btn-solid');
+  go.textContent = t('chat.rerunGo');
+  go.onclick = () => { box.remove(); startRedraft(changes); };
+  const stay = el('button', 'btn btn-quiet');
+  stay.textContent = t('chat.rerunStay');
+  stay.onclick = () => { box.remove(); toast(t('chat.rerunDropped')); };
+  const actions = el('div', 'chips');
+  actions.append(go, stay);
+  box.append(actions);
+  return box;
+}
+
+/* i18n key suffix for a dial, reusing the labels the opening dialog already
+   has — the human should read the same words in both places. */
+function dialKey(dial) {
+  return { platforms: 'Platform', language: 'Language', liveliness: 'Liveliness' }[dial]
+    || dial.charAt(0).toUpperCase() + dial.slice(1);
+}
+
+function dialText(dial, value) {
+  if (value === undefined || value === null || value === '') return t('chat.dialUnset');
+  if (dial === 'platforms') return [].concat(value).map(platformLabel).join(' · ');
+  if (dial === 'language') return t(value === 'en' ? 'dialog.langEn' : 'dialog.langZh');
+  if (dial === 'background') return t(value ? 'chat.dialOn' : 'chat.dialOff');
+  return String(value);
+}
+
+/* Write this paper again. The conversation STAYS — that is the whole point of
+   a loop — while the draft under review is cleared for the new one. The old
+   run is untouched on the server and stays in History. */
+async function startRedraft(changes) {
+  const node = turn(t('board.speaker'),
+    `<div class="progress">${esc(t('chat.rerunRunning'))}</div><div class="progress-bar"><i style="width:4%"></i></div>`);
+  let body;
+  try {
+    body = await postJSON('/api/redraft', { session_id: state.sessionId, changes });
+  } catch (err) {
+    node.remove();
+    turn(t('board.speaker'), `<span style="color:var(--flag)">${esc(err.message)}</span>`);
+    return;
+  }
+  softResetRun();
+  Object.assign(state.slots, changes);
+  state.sessionId = body.session_id;
+  poll(node);
 }
 
 /* An edit arrives as a PROPOSAL. Nothing reaches the draft without Apply. */

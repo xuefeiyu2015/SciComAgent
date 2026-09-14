@@ -234,7 +234,20 @@
     "chat.switchGo": "开始新的",
     "chat.switchStay": "留在这篇",
     "chat.expand": "拖动调整高度",
-    "chat.ready": "稿子在上面了。想改哪一句，或者想问关于这份稿子的什么，直接说。"
+    "chat.ready": "稿子在上面了。想改哪一句，或者想问关于这份稿子的什么，直接说。",
+    "chat.rerunHead": "整篇重写，改这些：",
+    "chat.rerunGo": "重写",
+    "chat.rerunStay": "先不重写",
+    "chat.rerunDropped": "没有重写",
+    "chat.rerunRunning": "在重写…",
+    "chat.rerunWarn": "还有 {count} 处存疑没处理。重写会换一份新稿子，这些判断会丢；原来那篇留在历史里。",
+    "chat.lookupFound": "查到这些：",
+    "chat.lookupEmpty": "没查到什么。我搜的是：",
+    "chat.dialUnset": "未设置",
+    "chat.dialOn": "开",
+    "chat.dialOff": "关",
+    "dialog.slipAudience": "读者",
+    "dialog.slipBackground": "查背景"
   },
   "en": {
     "app.name": "ScicomAgent",
@@ -471,6 +484,19 @@
     "chat.switchGo": "Start the new one",
     "chat.switchStay": "Stay here",
     "chat.expand": "Drag to resize",
-    "chat.ready": "The draft is above. Tell me what to change, or ask me anything about it."
+    "chat.ready": "The draft is above. Tell me what to change, or ask me anything about it.",
+    "chat.rerunHead": "Rewrite the whole thing, changing:",
+    "chat.rerunGo": "Rewrite it",
+    "chat.rerunStay": "Not now",
+    "chat.rerunDropped": "Left as it was",
+    "chat.rerunRunning": "rewriting…",
+    "chat.rerunWarn": "{count} flags are still open. A rewrite replaces the draft and those decisions go with it; the original stays in History.",
+    "chat.lookupFound": "Here is what I found:",
+    "chat.lookupEmpty": "I found nothing. I searched for:",
+    "chat.dialUnset": "unset",
+    "chat.dialOn": "on",
+    "chat.dialOff": "off",
+    "dialog.slipAudience": "Reader",
+    "dialog.slipBackground": "Background research"
   }
 }

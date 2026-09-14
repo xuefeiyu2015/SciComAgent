@@ -170,6 +170,7 @@ def test_a_whole_draft_request_becomes_a_rerun_not_a_refusal(monkeypatch):
 
     assert reply.kind == "rerun"
     assert reply.changes == {"language": "en"}
+    assert reply.before == {"language": "zh"}, "the human confirms a real diff"
     assert revise_calls == [], "a rerun is not an edit; it spends no drafter here"
 
 

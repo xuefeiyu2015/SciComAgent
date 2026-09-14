@@ -112,6 +112,11 @@ class AgentReply(BaseModel):
         description="Dials a rerun would change. Whitelisted and validated in "
         "code; never carries a source.",
     )
+    before: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Those same dials as they stand now, so a human confirming "
+        "a rerun reads a real before/after rather than a guess.",
+    )
     queries: list[str] = Field(
         default_factory=list, description="What a lookup searched for."
     )
@@ -214,6 +219,7 @@ def _propose_rerun(reply: AgentReply, inp: AgentInput) -> AgentReply:
             reply, "that would come back the same as the draft already here"
         )
     reply.changes = changed
+    reply.before = {dial: now[dial] for dial in changed}
     return reply
 
 
