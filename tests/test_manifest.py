@@ -39,6 +39,20 @@ def test_a_tool_keeps_its_description_and_parameters():
     assert liveliness.default == 3
 
 
+def test_the_manifest_and_the_server_declare_the_same_tools():
+    """Two audiences read these separately — a host reads the server, a human
+    reads the front page, which is built from the manifest. A tool in one and
+    not the other is a tool somebody cannot find."""
+    import asyncio
+
+    from mcp_server import server
+
+    declared = {t.name for t in load_manifest().tools}
+    registered = {t.name for t in asyncio.run(server.mcp.list_tools())}
+
+    assert declared == registered
+
+
 def test_a_tool_with_no_parameters_is_not_an_error():
     health = next(t for t in load_manifest().tools if t.name == "health")
 

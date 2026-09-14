@@ -143,6 +143,91 @@ def generate(
     )
 
 
+@mcp.tool()
+def redraft(
+    session_id: str,
+    platforms: list[Platform] | None = None,
+    language: Language | None = None,
+    audience: str | None = None,
+    liveliness: int | None = None,
+    background: bool | None = None,
+    wait_seconds: int = _DEFAULT_WAIT_S,
+) -> AgentOutput:
+    """Write an earlier run's paper AGAIN, with different settings.
+
+    Use this instead of calling `generate` a second time whenever the paper is
+    one this agent has already drafted: "now in English", "also do a
+    Xiaohongshu version", "make it livelier", "write it for clinicians". The
+    source, its claim ledger and its extracted content all come from
+    `session_id`, so nothing is re-fetched or re-extracted unless it has to be.
+
+    Pass ONLY the settings that change; anything omitted stays as it was. You
+    cannot change which paper this is — that is what `generate` is for.
+
+    Changing `language` rebuilds the claim ledger, because the ledger is
+    written in the run's language; everything else reuses it, which is much
+    faster. Either way the drafts are checked for faithfulness exactly as a
+    first run's are, the original run is left untouched, and the result comes
+    back for a human. NEVER auto-publishes.
+
+    Waiting works exactly as in `generate`: a run that finishes within
+    `wait_seconds` comes back complete, otherwise you get `status='running'`
+    and a NEW session_id to poll.
+
+    Args:
+        session_id: the earlier run to redraft, from `generate`. A redraft can
+            itself be redrafted — use the id this call returns.
+        platforms: target platforms. `wechat` is an alias for `xhs`.
+        language: output language (zh / en).
+        audience: intended reader.
+        liveliness: tone liveliness, 1–5.
+        background: whether to gather external background materials.
+        wait_seconds: how long to wait before handing back a session_id.
+            Clamped to 0–25 seconds.
+    """
+    changes = {
+        "platforms": platforms,
+        "language": language,
+        "audience": audience,
+        "liveliness": liveliness,
+        "background": background,
+    }
+    try:
+        new_id = jobs.start_redraft(
+            session_id, {k: v for k, v in changes.items() if v is not None}
+        )
+    except LookupError as exc:
+        return AgentOutput(
+            status=Status.failed,
+            notices=[Notice(code=NoticeCode.unknown_session, message=str(exc))],
+        )
+    except Exception as exc:  # never crash the tool — surface as a failed result
+        return AgentOutput(
+            status=Status.failed,
+            notices=[
+                Notice(code=NoticeCode.fetch_error, message=f"redraft failed: {exc}")
+            ],
+        )
+
+    if jobs.wait(new_id, _clamp_wait(wait_seconds)):
+        return _clarify_need_pdf(job_result(new_id))
+
+    return AgentOutput(
+        status=Status.running,
+        session_id=new_id,
+        notices=[
+            Notice(
+                code=NoticeCode.running,
+                message=(
+                    "Redrafting started and is still running. Poll "
+                    f"`job_status` with session_id={new_id!r}, then call "
+                    "`job_result` with the same id once state is 'done'."
+                ),
+            )
+        ],
+    )
+
+
 def _clamp_wait(wait_seconds: int) -> float:
     """Keep the grace wait inside the gateway's tolerance."""
     try:

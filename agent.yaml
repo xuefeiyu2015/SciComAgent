@@ -7,8 +7,16 @@ owner: "xuefeiyu"
 
 # Routing: how user requests map to this agent
 routing:
-  intents: [paper to public, science communication, explain research]
-  keywords: [sci-comm, paper, news, wechat, xiaohongshu, explainer]
+  # Two kinds of request, on purpose. The first four are "turn this paper into
+  # something"; the rest are follow-ups on a paper this agent has ALREADY
+  # drafted — a redraft, another platform, a translation, a question about the
+  # background. A host with only the first set never learns the run is
+  # re-enterable, and answers "now in English" by saying it cannot.
+  intents: [paper to public, science communication, explain research,
+            redraft a draft, translate a draft, another platform for a draft,
+            ask about a paper]
+  keywords: [sci-comm, paper, news, wechat, xiaohongshu, explainer,
+             redraft, rewrite, translate, in english, another version]
 
 # MCP tools exposed by /mcp (thin wrappers over /api)
 tools:
@@ -48,6 +56,27 @@ tools:
           style_error:      "learned writing style skipped (drafts unaffected, produced in the default voice)"
           running:          "the run was accepted and is still going -> poll job_status with the session_id"
           unknown_session:  "no job for that session_id (expired, or from another instance / before a restart) -> call generate again"
+
+  - name: redraft
+    description: Write an EARLIER RUN's paper again with different settings — another language, another platform, a different tone or reader. Use this instead of calling generate twice on the same paper. Never publishes
+    parameters:
+      session_id: { required: true, description: "The earlier run to redraft, from `generate`. A redraft can itself be redrafted — use the id it returns" }
+      platforms:  { required: false, allowed: [news, wechat, xhs], description: "Omit to keep the run's platforms. `wechat` is an ALIAS for `xhs`" }
+      language:   { required: false, allowed: [zh, en], description: "Omit to keep the run's language. CHANGING IT rebuilds the claim ledger, because the ledger is written in the run's language; every other setting reuses it and is much faster" }
+      audience:   { required: false, description: "Omit to keep the run's reader" }
+      liveliness: { required: false, min: 1, max: 5, description: "Omit to keep the run's tone" }
+      background: { required: false, description: "Omit to keep the run's setting. Turning it ON researches now, from the stored paper — no re-fetch" }
+      wait_seconds: { required: false, default: 10, min: 0, max: 25, description: "As in `generate`: how long to hold the call open before returning the NEW session_id instead" }
+    # Same AgentOutput contract as `generate`, under a NEW session_id. The
+    # original run is untouched, and the drafts are checked exactly as a first
+    # run's are. Which paper it is can never be changed — that is `generate`.
+    output:
+      platform_outputs: "Per-platform drafts, written again under the new settings"
+      claim_ledger:     "The same provenance, reused — or rebuilt in the new language"
+      overreach_flags:  "Re-checked by the reviewer, exactly as on a first run"
+      session_id:       "The REDRAFT's own handle — poll this one, not the id you passed in"
+      status:           { allowed: [needs_review, failed, running], description: "running = still drafting, poll job_status" }
+      notices:          "unknown_session = that run expired or came from another instance -> call generate with the source again"
 
   - name: extract_ledger
     description: Extract just the claim ledger (source-grounded facts) from a paper, without drafting — a cheap provenance preview
