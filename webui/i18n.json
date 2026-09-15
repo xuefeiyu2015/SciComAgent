@@ -257,7 +257,14 @@
     "chat.restateNote": "第一次跑的时候，每条依据都从原文里逐句摘了下来，还是论文自己的英文。我可以照着这些原文，把台账改用新语言重述一遍，再据此起草——不需要再去抓论文。出处是沿用过来的，不是重新读的；数字会在代码里逐条核对，凡是依据里没有的数字一律不采用。要这样做吗？",
     "chat.restateGo": "照依据重述",
     "chat.restateStay": "算了",
-    "board.restatedBanner": "这一版的台账是照第一次存下的原文依据重述的，没有重新读论文。依据原样未动；发布前请对着台账核一遍措辞。"
+    "board.restatedBanner": "这一版的台账是照第一次存下的原文依据重述的，没有重新读论文。依据原样未动；发布前请对着台账核一遍措辞。",
+    "dialog.slipLength": "篇幅",
+    "chat.length1": "短很多",
+    "chat.length2": "短一些",
+    "chat.length3": "按平台惯例",
+    "chat.length4": "长一些",
+    "chat.length5": "长很多",
+    "param.length": "篇幅，相对该平台本身的惯例：3 是惯例，2 短一些、1 短很多，4-5 更长。只改长短，不改事实——短的稿子可以少讲一个发现，但绝不会丢掉限定词"
   },
   "en": {
     "app.name": "ScicomAgent",
@@ -517,6 +524,13 @@
     "chat.restateNote": "When this paper was first read, every claim's evidence was quoted from it verbatim, in the paper's own words — and that is still here. I can restate the ledger in the new language from those quotes and draft from it, with no fetch at all. The provenance would be carried over rather than read fresh, and every number is checked in code against its own evidence. Shall I?",
     "chat.restateGo": "Restate from the evidence",
     "chat.restateStay": "No, leave it",
-    "board.restatedBanner": "This version's ledger was restated from evidence stored on the first read, not from the paper itself. The evidence is untouched — check the wording against it before publishing."
+    "board.restatedBanner": "This version's ledger was restated from evidence stored on the first read, not from the paper itself. The evidence is untouched — check the wording against it before publishing.",
+    "dialog.slipLength": "Length",
+    "chat.length1": "much shorter",
+    "chat.length2": "shorter",
+    "chat.length3": "as usual",
+    "chat.length4": "longer",
+    "chat.length5": "much longer",
+    "param.length": "How long the piece runs, relative to the platform's own norm: 3 is that norm, 2 shorter, 1 much shorter, 4-5 longer. Length only — a shorter draft drops a finding, never a qualifier"
   }
 }

@@ -100,6 +100,15 @@ class AgentInput(BaseModel):
     language: Language = Field(default=Language.zh, description="Output language.")
     audience: str = Field(default="general_public", description="Intended reader.")
     liveliness: int = Field(default=3, ge=1, le=5, description="Tone liveliness, 1–5.")
+    length: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description="How long the piece runs, 1–5, RELATIVE to the platform's "
+        "own style card. 3 keeps the card's range; 1 is about half of it, 5 "
+        "about half again. Length, never the facts — a shorter draft drops "
+        "detail, not qualifiers.",
+    )
     background: bool = Field(
         default=True,
         description="Gather external background materials (web/arXiv/scholarly APIs) "
@@ -128,7 +137,7 @@ class AgentInput(BaseModel):
 # ABSENT: a redraft writes the same paper again, and nothing proposed by a model
 # in conversation may quietly turn it into a different one.
 REDRAFTABLE_DIALS = frozenset(
-    {"platforms", "language", "audience", "liveliness", "background"}
+    {"platforms", "language", "audience", "liveliness", "length", "background"}
 )
 
 

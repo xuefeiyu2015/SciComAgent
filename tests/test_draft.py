@@ -323,3 +323,41 @@ def test_dials_still_carry_language_and_audience():
     text = dials(_input(3))
 
     assert "Language:" in text and "Audience:" in text
+
+# --- length -------------------------------------------------------------------
+
+def test_length_defaults_to_whatever_the_style_card_says():
+    """A run that never touches this dial must behave exactly as it always did."""
+    block = dials(AgentInput(source="p", source_type=SourceType.url))
+
+    assert "Length: 3/5 — as the style card says." in block
+
+
+def test_shorter_is_asked_for_relative_to_the_platform(monkeypatch):
+    """A Xiaohongshu post and a news piece differ by a factor of three, so an
+    absolute word count here would have to contradict one of them."""
+    block = dials(AgentInput(source="p", source_type=SourceType.url, length=2))
+
+    assert "SHORTER than the style card's range" in block
+
+
+def test_a_shorter_draft_may_never_buy_brevity_with_a_qualifier():
+    """"Make it shorter" is the most natural-sounding way a human will ever ask
+    this agent to break its own rules (CLAUDE.md hard rule #2)."""
+    for length in (1, 2, 4, 5):
+        block = dials(AgentInput(source="p", source_type=SourceType.url, length=length))
+        assert "QUALIFIER" in block, length
+        assert "dropped whole instead of trimmed" in block, length
+
+
+def test_the_floor_is_not_repeated_when_length_is_untouched():
+    block = dials(AgentInput(source="p", source_type=SourceType.url, length=3))
+
+    assert "QUALIFIER" not in block
+
+
+def test_length_is_out_of_range_like_every_other_dial():
+    import pytest as _pytest
+    for bad in (0, 6):
+        with _pytest.raises(ValueError):
+            AgentInput(source="p", source_type=SourceType.url, length=bad)

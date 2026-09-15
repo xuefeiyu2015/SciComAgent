@@ -190,6 +190,28 @@ def test_a_rerun_reports_only_what_actually_changes(monkeypatch):
     assert "language" not in reply.changes, "it was already zh"
 
 
+def test_shorter_is_a_length_change_not_a_tone_change(monkeypatch):
+    """Before `length` existed the model had nowhere to put "shorter" and
+    reached for liveliness and platforms instead — neither of which is length."""
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "好，我把它写短一点。", "changes": {"length": 2},
+    })
+
+    reply = _call("写短一点")
+
+    assert reply.kind == "rerun"
+    assert reply.changes == {"length": 2}
+    assert reply.before == {"length": 3}
+
+
+def test_a_length_outside_the_scale_is_refused(monkeypatch):
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "更短。", "changes": {"length": 0},
+    })
+
+    assert _call("再短点").kind == "unclear"
+
+
 def test_a_rerun_is_normalised_before_the_human_confirms_it(monkeypatch):
     """`wechat` is an alias for `xhs`; confirm the dials that will be used."""
     _stub_, _roles, _calls = _stub(monkeypatch, {

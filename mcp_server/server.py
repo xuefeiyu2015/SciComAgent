@@ -77,6 +77,7 @@ def generate(
     language: Language = Language.zh,
     audience: str = "general_public",
     liveliness: int = 3,
+    length: int = 3,
     background: bool = True,
     wait_seconds: int = _DEFAULT_WAIT_S,
 ) -> AgentOutput:
@@ -99,6 +100,8 @@ def generate(
         language: output language (zh / en).
         audience: intended reader.
         liveliness: tone liveliness, 1–5.
+        length: how long the piece runs, 1–5, relative to the platform's own
+            norm. 3 is that norm; 2 is shorter, 1 much shorter, 4–5 longer.
         background: gather external background materials (web/arXiv/scholarly
             APIs) as framing context for the drafts; failure degrades to a
             background_error notice, never sinks the run.
@@ -113,6 +116,7 @@ def generate(
             language=language,
             audience=audience,
             liveliness=liveliness,
+            length=length,
             background=background,
         )
         session_id = jobs.start(inp)
@@ -150,6 +154,7 @@ def redraft(
     language: Language | None = None,
     audience: str | None = None,
     liveliness: int | None = None,
+    length: int | None = None,
     background: bool | None = None,
     from_ledger: bool = False,
     wait_seconds: int = _DEFAULT_WAIT_S,
@@ -182,6 +187,9 @@ def redraft(
         language: output language (zh / en).
         audience: intended reader.
         liveliness: tone liveliness, 1–5.
+        length: how long the piece runs, 1–5, relative to the platform's own
+            norm. THIS is the setting for "make it shorter" (2) or "much
+            shorter" (1) — not liveliness. Omit to keep the run's length.
         background: whether to gather external background materials.
         from_ledger: only meaningful after a redraft came back with a
             `can_restate` notice, which means the paper could not be read
@@ -198,6 +206,7 @@ def redraft(
         "language": language,
         "audience": audience,
         "liveliness": liveliness,
+        "length": length,
         "background": background,
     }
     try:

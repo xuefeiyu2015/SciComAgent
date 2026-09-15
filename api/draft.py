@@ -216,6 +216,35 @@ _LIVELINESS: dict[int, str] = {
 }
 
 
+# Length is RELATIVE to the platform's style card, not an absolute word count.
+# The card already knows what a Xiaohongshu post and a news piece should run to,
+# and those differ by a factor of three — a single number here would have to
+# contradict one of them. 3 is "as the card says", so a run that never touches
+# this dial behaves exactly as it always did.
+_LENGTH: dict[int, str] = {
+    1: "MUCH SHORTER than the style card's range — about half of it. Keep the "
+       "single most important finding and the story around it; cut the rest "
+       "entirely rather than compressing everything into a denser page.",
+    2: "SHORTER than the style card's range — about two thirds. Drop the "
+       "least essential findings; do not squeeze the same content smaller.",
+    3: "as the style card says.",
+    4: "LONGER than the style card's range — about a third more. Use the room "
+       "for context and explanation, not for more findings.",
+    5: "MUCH LONGER than the style card's range — about half again. Use the "
+       "room for context, mechanism and story, not for more findings.",
+}
+
+# What a shorter draft may never buy its brevity with. Stated wherever length is
+# turned down, because "make it shorter" is the most natural-sounding way a
+# human will ever ask this agent to break its own rules.
+_LENGTH_FLOOR = (
+    "  Length is shape, never facts. Cutting a finding is fine; cutting a "
+    "QUALIFIER is not — species, sample size, «preliminary», "
+    "correlation-not-causation survive at every length, and a claim that can "
+    "no longer carry its qualifier must be dropped whole instead of trimmed."
+)
+
+
 def dials(inp: AgentInput) -> str:
     """Render the language/audience/liveliness parameters for this draft.
 
@@ -226,17 +255,23 @@ def dials(inp: AgentInput) -> str:
         inp: the request carrying the dials.
 
     Returns:
-        The `# Dials` prompt block, with liveliness resolved to an instruction.
+        The `# Dials` prompt block, with liveliness and length resolved to
+        instructions.
     """
     language = language_label(inp.language)
     setting = _LIVELINESS.get(inp.liveliness, _LIVELINESS[3])
-    return (
+    length = _LENGTH.get(inp.length, _LENGTH[3])
+    block = (
         "# Dials (parameters for this draft)\n\n"
         f"- Language: write entirely in {language}.\n"
         f"- Audience: {inp.audience}.\n"
         f"- Liveliness: {inp.liveliness}/5 — {setting}\n"
-        "  Liveliness sets tone and shape, never the facts."
+        "  Liveliness sets tone and shape, never the facts.\n"
+        f"- Length: {inp.length}/5 — {length}"
     )
+    if inp.length != 3:
+        block += "\n" + _LENGTH_FLOOR
+    return block
 
 
 def _human_payload(

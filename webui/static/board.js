@@ -1692,8 +1692,10 @@ function rerunSlip(changes, before) {
 /* i18n key suffix for a dial, reusing the labels the opening dialog already
    has — the human should read the same words in both places. */
 function dialKey(dial) {
-  return { platforms: 'Platform', language: 'Language', liveliness: 'Liveliness' }[dial]
-    || dial.charAt(0).toUpperCase() + dial.slice(1);
+  return {
+    platforms: 'Platform', language: 'Language',
+    liveliness: 'Liveliness', length: 'Length',
+  }[dial] || dial.charAt(0).toUpperCase() + dial.slice(1);
 }
 
 function dialText(dial, value) {
@@ -1701,6 +1703,8 @@ function dialText(dial, value) {
   if (dial === 'platforms') return [].concat(value).map(platformLabel).join(' · ');
   if (dial === 'language') return t(value === 'en' ? 'dialog.langEn' : 'dialog.langZh');
   if (dial === 'background') return t(value ? 'chat.dialOn' : 'chat.dialOff');
+  // A bare "2" says nothing about which way is shorter.
+  if (dial === 'length') return `${value}/5 · ${t(`chat.length${value}`)}`;
   return String(value);
 }
 

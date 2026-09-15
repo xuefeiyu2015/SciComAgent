@@ -29,6 +29,7 @@ tools:
       language:   { required: false, default: zh, allowed: [zh, en] }
       audience:   { required: false, default: general_public }
       liveliness: { required: false, default: 3, min: 1, max: 5, description: "Tone AND shape. 1 = sober and plain; 4-5 additionally ask for a narrative rather than a list of findings. Never the facts" }
+      length:     { required: false, default: 3, min: 1, max: 5, description: "How long the piece runs, RELATIVE to the platform's own style card. 3 = the card's range; 2 = shorter, 1 = much shorter; 4-5 = longer. Length is shape, never the facts — a shorter draft drops findings, never qualifiers" }
       background: { required: false, default: true, description: "Run the researcher: external background materials for story framing, AND a glossary of what the paper's terms and quantities mean. Framing and wording only, never facts" }
       wait_seconds: { required: false, default: 10, min: 0, max: 25, description: "How long to hold the call open for a fast run before returning a session_id instead. Clamped server-side" }
     # Return contract (see AgentOutput in api/schema.py). Never auto-published.
@@ -68,6 +69,7 @@ tools:
       language:   { required: false, allowed: [zh, en], description: "Omit to keep the run's language. CHANGING IT rebuilds the claim ledger, because the ledger is written in the run's language; every other setting reuses it and is much faster" }
       audience:   { required: false, description: "Omit to keep the run's reader" }
       liveliness: { required: false, min: 1, max: 5, description: "Omit to keep the run's tone" }
+      length:     { required: false, min: 1, max: 5, description: "Omit to keep the run's length. THIS is the setting for \"make it shorter\" (2) or \"much shorter\" (1) — not liveliness" }
       background: { required: false, description: "Omit to keep the run's setting. Turning it ON researches now, from the stored paper — no re-fetch" }
       from_ledger: { required: false, default: false, description: "Only after a redraft returned a `can_restate` notice. true = restate the ledger in the new language from the evidence the first run stored, instead of re-reading a paper that is out of reach. ASK THE HUMAN FIRST — provenance is carried over, not read fresh; the result is marked `restated`" }
       wait_seconds: { required: false, default: 10, min: 0, max: 25, description: "As in `generate`: how long to hold the call open before returning the NEW session_id instead" }
