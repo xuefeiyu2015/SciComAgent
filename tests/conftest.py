@@ -6,8 +6,11 @@ webui's job routes both call `jobs.start()`. Without this, a plain `pytest` run
 leaves files in the operator's own history. It reached 253 files before anyone
 noticed, of which only 5 were real runs.
 
-Autouse and suite-wide on purpose: patching the two files that leak today would
-be undone by the next test that touches jobs.
+`api.assets` writes to the sibling `outputs/images/` for the same reason, so
+it gets the same treatment here rather than a fixture of its own.
+
+Autouse and suite-wide on purpose: patching the files that leak today would
+be undone by the next test that touches jobs or assets.
 
 Redirecting the path is not enough on its own. A job's mirror is written by a
 worker thread, which can outlive the test that started it — so the fixture also
@@ -19,15 +22,16 @@ from __future__ import annotations
 
 import pytest
 
-from api import jobs
+from api import assets, jobs
 
 
 @pytest.fixture(autouse=True)
 def _isolate_job_mirrors(tmp_path, monkeypatch):
-    """Point every job artifact at a throwaway directory for this test."""
+    """Point every job and asset artifact at a throwaway directory for this test."""
     monkeypatch.setattr(jobs, "_JOBS_DIR", tmp_path / "jobs")
     monkeypatch.setattr(jobs, "_REQUESTS_DIR", tmp_path / "jobs" / "requests", raising=False)
     monkeypatch.setattr(jobs, "_CARDS_DIR", tmp_path / "jobs" / "cards", raising=False)
+    monkeypatch.setattr(assets, "_IMAGES_DIR", tmp_path / "images", raising=False)
     yield tmp_path
 
     # Reaching into _JOBS is deliberate: this is the safety net, and it has to
