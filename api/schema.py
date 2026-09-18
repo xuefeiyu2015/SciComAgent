@@ -70,6 +70,7 @@ class NoticeCode(str, Enum):
     background_error = "background_error"  # background search skipped; drafts unaffected
     glossary_error = "glossary_error"      # term lookup skipped; drafts fall back to raw terms
     style_error = "style_error"  # style distillation skipped; drafts fall back to default voice
+    image_error = "image_error"  # image asset generation/rendering skipped; drafts unaffected
     running = "running"          # async job accepted; result not ready yet
     done = "done"                # the run finished -> say so; a caller polling
                                  # a silently-complete payload has nothing to
@@ -86,6 +87,21 @@ class SourceKind(str, Enum):
     pubmed = "pubmed"
     crossref = "crossref"
     reference = "reference"                # reserved: parsed from the paper's own refs
+
+
+class ImageMode(str, Enum):
+    """The `images` dial: how much of the asset service a run should use."""
+
+    off = "off"        # no images generated
+    cover = "cover"    # cover image only
+    all = "all"        # cover + per-claim explainer images
+
+
+class ImageKind(str, Enum):
+    """What one ImageAsset is: the run's cover, or one claim's explainer."""
+
+    cover = "cover"          # model-generated decoration for the run
+    explainer = "explainer"  # deterministically rendered claim card
 
 
 # --- input ------------------------------------------------------------------
@@ -116,6 +132,12 @@ class AgentInput(BaseModel):
         default=True,
         description="Gather external background materials (web/arXiv/scholarly APIs) "
         "as framing context for the drafter. Failure degrades gracefully.",
+    )
+    images: ImageMode = Field(
+        default=ImageMode.off,
+        description="How much of the image asset service to run: `off` generates "
+        "nothing, `cover` generates only the cover image, `all` also renders one "
+        "explainer image per claim.",
     )
 
     @field_validator("platforms")
@@ -373,6 +395,35 @@ class Claim(BaseModel):
     )
 
 
+class ImageAsset(BaseModel):
+    """One image produced by the asset service: the cover, or one claim's card.
+
+    A cover is model-generated decoration; an explainer is a deterministically
+    rendered claim card and is never model-generated (docs/plan_for_image.md).
+    """
+
+    kind: ImageKind = Field(description="Whether this is the run's cover or a claim explainer.")
+    claim_id: str = Field(
+        default="", description="Ledger id this image illustrates; '' for the cover."
+    )
+    path: str = Field(default="", description="Where the rendered image was saved.")
+    alt: str = Field(default="", description="Alt text for the image.")
+    generated: bool = Field(
+        default=False,
+        description="True when the image is model-generated; False when it was "
+        "deterministically rendered from a Claim.",
+    )
+    prompt: str = Field(
+        default="", description="Prompt used to generate the image, when generated is True."
+    )
+    model: str = Field(
+        default="", description="Role/name of the model used to generate the image, when generated is True."
+    )
+    source_hash: str = Field(
+        default="", description="Hash of the inputs the image was produced from, for cache invalidation."
+    )
+
+
 class PlatformOutput(BaseModel):
     """Generated content for a single platform."""
 
@@ -509,6 +560,10 @@ class AgentOutput(BaseModel):
         "None when api/styles/examples/ is empty.",
     )
     notices: list[Notice] = Field(default_factory=list)
+    images: list[ImageAsset] = Field(
+        default_factory=list,
+        description="Generated/rendered image assets for this run (cover + explainers).",
+    )
     status: Status = Status.needs_review
     session_id: str = Field(
         default="",
