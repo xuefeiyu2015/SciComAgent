@@ -18,6 +18,7 @@ from api.schema import (
     AgentInput,
     AgentOutput,
     Claim,
+    JobKind,
     JobState,
     Language,
     Notice,
@@ -435,3 +436,47 @@ def test_prelude_steps_matches_the_stages_the_pipeline_emits():
     }
 
     assert len(emitted) == jobs._PRELUDE_STEPS
+
+
+# --- saying so when it is finished ------------------------------------------
+
+def test_a_finished_run_says_so_in_words_a_host_can_relay(monkeypatch):
+    """`done` alone read like every other stage line; a human waited through it."""
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+    session_id = jobs.start(_input())
+    jobs.wait(session_id, 5)
+
+    progress = jobs.status(session_id)
+
+    assert progress.state is JobState.done
+    assert progress.kind is JobKind.run
+    assert "finished" in progress.message.lower()
+    assert "job_result" in progress.message
+
+
+def test_a_finished_redraft_says_it_was_a_redraft(monkeypatch):
+    """"Finished" is not enough when what finished was a rewrite of something."""
+    first = _finish_a_run(monkeypatch, card={"title": "t"})
+    monkeypatch.setattr(
+        jobs, "redraft",
+        lambda prev, before, after, card, on_event=None, allow_restate=False: _finished(),
+    )
+
+    second = jobs.start_redraft(first, {"language": "en"})
+    jobs.wait(second, 5)
+    progress = jobs.status(second)
+
+    assert progress.kind is JobKind.redraft
+    assert "redraft" in progress.message.lower()
+    assert jobs.status(first).kind is JobKind.run, "the original is not retagged"
+
+
+def test_a_failed_run_is_never_announced_as_finished(monkeypatch):
+    def boom(inp, on_event=None):
+        raise RuntimeError("pipeline exploded")
+
+    _stub_run(monkeypatch, boom)
+    session_id = jobs.start(_input())
+    jobs.wait(session_id, 5)
+
+    assert "finished" not in jobs.status(session_id).message.lower()

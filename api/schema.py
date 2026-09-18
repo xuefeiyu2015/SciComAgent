@@ -71,6 +71,9 @@ class NoticeCode(str, Enum):
     glossary_error = "glossary_error"      # term lookup skipped; drafts fall back to raw terms
     style_error = "style_error"  # style distillation skipped; drafts fall back to default voice
     running = "running"          # async job accepted; result not ready yet
+    done = "done"                # the run finished -> say so; a caller polling
+                                 # a silently-complete payload has nothing to
+                                 # tell the human who is watching it
     unknown_session = "unknown_session"  # no job for that session_id (expired/lost)
 
 
@@ -526,6 +529,18 @@ class JobState(str, Enum):
     lost = "lost"        # unknown id: expired, or the process/instance restarted
 
 
+class JobKind(str, Enum):
+    """What a background job is doing — a first pass, or a rewrite of one.
+
+    "Finished" answers a different question for each: a run produced a draft,
+    a redraft REPLACED one, and the human waiting on a rewrite is owed the
+    difference.
+    """
+
+    run = "run"          # a first pass over a paper
+    redraft = "redraft"  # an earlier run written again with different dials
+
+
 class JobProgress(BaseModel):
     """Cheap, pollable status for one job — no drafts, no ledger.
 
@@ -535,6 +550,9 @@ class JobProgress(BaseModel):
 
     session_id: str
     state: JobState = JobState.queued
+    kind: JobKind = Field(
+        default=JobKind.run, description="Whether this job is a run or a redraft."
+    )
     stage: str = Field(
         default="",
         description="Current step: fetch | ledger | background | style | "

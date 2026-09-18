@@ -59,6 +59,7 @@ tools:
           background_error: "background search skipped (drafts unaffected, produced without background)"
           style_error:      "learned writing style skipped (drafts unaffected, produced in the default voice)"
           running:          "the run was accepted and is still going -> poll job_status with the session_id"
+          done:             "the run FINISHED and this is the whole result -> say so to the human and show it to them. A complete result looks no different from a partial one to whoever is waiting, and silence reads as still-working"
           unknown_session:  "no job for that session_id (expired, or from another instance / before a restart) -> call generate again"
 
   - name: redraft
@@ -121,11 +122,13 @@ tools:
       session_id: { required: true, description: "The id returned by `generate`" }
     output:
       state:            { allowed: [queued, running, done, failed, lost], description: "lost = expired / another instance; call generate again" }
+      kind:             { allowed: [run, redraft], description: "What finished: a first pass over a paper, or a rewrite of an earlier one. 'Finished' answers a different question for each" }
       stage:            "fetch | ledger | background | style | draft:<platform> | done"
       steps_done:       "Milestones completed"
-      steps_total:      "Milestones expected (3 + one per platform)"
+      steps_total:      "Milestones expected (4 + one per platform)"
       platforms_ready:  "Platforms whose draft job_result can already return"
       elapsed_s:        "Seconds since the run started"
+      message:          "The status line in words. On state=done it says the draft (or the redraft) is finished — pass that on the moment you see it; the human is watching and cannot tell a finished run from a slow one"
       result_available: "Whether job_result has anything to return yet"
 
   - name: job_result
@@ -135,6 +138,7 @@ tools:
     # Same AgentOutput contract as `generate`. A partial never carries a finished status.
     output:
       status: { allowed: [needs_review, running, failed], description: "running = partial result, keep polling" }
+      notices: "A finished result carries a `done` notice saying what it produced -> announce it; do not hand back a finished draft in silence"
 
   - name: ping
     description: Dummy connectivity check — returns one sentence; no models, no network, no pipeline

@@ -389,3 +389,82 @@ def test_job_result_never_crashes(monkeypatch):
 def test_async_tools_are_registered():
     names = {t.name for t in asyncio.run(server.mcp.list_tools())}
     assert {"job_status", "job_result"} <= names
+
+
+# --- saying so when it is finished ------------------------------------------
+
+def test_a_finished_result_carries_a_notice_that_it_is_finished(monkeypatch):
+    """A silently-complete payload left a human watching a page that was done."""
+    monkeypatch.setattr(jobs, "run", _accepting(
+        lambda inp: AgentOutput(
+            status=Status.needs_review,
+            platform_outputs=[PlatformOutput(platform=Platform.news, body="b")],
+        )
+    ))
+
+    out = generate(source="s", source_type=SourceType.url, wait_seconds=5)
+    done = [n for n in out.notices if n.code == NoticeCode.done]
+
+    assert done, [n.code for n in out.notices]
+    assert "1 draft" in done[0].message
+    assert "publish" in done[0].message.lower(), "never auto-publishes, still"
+
+
+def test_the_finished_notice_survives_a_later_job_result(monkeypatch):
+    """The host that polls is the one that most needs telling."""
+    monkeypatch.setattr(jobs, "run", _accepting(
+        lambda inp: AgentOutput(status=Status.ok, claim_ledger=[
+            Claim(claim="c", source_evidence="e", qualifier="q")])
+    ))
+
+    out = generate(source="s", source_type=SourceType.url, wait_seconds=5)
+    again = job_result(out.session_id)
+
+    assert [n.code for n in again.notices].count(NoticeCode.done) == 1
+
+
+def test_a_finished_redraft_is_announced_as_a_redraft(monkeypatch):
+    monkeypatch.setattr(jobs, "start_redraft",
+                        lambda sid, changes, allow_restate=False: "j_x_2")
+    monkeypatch.setattr(jobs, "wait", lambda sid, timeout: True)
+    monkeypatch.setattr(jobs, "result", lambda sid: AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[PlatformOutput(platform=Platform.news, body="b")],
+    ))
+
+    out = redraft(session_id="j_x_1", language="en", wait_seconds=5)
+    done = [n for n in out.notices if n.code == NoticeCode.done]
+
+    assert done, [n.code for n in out.notices]
+    assert "redraft" in done[0].message.lower()
+
+
+def test_a_run_still_going_is_not_announced_as_finished(monkeypatch):
+    release = threading.Event()
+
+    def slow(inp, on_event=None):
+        release.wait(5)
+        return AgentOutput(status=Status.needs_review)
+
+    monkeypatch.setattr(jobs, "run", slow)
+    try:
+        out = generate(source="s", source_type=SourceType.url, wait_seconds=0)
+        partial = job_result(out.session_id)
+
+        assert NoticeCode.done not in [n.code for n in out.notices]
+        assert NoticeCode.done not in [n.code for n in partial.notices]
+    finally:
+        release.set()
+
+
+def test_a_failed_run_is_not_announced_as_finished(monkeypatch):
+    monkeypatch.setattr(jobs, "run", _accepting(
+        lambda inp: AgentOutput(
+            status=Status.failed,
+            notices=[Notice(code=NoticeCode.fetch_error, message="unreachable")],
+        )
+    ))
+
+    out = generate(source="s", source_type=SourceType.url, wait_seconds=5)
+
+    assert NoticeCode.done not in [n.code for n in out.notices]

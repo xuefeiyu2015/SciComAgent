@@ -45,6 +45,7 @@ from api.schema import (  # noqa: E402
     AgentOutput,
     CheckFlag,
     Claim,
+    JobKind,
     JobProgress,
     JobState,
     Language,
@@ -129,7 +130,7 @@ def generate(
         )
 
     if jobs.wait(session_id, _clamp_wait(wait_seconds)):
-        return _clarify_need_pdf(job_result(session_id))
+        return _clarify_need_pdf(_collect(session_id, JobKind.run))
 
     return AgentOutput(
         status=Status.running,
@@ -229,7 +230,7 @@ def redraft(
         )
 
     if jobs.wait(new_id, _clamp_wait(wait_seconds)):
-        return _clarify_need_pdf(job_result(new_id))
+        return _clarify_need_pdf(_collect(new_id, JobKind.redraft))
 
     return AgentOutput(
         status=Status.running,
@@ -263,6 +264,11 @@ def job_status(session_id: str) -> JobProgress:
     already have a draft, and how long it has been going. No drafts or ledger
     come back here — call `job_result` for content.
 
+    When it is over, `state='done'`, `kind` says whether a run or a redraft
+    finished, and `message` says so in words. Pass that on the moment you see
+    it: whoever asked for this is watching and cannot tell a finished run from
+    a slow one.
+
     An id this server cannot account for (expired, or issued before a restart /
     by another instance) reports `state='lost'` with a message saying which,
     rather than pretending the job might still appear.
@@ -290,8 +296,22 @@ def job_result(session_id: str) -> AgentOutput:
     partial NEVER carries a finished status, so it cannot be mistaken for a
     reviewed result.
 
+    A finished result carries a `done` notice saying what it produced. Say it
+    out loud — a complete payload looks no different from an incomplete one to
+    the person waiting on it, and silence has left people sitting there.
+
     Args:
         session_id: the id returned by `generate`.
+    """
+    return _collect(session_id)
+
+
+def _collect(session_id: str, kind: JobKind | None = None) -> AgentOutput:
+    """`job_result`'s body, callable with the kind already known.
+
+    `generate` and `redraft` know which they started; a host polling later does
+    not, so for it the registry is asked. Either way the finished result is
+    announced exactly once.
     """
     try:
         out = jobs.result(session_id)
@@ -300,6 +320,17 @@ def job_result(session_id: str) -> AgentOutput:
         reason = f"result unavailable: {exc}"
     else:
         reason = "No result for that session_id."
+
+    if out is not None:
+        if kind is None:
+            # The registry, not the payload, is what knows whether this was a
+            # first pass or a rewrite — and a host that polled for a rewrite is
+            # owed the word.
+            try:
+                kind = jobs.status(session_id).kind
+            except Exception:  # an unreadable status is no reason to say nothing
+                kind = JobKind.run
+        out = _announce_done(out, kind)
 
     if out is None:
         return AgentOutput(
@@ -331,6 +362,48 @@ def _clarify_need_pdf(out: AgentOutput) -> AgentOutput:
                 f"({notice.message}). Please provide a PDF link and call "
                 "`generate` again with source_type='pdf'."
             )
+    return out
+
+
+def _announce_done(out: AgentOutput, kind: JobKind = JobKind.run) -> AgentOutput:
+    """Make a finished result SAY it is finished.
+
+    A completed AgentOutput is silent: notices exist for what went wrong, so a
+    run that went right comes back with none. The host then has a payload that
+    is complete and no sentence saying so — and a human watching the page sits
+    there waiting for work that ended minutes ago. This is the sentence.
+
+    Only successful, terminal results get it. `running` is not finished,
+    `failed` and `no_claims` carry their own explanation, and an announcement
+    over either of those would be a lie.
+    """
+    if out.status not in (Status.ok, Status.needs_review):
+        return out
+    if any(n.code is NoticeCode.done for n in out.notices):
+        return out
+
+    drafts = len(out.platform_outputs)
+    flags = len(out.overreach_flags)
+    subject = "The redraft is finished" if kind is JobKind.redraft else "Finished"
+    if drafts:
+        made = f"{drafts} draft{'' if drafts == 1 else 's'} ready"
+        where = ", ".join(d.platform.value for d in out.platform_outputs)
+        made = f"{made} ({where})"
+    else:
+        made = "the claim ledger is ready"
+    review = f", {flags} overstatement flag{'' if flags == 1 else 's'} to review"
+
+    out.notices.append(
+        Notice(
+            code=NoticeCode.done,
+            message=(
+                f"{subject} — {made}{review if flags else ''}. Somebody is "
+                "waiting on this: say plainly that it is done and show them "
+                "the result (`render` turns it into readable Markdown with its "
+                "provenance). Nothing has been published, and nothing may be."
+            ),
+        )
+    )
     return out
 
 

@@ -33,6 +33,7 @@ from api.schema import (
     Glossary,
     JargonFlag,
     Notice,
+    NoticeCode,
     OverreachFlag,
     Platform,
     PlatformOutput,
@@ -301,7 +302,13 @@ def _render_style(profile: StyleProfile) -> str:
 
 
 def _render_notices(notices: list[Notice], header: str | None = None) -> str:
-    """Pipeline notices (failure reasons, background_error, ...)."""
+    """Pipeline notices (failure reasons, background_error, ...).
+
+    `done` is left out: it exists to tell the CALLING AGENT that the run ended
+    and to pass that on, which is nothing the human reading this page needs
+    read back at them — they are looking at the finished draft.
+    """
+    notices = [n for n in notices if n.code is not NoticeCode.done]
     if not notices:
         return ""
     lines = [f"**{header}:**"] if header else []

@@ -253,7 +253,13 @@ function poll(node) {
 
     if (progress.state === 'done' || progress.state === 'failed') {
       clearInterval(state.polling);
-      loadResult();
+      // The progress turn goes with it: a finished run must not leave a bar on
+      // screen that still looks like work going on — and a result that cannot
+      // be collected says so, for the same reason.
+      loadResult(node).catch((err) => {
+        node.remove();
+        turn(t('board.speaker'), `<span style="color:var(--flag)">${esc(err.message)}</span>`);
+      });
     } else if (progress.state === 'lost') {
       clearInterval(state.polling);
       line.textContent = progress.message;
@@ -261,9 +267,14 @@ function poll(node) {
   }, POLL_MS);
 }
 
-async function loadResult() {
+/* `node` is the progress turn this result was awaited in, when there was one.
+   It is what tells the difference between a run that just landed — which has to
+   ANNOUNCE itself, because somebody is watching this page — and a draft merely
+   reopened from History, which announced itself the day it was written. */
+async function loadResult(node) {
   const body = await api(`/api/job/${state.sessionId}/result`);
   const incoming = body.result;
+  if (node) node.remove();
 
   // A run that produced nothing must not take the draft already on screen with
   // it. Committing first and checking afterwards is how an unreachable link
@@ -288,6 +299,7 @@ async function loadResult() {
 
   // It landed. Only now does the version it replaces move into the stack,
   // where it stays visible above this one.
+  const replaced = state.replacing;
   if (state.replacing) {
     state.archive.push(state.replacing);
     state.replacing = null;
@@ -309,6 +321,18 @@ async function loadResult() {
   renderBoard();
   renderApparatus();
   loadHistory();
+
+  // Say it is done. The board quietly filling with a new draft is not an
+  // answer to "is it still working?" — somebody sat through a finished rewrite
+  // waiting for it to end, because nothing here ever said that it had.
+  if (node) {
+    turn(t('board.speaker'), esc(replaced
+      ? t('chat.rerunLanded', { label: replaced.label })
+      : t('chat.ready')));
+    // The dock is not where their eyes are — the draft is.
+    toast(t(replaced ? 'chat.rerunLandedToast' : 'chat.runLandedToast'));
+  }
+
   // The dock must never be a blank pane: if this draft arrived without a
   // conversation (reopened from History, say), open one.
   if (!$('#dialog').querySelector('.turn')) {

@@ -46,6 +46,7 @@ from api.pipeline import EventSink, redraft, run
 from api.schema import (
     AgentInput,
     AgentOutput,
+    JobKind,
     JobProgress,
     JobState,
     Notice,
@@ -179,15 +180,22 @@ def start_redraft(
             prev, before, after, card,
             on_event=on_event, allow_restate=allow_restate,
         ),
+        kind=JobKind.redraft,
     )
 
 
-def _submit(inp: AgentInput, work: Callable[[EventSink], AgentOutput]) -> str:
+def _submit(
+    inp: AgentInput,
+    work: Callable[[EventSink], AgentOutput],
+    kind: JobKind = JobKind.run,
+) -> str:
     """Register a job for `work` and hand back its session_id immediately.
 
     `work` is whatever produces the AgentOutput — a first run or a redraft.
     Everything downstream of here (progress, partials, the mirror, the request
     sidecar, eviction) is identical for both, which is the point of the seam.
+    `kind` is the one thing that is not: it rides along so that the job can
+    say what it was when it reports itself finished.
     """
     session_id = f"j_{_INSTANCE}_{uuid.uuid4().hex[:8]}"
     now = time.time()
@@ -195,6 +203,7 @@ def _submit(inp: AgentInput, work: Callable[[EventSink], AgentOutput]) -> str:
         progress=JobProgress(
             session_id=session_id,
             state=JobState.queued,
+            kind=kind,
             steps_total=_PRELUDE_STEPS + len(inp.platforms),
             started_at=now,
             updated_at=now,
@@ -318,10 +327,22 @@ def _execute(session_id: str, work: Callable[[EventSink], AgentOutput]) -> None:
             record.progress.updated_at - record.progress.started_at, 1
         )
         record.progress.result_available = True
-        record.progress.message = (
-            "done" if state is JobState.done else "failed — see notices"
-        )
+        record.progress.message = _finished_message(record.progress.kind, state)
     _mirror_safely(session_id, output)
+
+
+def _finished_message(kind: JobKind, state: JobState) -> str:
+    """The status line a job ends on.
+
+    It used to be the bare word "done", which polls right past a human: it sat
+    in the same slot as "draft:xhs" and read like one more stage going by. A
+    finished job says it is finished, says which kind it was, and says what to
+    call next — the caller is the only one who can pass that on.
+    """
+    if state is not JobState.done:
+        return "failed — see the notices on the result"
+    subject = "redraft" if kind is JobKind.redraft else "draft"
+    return f"the {subject} is finished — call `job_result` for it"
 
 
 def _on_event(record: _JobRecord, event: ProgressEvent) -> None:
