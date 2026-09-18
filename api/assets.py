@@ -57,13 +57,21 @@ def image_path(session_id: str, kind: ImageKind, claim_id: str = "") -> Path:
     `Claim.id` already carries its own ``c`` prefix (`api.ledger` assigns
     ``id=f"c{n}"``, e.g. ``c17``), so the filename is ``c17.png``, never
     ``cc17.png``.
+
+    `claim_id` is checked for every `kind`, not just `explainer` — it is
+    unused by the cover filename, but an attacker-shaped value passed
+    alongside `kind=cover` must still raise rather than be silently ignored.
+    An explainer additionally requires a non-empty `claim_id`; a cover does
+    not, since it never appears in that filename.
     """
     _require_safe(session_id, what="session_id")
-    if kind is ImageKind.cover:
-        name = "cover.png"
-    else:
-        _require_safe(claim_id, what="claim_id")
+    if kind is ImageKind.explainer:
+        _require_safe(claim_id, what="claim_id")  # non-empty and safe
         name = f"{claim_id}.png"
+    else:
+        if claim_id:  # optional for a cover, but must be safe if given at all
+            _require_safe(claim_id, what="claim_id")
+        name = "cover.png"
     return image_dir(session_id) / name
 
 

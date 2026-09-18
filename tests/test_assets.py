@@ -62,10 +62,19 @@ def test_image_path_rejects_unsafe_claim_id(bad):
         assets.image_path("sess1", ImageKind.explainer, claim_id=bad)
 
 
-def test_image_path_cover_ignores_claim_id_safety_entirely():
-    """The cover filename never depends on claim_id, so a bad one there is moot."""
+def test_image_path_cover_with_empty_claim_id_is_fine():
+    """Cover callers normally pass no claim_id at all; that must still work."""
     path = assets.image_path("sess1", ImageKind.cover, claim_id="")
     assert path.name == "cover.png"
+
+
+@pytest.mark.parametrize("bad", ["../../etc/passwd", "../escape", "a/b", "a\\b", ".."])
+def test_image_path_rejects_unsafe_claim_id_even_for_cover(bad):
+    """claim_id is unused by the cover filename, but an attacker-shaped value
+    passed alongside kind=cover must still raise, not be silently ignored.
+    """
+    with pytest.raises(ValueError):
+        assets.image_path("sess1", ImageKind.cover, claim_id=bad)
 
 
 # --- write_manifest / read_manifest ----------------------------------------
