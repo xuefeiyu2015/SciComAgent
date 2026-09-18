@@ -17,6 +17,8 @@ exactly. No font file, no Pillow, anywhere in this file.
 
 from __future__ import annotations
 
+import inspect
+
 from api.claimcard import (
     CARD_GAP,
     CARD_MARGIN,
@@ -341,14 +343,19 @@ def test_equal_inputs_produce_equal_output():
     assert layout_a == layout_b
 
 
-def test_layout_computation_takes_a_plain_measure_callable_not_a_pillow_font():
-    # #26 adds Pillow-backed drawing (draw_claim_card, render_claim_card) to
-    # this same module, so the module as a whole now imports Pillow — see
-    # tests/test_claimcard_render.py for that half. What stays pinned here is
-    # that `compute_card_layout` itself never receives or needs a real PIL
-    # font object: it is exercised end-to-end above using nothing but this
-    # file's fixed-width fake, so its own contract stays a plain
-    # `(text, font_size) -> (width_px, height_px)` callable.
-    claim = _claim()
-    layout = compute_card_layout(claim, (900, 900), _measure)
-    assert layout is not None
+def test_compute_card_layout_source_contains_no_pillow_reference():
+    # #25's guarantee, narrowed to survive #26: the MODULE api.claimcard now
+    # imports Pillow at module level (draw_claim_card/render_claim_card live
+    # in the same file, per #26's own constraints), so a module-level "no
+    # Pillow anywhere in this file" test can no longer hold and is retired on
+    # purpose. What #25 actually promised is narrower and still true today:
+    # compute_card_layout ITSELF — the pure layout function — opens no file
+    # and touches no Pillow. Reading its own source (not the whole module)
+    # pins exactly that, and would catch a Pillow call added directly inside
+    # this function's body even though every other test in this file already
+    # exercises it end-to-end with nothing but the fixed-width `_measure`
+    # fake above (which proves the function ACCEPTS a plain callable, not
+    # that its body stays Pillow-free — a different guarantee).
+    source = inspect.getsource(compute_card_layout)
+    for forbidden in ("PIL", "Pillow", "Image", "ImageFont", "ImageDraw"):
+        assert forbidden not in source, f"compute_card_layout source mentions {forbidden!r}"
