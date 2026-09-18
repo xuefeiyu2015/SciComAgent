@@ -172,9 +172,12 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
 
     Returns `None` when there is nothing to render (`claim.claim == ""`), when
     the qualifier alone does not fit `size` (it is never elided, so nothing
-    can be done), when the claim does not fit even fully elided, or when the
-    figure/claim/qualifier stack does not fit the card's height even after
-    eliding the claim — refusing beats overflowing or dropping the qualifier.
+    can be done), when the claim does not fit even fully elided, when the
+    figure (a verbatim extracted numeral, never elided) does not fit, when
+    the `id_tag` (a verbatim ledger id, never elided) does not fit the card's
+    width, or when the figure/claim/qualifier/id_tag stack does not fit the
+    card's height even after eliding the claim — refusing beats overflowing,
+    dropping the qualifier, or truncating the figure/id.
     """
     if not claim.claim:
         return None
@@ -194,6 +197,13 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
     if claim_text is None:
         return None  # does not fit even fully elided
 
+    if not _fits(figure_text, FONT_SIZE_FIGURE, available_width, measure):
+        return None  # the figure is a verbatim numeral; it is never elided
+
+    id_w, id_h = measure(claim.id, FONT_SIZE_ID)
+    if id_w > available_width:
+        return None  # the id tag is a verbatim ledger id; it is never elided
+
     y = CARD_MARGIN
     figure_el: TextElement | None = None
     if figure_text:
@@ -212,10 +222,9 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
     )
     y += qualifier_h
 
-    if y + CARD_MARGIN > height:
-        return None  # the stack does not fit the card height even elided
+    if y + id_h + CARD_MARGIN > height:
+        return None  # the stack, including the id tag, does not fit the card height
 
-    id_w, id_h = measure(claim.id, FONT_SIZE_ID)
     id_x = max(width - CARD_MARGIN - id_w, CARD_MARGIN)
     id_y = max(height - CARD_MARGIN - id_h, CARD_MARGIN)
     id_el = TextElement(text=claim.id, x=id_x, y=id_y, font_size=FONT_SIZE_ID)

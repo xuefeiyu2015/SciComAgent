@@ -209,6 +209,82 @@ def test_qualifier_that_does_not_fit_and_cannot_be_elided_returns_none():
     assert compute_card_layout(claim, size, _measure) is None
 
 
+# --- figure fit-or-refuse (#43) ----------------------------------------------
+
+def test_figure_too_wide_to_fit_returns_none():
+    # 13-digit numeral: figure_w = 13 * FONT_SIZE_FIGURE = 728px, which does
+    # not fit a 400px-wide card's available width. QA's live repro on #25
+    # found this instead returned a layout with the figure off-canvas.
+    claim = _claim(claim="数值为1234567890123的实验结果", qualifier="")
+    size = (400, 2000)
+
+    assert figure_of(claim.claim) == "1234567890123"
+    assert len(figure_of(claim.claim)) == 13
+
+    assert compute_card_layout(claim, size, _measure) is None
+
+
+def test_figure_that_fits_is_never_elided_or_shrunk():
+    # Sanity check alongside the refusal case above: a figure that DOES fit
+    # is placed verbatim, at its full FONT_SIZE_FIGURE — never elided, since
+    # eliding it would misrepresent the extracted numeral.
+    claim = _claim(claim="疗效提升了42%", qualifier="小样本")
+    layout = compute_card_layout(claim, (2000, 2000), _measure)
+
+    assert layout is not None
+    assert layout.figure is not None
+    assert layout.figure.text == "42"
+    assert layout.figure.font_size == FONT_SIZE_FIGURE
+
+
+# --- id_tag fit-or-refuse (#43) ----------------------------------------------
+
+def test_id_tag_too_wide_to_fit_returns_none():
+    # A 500-character claim.id in a 300px-wide card. QA's live repro on #25
+    # found this instead returned a layout with the id_tag's right edge at
+    # pixel 7032 on a 300px canvas.
+    claim = _claim(id="c" * 500, claim="疗效提升了42%", qualifier="")
+    size = (300, 2000)
+
+    assert compute_card_layout(claim, size, _measure) is None
+
+
+def test_id_tag_presence_alone_breaks_an_otherwise_passing_height_fit():
+    # Choose a height where the figure+claim+qualifier stack fits exactly
+    # (y + CARD_MARGIN == height), so the *old* height check would have
+    # passed. Adding the id tag's height to the budget must now push it over.
+    claim = _claim(id="c1", claim="疗效提升了42%", qualifier="小样本")
+    size = (2000, 2000)
+
+    baseline = compute_card_layout(claim, size, _measure)
+    assert baseline is not None
+
+    figure_text = figure_of(claim.claim)
+    figure_h = FONT_SIZE_FIGURE
+    claim_h = FONT_SIZE_CLAIM_WITH_FIGURE
+    qualifier_h = FONT_SIZE_QUALIFIER
+    stack_bottom = (
+        CARD_MARGIN + figure_h + CARD_GAP + claim_h + CARD_GAP + qualifier_h
+    )
+    # A card exactly tall enough for the stack alone (old check would pass),
+    # but not for the stack plus the id tag's height (new check must refuse).
+    height_for_stack_only = stack_bottom + CARD_MARGIN
+    assert figure_text  # sanity: this claim does carry a figure
+
+    assert compute_card_layout(claim, (2000, height_for_stack_only), _measure) is None
+
+
+def test_id_tag_that_fits_is_never_elided_or_truncated():
+    # Sanity check alongside the refusal cases above: an id_tag that DOES
+    # fit is placed verbatim — never elided, since a truncated ledger id is
+    # not the id.
+    claim = _claim(id="c123456789", claim="疗效提升了42%", qualifier="小样本")
+    layout = compute_card_layout(claim, (2000, 2000), _measure)
+
+    assert layout is not None
+    assert layout.id_tag.text == claim.id
+
+
 # --- empty inputs ----------------------------------------------------------
 
 def test_empty_claim_returns_none():
