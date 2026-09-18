@@ -341,12 +341,14 @@ def test_equal_inputs_produce_equal_output():
     assert layout_a == layout_b
 
 
-def test_pure_module_imports_nothing_from_pillow():
-    import inspect
-
-    import api.claimcard as mod
-
-    assert "PIL" not in mod.__dict__
-    source = inspect.getsource(mod)
-    assert "import PIL" not in source
-    assert "from PIL" not in source
+def test_layout_computation_takes_a_plain_measure_callable_not_a_pillow_font():
+    # #26 adds Pillow-backed drawing (draw_claim_card, render_claim_card) to
+    # this same module, so the module as a whole now imports Pillow — see
+    # tests/test_claimcard_render.py for that half. What stays pinned here is
+    # that `compute_card_layout` itself never receives or needs a real PIL
+    # font object: it is exercised end-to-end above using nothing but this
+    # file's fixed-width fake, so its own contract stays a plain
+    # `(text, font_size) -> (width_px, height_px)` callable.
+    claim = _claim()
+    layout = compute_card_layout(claim, (900, 900), _measure)
+    assert layout is not None

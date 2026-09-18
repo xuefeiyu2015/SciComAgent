@@ -188,6 +188,8 @@ packaging==26.2
     #   langchain-core
     #   langsmith
     #   pytest
+pillow==12.3.0
+    # via scicomagent
 pluggy==1.6.0
     # via pytest
 primp==1.3.1
