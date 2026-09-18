@@ -25,6 +25,8 @@ extractor.
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +36,8 @@ import trafilatura
 from bs4 import BeautifulSoup
 
 from api.schema import SourceType
+
+_log = logging.getLogger(__name__)
 
 # Below this many characters we don't trust the extraction (paywall/cookie
 # wall stub, landing page, or image-only PDF).
@@ -68,7 +72,8 @@ class FetchResult:
     ok: bool
     text: str = ""
     reason: str = ""  # human-readable; empty when ok
-    code: str = "ok"  # machine: ok | need_pdf | too_short | not_a_paper | fetch_error
+    code: str = "ok"  # machine: ok | need_pdf | too_short | not_a_paper |
+                      #          rate_limited | fetch_error
     source_url: str = ""  # final resolved URL/path actually extracted
 
 
@@ -141,13 +146,55 @@ def _pdf_source(source: str) -> FetchResult:
     return _assess(_pdf_from_bytes(data), source)
 
 
+# A publisher saying "slow down", not "no". Worth waiting out: bioRxiv and
+# friends sit behind Cloudflare, which starts returning these after a handful
+# of requests for the same paper — exactly what drafting one twice looks like.
+_RATE_LIMITED_STATUSES = frozenset({429, 503})
+
+# How many times to wait and ask again, and the longest we will wait between
+# attempts. A run is minutes of model calls, so tens of seconds here is cheap
+# next to failing and making the human paste the link again — but the cap keeps
+# a rate-limited host from holding a worker thread indefinitely.
+_RATE_LIMIT_RETRIES = 2
+_RATE_LIMIT_MAX_WAIT_S = 12.0
+_RATE_LIMIT_BASE_WAIT_S = 3.0
+
+
 def _get(url: str) -> httpx.Response:
-    """GET a URL following redirects, raising httpx.HTTPError on failure."""
-    resp = httpx.get(
-        url, headers=_HEADERS, follow_redirects=True, timeout=_HTTP_TIMEOUT
-    )
+    """GET a URL following redirects, raising httpx.HTTPError on failure.
+
+    A rate-limit response is waited out rather than raised on the first try:
+    it means the paper is there and we asked too fast, which is a different
+    thing from a link that does not work.
+    """
+    for attempt in range(_RATE_LIMIT_RETRIES + 1):
+        resp = httpx.get(
+            url, headers=_HEADERS, follow_redirects=True, timeout=_HTTP_TIMEOUT
+        )
+        if resp.status_code not in _RATE_LIMITED_STATUSES:
+            break
+        if attempt == _RATE_LIMIT_RETRIES:
+            break
+        delay = _retry_after(resp, attempt)
+        _log.info(
+            "%s rate-limited (HTTP %s); waiting %.1fs before retry %d/%d",
+            url, resp.status_code, delay, attempt + 1, _RATE_LIMIT_RETRIES,
+        )
+        time.sleep(delay)
     resp.raise_for_status()
     return resp
+
+
+def _retry_after(resp: httpx.Response, attempt: int) -> float:
+    """How long to wait, preferring what the server actually asked for.
+
+    A `Retry-After` longer than we are willing to wait is not honoured — we
+    fail with an honest message instead of blocking a run for minutes.
+    """
+    header = resp.headers.get("retry-after", "").strip()
+    if header.isdigit():
+        return min(float(header), _RATE_LIMIT_MAX_WAIT_S)
+    return min(_RATE_LIMIT_BASE_WAIT_S * (2 ** attempt), _RATE_LIMIT_MAX_WAIT_S)
 
 
 # Access-restriction statuses: the source exists, but we are not allowed to
@@ -156,16 +203,32 @@ _ACCESS_BLOCKED_STATUSES = frozenset({401, 402, 403, 451})
 
 
 def _http_failure(exc: httpx.HTTPError, url: str) -> FetchResult:
-    """Classify an HTTP failure as a paywall (need_pdf) vs. unreachable link."""
-    if (
-        isinstance(exc, httpx.HTTPStatusError)
-        and exc.response.status_code in _ACCESS_BLOCKED_STATUSES
-    ):
+    """Classify an HTTP failure. The three cases need three different fixes.
+
+    A paywall wants the PDF, a rate limit wants patience, and anything else is
+    a link that does not work. Collapsing them into "could not fetch" sends the
+    human to check a URL that is perfectly fine.
+    """
+    status = (
+        exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+    )
+    if status in _ACCESS_BLOCKED_STATUSES:
         return FetchResult(
             False,
-            reason=f"access blocked (HTTP {exc.response.status_code}) — likely a "
+            reason=f"access blocked (HTTP {status}) — likely a "
             "publisher paywall; provide the PDF",
             code="need_pdf",
+            source_url=url,
+        )
+    if status in _RATE_LIMITED_STATUSES:
+        return FetchResult(
+            False,
+            reason=(
+                f"the site is rate-limiting us (HTTP {status}) — the link is "
+                "fine, it just wants fewer requests. Wait a few minutes and try "
+                "again, or upload the PDF to skip the fetch entirely"
+            ),
+            code="rate_limited",
             source_url=url,
         )
     return FetchResult(

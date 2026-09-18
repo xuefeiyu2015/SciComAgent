@@ -45,6 +45,7 @@ from api.schema import (  # noqa: E402
     AgentOutput,
     CheckFlag,
     Claim,
+    JobKind,
     JobProgress,
     JobState,
     Language,
@@ -77,6 +78,7 @@ def generate(
     language: Language = Language.zh,
     audience: str = "general_public",
     liveliness: int = 3,
+    length: int = 3,
     background: bool = True,
     wait_seconds: int = _DEFAULT_WAIT_S,
 ) -> AgentOutput:
@@ -99,6 +101,8 @@ def generate(
         language: output language (zh / en).
         audience: intended reader.
         liveliness: tone liveliness, 1–5.
+        length: how long the piece runs, 1–5, relative to the platform's own
+            norm. 3 is that norm; 2 is shorter, 1 much shorter, 4–5 longer.
         background: gather external background materials (web/arXiv/scholarly
             APIs) as framing context for the drafts; failure degrades to a
             background_error notice, never sinks the run.
@@ -113,6 +117,7 @@ def generate(
             language=language,
             audience=audience,
             liveliness=liveliness,
+            length=length,
             background=background,
         )
         session_id = jobs.start(inp)
@@ -125,7 +130,7 @@ def generate(
         )
 
     if jobs.wait(session_id, _clamp_wait(wait_seconds)):
-        return _clarify_need_pdf(job_result(session_id))
+        return _clarify_need_pdf(_collect(session_id, JobKind.run))
 
     return AgentOutput(
         status=Status.running,
@@ -136,6 +141,106 @@ def generate(
                 message=(
                     "Drafting started and is still running. Poll "
                     f"`job_status` with session_id={session_id!r}, then call "
+                    "`job_result` with the same id once state is 'done'."
+                ),
+            )
+        ],
+    )
+
+
+@mcp.tool()
+def redraft(
+    session_id: str,
+    platforms: list[Platform] | None = None,
+    language: Language | None = None,
+    audience: str | None = None,
+    liveliness: int | None = None,
+    length: int | None = None,
+    background: bool | None = None,
+    from_ledger: bool = False,
+    wait_seconds: int = _DEFAULT_WAIT_S,
+) -> AgentOutput:
+    """Write an earlier run's paper AGAIN, with different settings.
+
+    Use this instead of calling `generate` a second time whenever the paper is
+    one this agent has already drafted: "now in English", "also do a
+    Xiaohongshu version", "make it livelier", "write it for clinicians". The
+    source, its claim ledger and its extracted content all come from
+    `session_id`, so nothing is re-fetched or re-extracted unless it has to be.
+
+    Pass ONLY the settings that change; anything omitted stays as it was. You
+    cannot change which paper this is — that is what `generate` is for.
+
+    Changing `language` rebuilds the claim ledger, because the ledger is
+    written in the run's language; everything else reuses it, which is much
+    faster. Either way the drafts are checked for faithfulness exactly as a
+    first run's are, the original run is left untouched, and the result comes
+    back for a human. NEVER auto-publishes.
+
+    Waiting works exactly as in `generate`: a run that finishes within
+    `wait_seconds` comes back complete, otherwise you get `status='running'`
+    and a NEW session_id to poll.
+
+    Args:
+        session_id: the earlier run to redraft, from `generate`. A redraft can
+            itself be redrafted — use the id this call returns.
+        platforms: target platforms. `wechat` is an alias for `xhs`.
+        language: output language (zh / en).
+        audience: intended reader.
+        liveliness: tone liveliness, 1–5.
+        length: how long the piece runs, 1–5, relative to the platform's own
+            norm. THIS is the setting for "make it shorter" (2) or "much
+            shorter" (1) — not liveliness. Omit to keep the run's length.
+        background: whether to gather external background materials.
+        from_ledger: only meaningful after a redraft came back with a
+            `can_restate` notice, which means the paper could not be read
+            again. Setting it true restates the ledger in the new language
+            from the evidence the first run stored, and drafts from that.
+            ASK THE HUMAN BEFORE SETTING IT: the provenance is carried over
+            rather than read fresh, and that is their call, not yours. The
+            result carries a `restated` notice saying so.
+        wait_seconds: how long to wait before handing back a session_id.
+            Clamped to 0–25 seconds.
+    """
+    changes = {
+        "platforms": platforms,
+        "language": language,
+        "audience": audience,
+        "liveliness": liveliness,
+        "length": length,
+        "background": background,
+    }
+    try:
+        new_id = jobs.start_redraft(
+            session_id,
+            {k: v for k, v in changes.items() if v is not None},
+            allow_restate=from_ledger,
+        )
+    except LookupError as exc:
+        return AgentOutput(
+            status=Status.failed,
+            notices=[Notice(code=NoticeCode.unknown_session, message=str(exc))],
+        )
+    except Exception as exc:  # never crash the tool — surface as a failed result
+        return AgentOutput(
+            status=Status.failed,
+            notices=[
+                Notice(code=NoticeCode.fetch_error, message=f"redraft failed: {exc}")
+            ],
+        )
+
+    if jobs.wait(new_id, _clamp_wait(wait_seconds)):
+        return _clarify_need_pdf(_collect(new_id, JobKind.redraft))
+
+    return AgentOutput(
+        status=Status.running,
+        session_id=new_id,
+        notices=[
+            Notice(
+                code=NoticeCode.running,
+                message=(
+                    "Redrafting started and is still running. Poll "
+                    f"`job_status` with session_id={new_id!r}, then call "
                     "`job_result` with the same id once state is 'done'."
                 ),
             )
@@ -158,6 +263,11 @@ def job_status(session_id: str) -> JobProgress:
     Returns which stage the run is on, how many steps are done, which platforms
     already have a draft, and how long it has been going. No drafts or ledger
     come back here — call `job_result` for content.
+
+    When it is over, `state='done'`, `kind` says whether a run or a redraft
+    finished, and `message` says so in words. Pass that on the moment you see
+    it: whoever asked for this is watching and cannot tell a finished run from
+    a slow one.
 
     An id this server cannot account for (expired, or issued before a restart /
     by another instance) reports `state='lost'` with a message saying which,
@@ -186,8 +296,22 @@ def job_result(session_id: str) -> AgentOutput:
     partial NEVER carries a finished status, so it cannot be mistaken for a
     reviewed result.
 
+    A finished result carries a `done` notice saying what it produced. Say it
+    out loud — a complete payload looks no different from an incomplete one to
+    the person waiting on it, and silence has left people sitting there.
+
     Args:
         session_id: the id returned by `generate`.
+    """
+    return _collect(session_id)
+
+
+def _collect(session_id: str, kind: JobKind | None = None) -> AgentOutput:
+    """`job_result`'s body, callable with the kind already known.
+
+    `generate` and `redraft` know which they started; a host polling later does
+    not, so for it the registry is asked. Either way the finished result is
+    announced exactly once.
     """
     try:
         out = jobs.result(session_id)
@@ -196,6 +320,17 @@ def job_result(session_id: str) -> AgentOutput:
         reason = f"result unavailable: {exc}"
     else:
         reason = "No result for that session_id."
+
+    if out is not None:
+        if kind is None:
+            # The registry, not the payload, is what knows whether this was a
+            # first pass or a rewrite — and a host that polled for a rewrite is
+            # owed the word.
+            try:
+                kind = jobs.status(session_id).kind
+            except Exception:  # an unreadable status is no reason to say nothing
+                kind = JobKind.run
+        out = _announce_done(out, kind)
 
     if out is None:
         return AgentOutput(
@@ -227,6 +362,48 @@ def _clarify_need_pdf(out: AgentOutput) -> AgentOutput:
                 f"({notice.message}). Please provide a PDF link and call "
                 "`generate` again with source_type='pdf'."
             )
+    return out
+
+
+def _announce_done(out: AgentOutput, kind: JobKind = JobKind.run) -> AgentOutput:
+    """Make a finished result SAY it is finished.
+
+    A completed AgentOutput is silent: notices exist for what went wrong, so a
+    run that went right comes back with none. The host then has a payload that
+    is complete and no sentence saying so — and a human watching the page sits
+    there waiting for work that ended minutes ago. This is the sentence.
+
+    Only successful, terminal results get it. `running` is not finished,
+    `failed` and `no_claims` carry their own explanation, and an announcement
+    over either of those would be a lie.
+    """
+    if out.status not in (Status.ok, Status.needs_review):
+        return out
+    if any(n.code is NoticeCode.done for n in out.notices):
+        return out
+
+    drafts = len(out.platform_outputs)
+    flags = len(out.overreach_flags)
+    subject = "The redraft is finished" if kind is JobKind.redraft else "Finished"
+    if drafts:
+        made = f"{drafts} draft{'' if drafts == 1 else 's'} ready"
+        where = ", ".join(d.platform.value for d in out.platform_outputs)
+        made = f"{made} ({where})"
+    else:
+        made = "the claim ledger is ready"
+    review = f", {flags} overstatement flag{'' if flags == 1 else 's'} to review"
+
+    out.notices.append(
+        Notice(
+            code=NoticeCode.done,
+            message=(
+                f"{subject} — {made}{review if flags else ''}. Somebody is "
+                "waiting on this: say plainly that it is done and show them "
+                "the result (`render` turns it into readable Markdown with its "
+                "provenance). Nothing has been published, and nothing may be."
+            ),
+        )
+    )
     return out
 
 

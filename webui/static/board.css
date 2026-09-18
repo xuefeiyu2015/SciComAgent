@@ -310,6 +310,50 @@ body.dropping #entry { border-color: var(--ink); border-style: dashed; }
 .manuscript-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
 .manuscript-head .count { margin-left: auto; font: 400 11px var(--mono); color: var(--muted); }
 
+/* A draft whose ledger was restated rather than re-read. Amber, like a hedged
+   claim: not wrong, but resting on something a reviewer should look at. */
+.restated-banner {
+  border-left: 3px solid var(--hedged);
+  background: color-mix(in srgb, var(--hedged) 8%, transparent);
+  padding: 10px 14px;
+  margin-bottom: 22px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* An earlier version of the paper, kept above the one being reviewed. Set
+   back, not hidden: it is there to read and compare against, and the rule
+   underneath it is the seam the new draft follows. Nothing in it is
+   interactive, so it must not invite a click. */
+.archived {
+  opacity: .62;
+  padding-bottom: 26px;
+  margin-bottom: 26px;
+  border-bottom: 2px solid var(--rule);
+}
+.archived:hover { opacity: .82; }
+.archived .mark, .archived .cite, .archived .hedged { cursor: default; }
+.archived-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 7px;
+  margin-bottom: 20px;
+}
+.archived-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.archived-head .count {
+  margin-left: auto;
+  font: 400 11px var(--mono);
+  color: var(--muted);
+}
+
 .field-label {
   font: 500 10px var(--mono);
   letter-spacing: .13em;

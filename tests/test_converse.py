@@ -16,6 +16,7 @@ from api import converse as converse_module
 from api.converse import converse
 from api.schema import (
     AgentInput,
+    BackgroundMaterial,
     Claim,
     ConfidenceLevel,
     Language,
@@ -70,7 +71,7 @@ def _call(message="问题", **kw):
         drafts=[_DRAFT],
         ledger=_LEDGER,
         flags=_FLAGS,
-        inp=_INPUT,
+        inp=kw.pop("inp", _INPUT),
         transcript=kw.pop("transcript", []),
         **kw,
     )
@@ -155,6 +156,209 @@ def test_an_edit_with_no_target_is_unclear(monkeypatch):
     assert revise_calls == []
 
 
+# --- redrafting the whole thing -----------------------------------------------
+
+def test_a_whole_draft_request_becomes_a_rerun_not_a_refusal(monkeypatch):
+    """The bug this kind exists for: "redraft it in English" used to be refused
+    as out of scope, because no sequence of passage edits can produce one."""
+    _stub_, _roles, revise_calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "要整篇重写成英文，我来跑。",
+        "changes": {"language": "en"},
+    })
+
+    reply = _call("把这篇重新写成英文")
+
+    assert reply.kind == "rerun"
+    assert reply.changes == {"language": "en"}
+    assert reply.before == {"language": "zh"}, "the human confirms a real diff"
+    assert revise_calls == [], "a rerun is not an edit; it spends no drafter here"
+
+
+def test_a_rerun_reports_only_what_actually_changes(monkeypatch):
+    """The human confirms dials, so the dials shown must be the real diff."""
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "加一个小红书版本。",
+        "changes": {"platforms": ["news", "xhs"], "language": "zh"},
+    })
+
+    news_only = AgentInput(source="https://example.org/p", source_type=SourceType.url,
+                           platforms=[Platform.news])
+
+    reply = _call("再来个小红书版", inp=news_only)
+
+    assert reply.changes == {"platforms": ["news", "xhs"]}
+    assert "language" not in reply.changes, "it was already zh"
+
+
+def test_shorter_is_a_length_change_not_a_tone_change(monkeypatch):
+    """Before `length` existed the model had nowhere to put "shorter" and
+    reached for liveliness and platforms instead — neither of which is length."""
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "好，我把它写短一点。", "changes": {"length": 2},
+    })
+
+    reply = _call("写短一点")
+
+    assert reply.kind == "rerun"
+    assert reply.changes == {"length": 2}
+    assert reply.before == {"length": 3}
+
+
+def test_a_length_outside_the_scale_is_refused(monkeypatch):
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "更短。", "changes": {"length": 0},
+    })
+
+    assert _call("再短点").kind == "unclear"
+
+
+def test_a_rerun_is_normalised_before_the_human_confirms_it(monkeypatch):
+    """`wechat` is an alias for `xhs`; confirm the dials that will be used."""
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "公众号版本。", "changes": {"platforms": ["wechat"]},
+    })
+
+    assert _call("写个公众号版").changes == {"platforms": ["xhs"]}
+
+
+def test_a_rerun_can_never_change_which_paper_this_is(monkeypatch):
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "换一篇。",
+        "changes": {"source": "https://evil.example/other", "language": "en"},
+    })
+
+    reply = _call("换成另一篇论文重写")
+
+    assert reply.kind == "rerun"
+    assert reply.changes == {"language": "en"}
+    assert "source" not in reply.changes
+
+
+def test_a_rerun_that_would_change_nothing_is_refused(monkeypatch):
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "重写一遍。", "changes": {},
+    })
+
+    assert _call("再写一遍").kind == "unclear"
+
+
+def test_an_impossible_dial_is_refused_not_passed_on(monkeypatch):
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "更活泼。", "changes": {"liveliness": 99},
+    })
+
+    assert _call("活泼一百倍").kind == "unclear"
+
+
+def test_a_rerun_starts_nothing(monkeypatch):
+    """Minutes and money: the reply is a proposal, and a human decides."""
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "rerun", "message": "英文版。", "changes": {"language": "en"},
+    })
+    started = []
+    monkeypatch.setattr(
+        converse_module, "gather_background",
+        lambda *a, **k: started.append(a) or [],
+    )
+
+    _call("英文重写")
+
+    assert started == []
+
+
+# --- looking something up -----------------------------------------------------
+
+def _stub_search(monkeypatch, materials=None, boom=False):
+    seen = {}
+
+    def fake_gather(topic, card, language):
+        if boom:
+            raise RuntimeError("the search stack is down")
+        seen.update(queries=list(topic.queries), card=card, language=language)
+        return list(materials or [])
+
+    monkeypatch.setattr(converse_module, "gather_background", fake_gather)
+    return seen
+
+
+def test_a_question_beyond_the_draft_is_searched_for(monkeypatch):
+    found = [BackgroundMaterial(snippet="漂移扩散模型是一类决策模型",
+                                source_url="https://ref.example/ddm")]
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "lookup", "message": "我去查一下。",
+        "queries": ["drift diffusion model decision making"],
+    })
+    seen = _stub_search(monkeypatch, found)
+
+    reply = _call("什么是漂移扩散模型？", card={"title": "t"})
+
+    assert reply.kind == "lookup"
+    assert reply.materials == found
+    assert seen["queries"] == ["drift diffusion model decision making"]
+    assert seen["card"] == {"title": "t"}
+
+
+def test_what_a_lookup_found_comes_from_the_searcher_not_the_model(monkeypatch):
+    """Same guarantee as `replacement`: the model asks, it does not answer."""
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "lookup", "message": "查到了。", "queries": ["q"],
+        "materials": [{"snippet": "我编的，带着 99% 这个数字",
+                       "source_url": "https://made.up/"}],
+    })
+    _stub_search(monkeypatch, [])
+
+    reply = _call("查一下")
+
+    assert reply.materials == []
+
+
+def test_a_lookup_that_finds_nothing_still_says_what_it_looked_for(monkeypatch):
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "lookup", "message": "我找了找。", "queries": ["obscure term xyz"],
+    })
+    _stub_search(monkeypatch, [])
+
+    reply = _call("查一下这个词")
+
+    assert reply.kind == "lookup"
+    assert reply.queries == ["obscure term xyz"]
+    assert reply.materials == []
+
+
+def test_a_lookup_is_capped(monkeypatch):
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "lookup", "message": "查。", "queries": ["a", "b", "c", "d", "e"],
+    })
+    seen = _stub_search(monkeypatch, [])
+
+    _call("查一下")
+
+    assert len(seen["queries"]) == 3
+
+
+def test_a_lookup_with_nothing_to_search_for_is_unclear(monkeypatch):
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "lookup", "message": "查。", "queries": ["  ", ""],
+    })
+    seen = _stub_search(monkeypatch, [])
+
+    assert _call("查一下").kind == "unclear"
+    assert seen == {}, "an empty query list must not reach the searcher"
+
+
+def test_a_failed_search_is_an_answer_not_a_broken_turn(monkeypatch):
+    _stub_, _roles, _calls = _stub(monkeypatch, {
+        "kind": "lookup", "message": "我去查查。", "queries": ["q"],
+    })
+    _stub_search(monkeypatch, boom=True)
+
+    reply = _call("查一下")
+
+    assert reply.kind == "answer"
+    assert reply.message == "我去查查。"
+    assert reply.materials == []
+
+
 # --- context ------------------------------------------------------------------
 
 def test_the_draft_the_ledger_and_the_flags_reach_the_prompt(monkeypatch):
@@ -166,6 +370,44 @@ def test_the_draft_the_ledger_and_the_flags_reach_the_prompt(monkeypatch):
     assert "在12只小鼠中，肿瘤体积缩小了23%" in payload   # the ledger
     assert "开头很夸张。" in payload                      # the draft
     assert "夸大" in payload                              # the flags
+
+
+def test_the_paper_and_its_background_reach_the_prompt(monkeypatch):
+    """Without these, "tell me more about this" can only be refused."""
+    stub, _roles, _calls = _stub(monkeypatch, {"kind": "answer", "message": "ok"})
+
+    _call(
+        "这篇的背景是什么？",
+        card={"contribution": "一种新的肿瘤靶向方式"},
+        background=[BackgroundMaterial(snippet="同类工作始于2019年",
+                                       source_url="https://bg.example")],
+    )
+
+    payload = stub.seen[1].content
+    assert "一种新的肿瘤靶向方式" in payload
+    assert "同类工作始于2019年" in payload
+
+
+def test_the_three_kinds_of_material_stay_labelled_apart(monkeypatch):
+    """Rule 3 is attribute-never-blur; the model can only follow it if the
+    payload says which block is which."""
+    stub, _roles, _calls = _stub(monkeypatch, {"kind": "answer", "message": "ok"})
+
+    _call("问题", card={"contribution": "x"},
+          background=[BackgroundMaterial(snippet="y", source_url="https://b.example")])
+
+    payload = stub.seen[1].content
+    assert "Claim ledger" in payload
+    assert "PAPER ITSELF" in payload
+    assert "BACKGROUND" in payload
+
+
+def test_a_run_without_a_card_still_converses(monkeypatch):
+    """Runs mirrored before the card sidecar existed must stay talkable-to."""
+    stub, _roles, _calls = _stub(monkeypatch, {"kind": "answer", "message": "ok"})
+
+    assert _call("问题").kind == "answer"
+    assert "PAPER ITSELF" not in stub.seen[1].content
 
 
 def test_earlier_turns_reach_the_prompt_so_follow_ups_make_sense(monkeypatch):

@@ -62,12 +62,18 @@ class NoticeCode(str, Enum):
     need_pdf = "need_pdf"        # source exists but access blocked -> ask for PDF
     too_short = "too_short"      # reachable but too little text -> ask for PDF
     not_a_paper = "not_a_paper"  # not a research paper -> check the link
+    rate_limited = "rate_limited"  # the site is throttling us -> wait, or supply the PDF
+    can_restate = "can_restate"    # source unreachable, but the ledger can be restated -> ask
+    restated = "restated"          # this ledger was restated from stored evidence, not re-read
     fetch_error = "fetch_error"  # network failure / unreachable link
     draft_error = "draft_error"  # pipeline-internal: one platform's draft crashed
     background_error = "background_error"  # background search skipped; drafts unaffected
     glossary_error = "glossary_error"      # term lookup skipped; drafts fall back to raw terms
     style_error = "style_error"  # style distillation skipped; drafts fall back to default voice
     running = "running"          # async job accepted; result not ready yet
+    done = "done"                # the run finished -> say so; a caller polling
+                                 # a silently-complete payload has nothing to
+                                 # tell the human who is watching it
     unknown_session = "unknown_session"  # no job for that session_id (expired/lost)
 
 
@@ -97,6 +103,15 @@ class AgentInput(BaseModel):
     language: Language = Field(default=Language.zh, description="Output language.")
     audience: str = Field(default="general_public", description="Intended reader.")
     liveliness: int = Field(default=3, ge=1, le=5, description="Tone liveliness, 1–5.")
+    length: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description="How long the piece runs, 1–5, RELATIVE to the platform's "
+        "own style card. 3 keeps the card's range; 1 is about half of it, 5 "
+        "about half again. Length, never the facts — a shorter draft drops "
+        "detail, not qualifiers.",
+    )
     background: bool = Field(
         default=True,
         description="Gather external background materials (web/arXiv/scholarly APIs) "
@@ -119,6 +134,43 @@ class AgentInput(BaseModel):
             if resolved not in seen:
                 seen.append(resolved)
         return seen
+
+
+# Dials a redraft may change. `source` and `source_type` are deliberately
+# ABSENT: a redraft writes the same paper again, and nothing proposed by a model
+# in conversation may quietly turn it into a different one.
+REDRAFTABLE_DIALS = frozenset(
+    {"platforms", "language", "audience", "liveliness", "length", "background"}
+)
+
+
+def merge_dials(before: AgentInput, changes: dict) -> AgentInput:
+    """The previous request with `changes` applied — whitelisted and validated.
+
+    One place, so the conversation's proposal and the job that runs it can
+    never disagree about what a dial change means. Keys outside
+    REDRAFTABLE_DIALS are dropped silently rather than refused: a model asking
+    for a different `source` is asking for a different paper, and the answer is
+    to ignore that part, not to fail the whole request.
+
+    Args:
+        before: the request being redrafted.
+        changes: proposed dial values, in AgentInput's own vocabulary.
+
+    Returns:
+        A new AgentInput. Round-tripping through validation is the point —
+        an out-of-range `liveliness` raises here, and the `wechat -> xhs`
+        collapse still fires, exactly as it would for a first run.
+
+    Raises:
+        ValueError: when nothing in `changes` is a dial this may touch, or when
+            a value is not valid for its field (pydantic's ValidationError is
+            a ValueError).
+    """
+    wanted = {k: v for k, v in changes.items() if k in REDRAFTABLE_DIALS}
+    if not wanted:
+        return before.model_copy(deep=True)
+    return AgentInput.model_validate({**before.model_dump(), **wanted})
 
 
 # --- background research path -------------------------------------------------
@@ -477,6 +529,18 @@ class JobState(str, Enum):
     lost = "lost"        # unknown id: expired, or the process/instance restarted
 
 
+class JobKind(str, Enum):
+    """What a background job is doing — a first pass, or a rewrite of one.
+
+    "Finished" answers a different question for each: a run produced a draft,
+    a redraft REPLACED one, and the human waiting on a rewrite is owed the
+    difference.
+    """
+
+    run = "run"          # a first pass over a paper
+    redraft = "redraft"  # an earlier run written again with different dials
+
+
 class JobProgress(BaseModel):
     """Cheap, pollable status for one job — no drafts, no ledger.
 
@@ -486,6 +550,9 @@ class JobProgress(BaseModel):
 
     session_id: str
     state: JobState = JobState.queued
+    kind: JobKind = Field(
+        default=JobKind.run, description="Whether this job is a run or a redraft."
+    )
     stage: str = Field(
         default="",
         description="Current step: fetch | ledger | background | style | "
@@ -520,3 +587,9 @@ class ProgressEvent(BaseModel):
     draft: PlatformOutput | None = None
     flags: list[OverreachFlag] = Field(default_factory=list)
     ledger: list[Claim] = Field(default_factory=list)
+    card: dict = Field(
+        default_factory=dict,
+        description="The source card this run extracted, carried on the ledger "
+        "milestone. A listener may keep it so the SAME paper can be redrafted "
+        "later without fetching and extracting it again.",
+    )

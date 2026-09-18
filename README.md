@@ -11,12 +11,34 @@ red for you to accept or rewrite, tethered to the claim ledger that backs them.
 uv run python -m webui.app     # http://127.0.0.1:8080
 ```
 
-- **The conversation stays open.** Once a draft is on screen the agent docks
-  under it instead of disappearing: ask about the draft, ask for a change in
-  your own words, or paste the next paper. An edit arrives as a proposal you
-  Apply — and its text always comes from the ledger-bounded rewrite path, never
-  from the conversing model, so a chat cannot put an unsourced claim into a
-  draft.
+- **The conversation stays open, and it can start work.** Once a draft is on
+  screen the agent docks under it instead of disappearing. Four things can come
+  back, and all four are proposals you accept:
+  - an **answer** — about the draft, the paper, or the background behind it;
+  - an **edit** — one passage, whose text always comes from the ledger-bounded
+    rewrite path and never from the conversing model, so a chat cannot put an
+    unsourced claim into a draft;
+  - a **redraft** — "do it in English", "also a Xiaohongshu version", "livelier",
+    "write it for clinicians". It arrives as before/after dials to confirm,
+    because a redraft is minutes and money. The paper is not fetched again and
+    the ledger is reused; only a language change rebuilds it, since the ledger
+    is written in the run's language. The original run is untouched and stays in
+    History, and the new drafts are checked exactly as a first run's are;
+  - a **lookup** — it searches, and shows you what it found with its sources,
+    or what it searched for and did not find.
+
+  When a redraft needs to read the paper again and cannot — an old run with no
+  stored card, behind a link that is now rate-limiting or down — it does not
+  just fail. The ledger keeps each claim's `source_evidence` **verbatim, in the
+  paper's own language**, so the agent offers to restate the ledger from that
+  and draft without the source. You decide: the provenance is carried over
+  rather than read fresh. Evidence is never rewritten, no claim may state a
+  number its own evidence does not (checked in code), and anything that fails
+  the check keeps its original wording and is named in a notice. The result
+  carries a `restated` banner so a reviewer knows what they are looking at.
+
+  The conversation survives a redraft. "Now in English" only makes sense after
+  the sentences before it.
 - The rail lists **past runs**, newest first — click one to reopen its draft,
   ledger and flags. It reads the mirrors `api/jobs.py` already writes, so
   history survives a restart with no extra storage. Reopening gives you the
@@ -41,7 +63,8 @@ uv run python -m webui.app     # http://127.0.0.1:8080
 - `/` is the overview: what the agent does, the four hard rules, the pipeline,
   and every MCP tool with its parameters — that tool list is read from
   `agent.yaml` at request time, so it cannot drift from the manifest the
-  platform sees.
+  platform sees. A tool added to the manifest appears there on its own,
+  untranslated until a string is written for it.
 - `/board` is the review board itself.
 
 - `/webui` is a THIN Starlette wrapper over `/api`, like `/mcp_server` — no

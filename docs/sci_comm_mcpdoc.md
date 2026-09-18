@@ -14,14 +14,22 @@ lives in `/api`.
 | Tool | Purpose |
 |------|---------|
 | [`generate`](#tool-generate) | Full pipeline: paper → multi-platform drafts + provenance + flags |
+| [`redraft`](#tool-redraft) | Write an **earlier run's** paper again with different settings |
 | [`extract_ledger`](#tool-extract_ledger) | Cheap provenance preview: paper → claim ledger only (no drafting) |
 | [`check_draft`](#tool-check_draft) | Re-check a (human-edited) draft against its claim ledger |
 | [`render`](#tool-render) | Format a `generate`/`extract_ledger` result as human-readable Markdown |
+| [`job_status`](#tool-job_status) | How far a background run has got. Cheap; safe to poll |
+| [`job_result`](#tool-job_result) | A background run's output — partial while it is still drafting |
 | [`health`](#tool-health) | Report configured model roles, search sources, and key presence |
 
 A typical human-in-the-loop flow: **`extract_ledger`** to inspect/approve the
 facts → draft (via `generate`, or edit by hand) → **`check_draft`** to re-verify
 → **`render`** to view/publish.
+
+**The draft is not the end.** `generate` → `redraft` closes the loop: "now in
+English", "also for Xiaohongshu", "livelier", "for clinicians" are all the same
+paper, and a redraft can itself be redrafted. See
+[Long runs and polling](#long-runs) for the `session_id` that makes both work.
 
 ---
 
@@ -77,8 +85,9 @@ claude mcp get scicomm-agent
 ```
 
 Inside a session, `/mcp` lists connected servers and their tools; they are
-exposed as `mcp__scicomm-agent__generate`, `…__extract_ledger`,
-`…__check_draft`, `…__render`, and `…__health`.
+exposed as `mcp__scicomm-agent__generate`, `…__redraft`, `…__extract_ledger`,
+`…__check_draft`, `…__render`, `…__job_status`, `…__job_result`, and
+`…__health`.
 
 #### Claude Desktop / generic MCP hosts
 
@@ -117,6 +126,12 @@ Set `cwd` to the repo root (or use the venv interpreter as `command`) so the
 Turn a research paper into multi-platform sci-comm drafts + provenance +
 overstatement flags.
 
+A full run is **minutes** of model calls — longer than a tool call can stay
+open — so the work starts in the background. If it finishes within
+`wait_seconds` you get the complete `AgentOutput` inline (the common case for
+fast failures like a paywall); otherwise you get `status="running"` and a
+`session_id` to poll. See [Long runs and polling](#long-runs).
+
 ### Parameters
 
 | Name          | Type                        | Required | Default                    | Notes |
@@ -127,7 +142,9 @@ overstatement flags.
 | `language`    | `zh` \| `en`                | ❌       | `zh`                       | Output language |
 | `audience`    | string                      | ❌       | `general_public`           | Intended reader |
 | `liveliness`  | int 1–5                     | ❌       | `3`                        | Tone liveliness |
+| `length`      | int 1–5                     | ❌       | `3`                        | How long the piece runs, **relative to the platform's own norm**. `3` is that norm; `2` shorter, `1` much shorter; `4`–`5` longer |
 | `background`  | bool                        | ❌       | `true`                     | Gather external background materials (web / arXiv / scholarly APIs) as **framing context** for the drafts. Never a source of facts; failure degrades gracefully |
+| `wait_seconds`| int                         | ❌       | `10`                       | How long to hold the call open before handing back a `session_id` instead. Clamped to 0–25 — see [Long runs and polling](#long-runs) |
 
 ### Return value — `AgentOutput`
 
@@ -166,7 +183,7 @@ overstatement flags.
   "notices": [
     { "code": "ok", "message": "…", "source_url": "…" }
   ],
-  "status": "ok | needs_review | no_claims | failed"
+  "status": "ok | needs_review | no_claims | failed | running"
 }
 ```
 
@@ -180,7 +197,9 @@ overstatement flags.
   **only** (never facts, never ledger entries); surfaced as an audit trail so a
   reviewer can see exactly what the drafter was given. Empty when `background`
   is off or nothing useful was found.
-- **`notices`** — non-draft messages (e.g. why fetch failed).
+- **`notices`** — non-draft messages (e.g. why fetch failed). A finished result
+  carries a `done` notice naming what it produced: a caller that has one is
+  holding the end of the job, and is the only one who can tell the human so.
 - **`status`** — coarse outcome (see below).
 
 ### Status values
@@ -191,6 +210,7 @@ overstatement flags.
 | `needs_review` | Produced, but has flags / needs a human |
 | `no_claims`    | Nothing could be sourced → nothing may be written (rule #1) |
 | `failed`       | Fetch/pipeline failure — see the notice |
+| `running`      | Still drafting — a handle, or a **partial** result. Never a reviewable draft: a partial can never carry a finished status |
 
 ### Notice codes
 
@@ -200,9 +220,17 @@ overstatement flags.
 | `need_pdf`    | Source exists but access is blocked (paywall) → provide a PDF link |
 | `too_short`   | Reachable but too little text (stub / scanned PDF) → provide a PDF link |
 | `not_a_paper` | Content is not a research paper → check the link |
+| `rate_limited` | The publisher is throttling us (HTTP 429/503) — **the link is fine** → wait a few minutes, or supply the PDF |
+| `can_restate` | The source is out of reach, but this run's ledger still holds the paper's own evidence → a `redraft` can restate it in the new language. **Ask the human first** |
+| `restated`   | This ledger was restated from stored evidence rather than re-read from the paper. The evidence is untouched; the wording is not |
 | `fetch_error` | Network failure / unreachable link |
 | `draft_error` | One platform's draft crashed (pipeline-internal) |
 | `background_error` | Background search was skipped; drafts are produced without it (pipeline-internal) |
+| `glossary_error` | Term lookup was skipped; drafts fall back to the raw terms (pipeline-internal) |
+| `style_error` | The learned writing style was skipped; drafts come back in the default voice (pipeline-internal) |
+| `running`    | The run was accepted and is still going → poll `job_status` with the `session_id` |
+| `unknown_session` | No job for that `session_id` (expired, or from another instance / before a restart) → call `generate` again |
+| `done`        | The run **finished** and this is the whole result → say so, and show it. A complete result looks no different from a partial one to whoever is waiting, and silence reads as still-working |
 
 The tool never crashes: on any exception it returns
 `status=failed` with a single `fetch_error` notice. For blocked sources
@@ -237,6 +265,108 @@ to **retry `generate` with `source_type='pdf'`** and a PDF link.
     "platforms": ["xhs"],
     "language": "en",
     "liveliness": 4
+  }
+}
+```
+
+---
+
+<a id="long-runs"></a>
+## Long runs and polling
+
+A full run is minutes of model calls; an MCP `tools/call` cannot stay open that
+long through the platform gateway. So `generate` and `redraft` both start the
+work in the background and return as soon as they can:
+
+- **finished inside `wait_seconds`** → the complete `AgentOutput`, exactly as if
+  the call had been synchronous;
+- **still going** → `status="running"` plus a `session_id`.
+
+With a `session_id`, poll [`job_status`](#tool-job_status) until it reports
+`state="done"`, then call [`job_result`](#tool-job_result) for the content.
+Progress is reported by **polling, not `notifications/progress`** — notifications
+are dropped or invisible across an HTTP proxy hop; a tool result is not.
+
+The `session_id` is a **tool argument**, not the MCP session id, so it survives
+`stateless_http` and a gateway that opens a fresh MCP session per call. It is
+also what [`redraft`](#tool-redraft) takes.
+
+### Telling the human it finished
+
+A completed `AgentOutput` used to be **silent**: notices exist for what went
+wrong, so a run that went right came back with none — and the caller had a
+payload that was complete with no sentence saying so. People sat watching a
+page, waiting for work that had ended minutes earlier.
+
+So a finished result now carries a [`done`](#notice-codes) notice naming what it
+produced, and `job_status` ends on a message in words rather than the bare
+`"done"` it used to share with every other stage line. **Pass it on the moment
+you see it.** A complete result looks no different from a partial one to whoever
+is waiting, and silence reads as still-working.
+
+### Honesty guarantees
+
+In-process state can always be lost, so:
+
+- finished results are **mirrored to disk**, so a restart does not destroy work
+  the caller has not collected yet (best effort — a failed write never sinks a
+  completed job);
+- every id carries a per-process **instance tag**. An id from another instance,
+  or a previous life of this one, comes back as `state="lost"` saying which,
+  rather than as a baffling "unknown session".
+
+---
+
+<a id="tool-redraft"></a>
+## Tool: `redraft`
+
+Write an **earlier run's** paper again with different settings. Use this instead
+of calling `generate` a second time whenever the paper is one this agent has
+already drafted: "now in English", "also do a Xiaohongshu version", "make it
+livelier", "write it for clinicians".
+
+The source, its claim ledger and its extracted content all come from
+`session_id`, so nothing is re-fetched or re-extracted unless it has to be. Pass
+**only the settings that change**; anything omitted stays as it was. You cannot
+change which paper this is — that is what `generate` is for.
+
+Changing `language` rebuilds the claim ledger, because the ledger is written in
+the run's language; every other setting reuses it, which is much faster. Either
+way the drafts are checked for faithfulness exactly as a first run's are, the
+original run is **left untouched** (it stays in history), and the result comes
+back for a human. Never publishes.
+
+### Parameters
+
+| Name           | Type                          | Required | Default | Notes |
+|----------------|-------------------------------|----------|---------|-------|
+| `session_id`   | string                        | ✅       | —       | The earlier run to redraft, from `generate`. A redraft can itself be redrafted — use the id **it** returns |
+| `platforms`    | list of `news`/`wechat`/`xhs` | ❌       | keep    | `wechat` is an alias for `xhs` |
+| `language`     | `zh` \| `en`                  | ❌       | keep    | **Rebuilds the ledger** |
+| `audience`     | string                        | ❌       | keep    | Intended reader |
+| `liveliness`   | int 1–5                       | ❌       | keep    | Tone liveliness |
+| `length`       | int 1–5                       | ❌       | keep    | Length relative to the platform's norm |
+| `background`   | bool                          | ❌       | keep    | Whether to gather external background materials |
+| `from_ledger`  | bool                          | ❌       | `false` | Only meaningful after a redraft came back with a `can_restate` notice. `true` = restate the ledger in the new language from the evidence the first run stored, instead of re-reading a paper that is out of reach. **Ask the human first** — provenance is carried over, not read fresh, and the result is marked `restated` |
+| `wait_seconds` | int                           | ❌       | `10`    | As in `generate`. Clamped to 0–25 |
+
+### Return value — `AgentOutput`
+
+Same contract as `generate`, and the same waiting behaviour: a run that finishes
+in time comes back complete, otherwise `status="running"` and a **new**
+`session_id` to poll. Omitting every dial is an error (`nothing to redraft`);
+so is a `session_id` this server cannot account for (`unknown_session` → call
+`generate` with the source again).
+
+### Example call
+
+```json
+{
+  "name": "redraft",
+  "arguments": {
+    "session_id": "j_a1b2c3_4d5e6f70",
+    "language": "en",
+    "platforms": ["xhs"]
   }
 }
 ```
@@ -358,6 +488,87 @@ A Markdown **string**. Never crashes — on an unexpected error it returns a sho
     "platform": "wechat",
     "include_provenance": false
   }
+}
+```
+
+---
+
+<a id="tool-job_status"></a>
+## Tool: `job_status`
+
+Check how a background `generate` / `redraft` run is doing. Cheap; safe to poll.
+No drafts or ledger come back here — call [`job_result`](#tool-job_result) for
+content.
+
+### Parameters
+
+| Name | Type | Required | Default | Meaning |
+|------|------|----------|---------|---------|
+| `session_id` | string | ✅ | — | The id returned by `generate` or `redraft` |
+
+### Return value — `JobProgress`
+
+```jsonc
+{
+  "session_id": "j_a1b2c3_4d5e6f70",
+  "state": "queued | running | done | failed | lost",
+  "kind": "run | redraft",           // what finished: a first pass, or a rewrite
+  "stage": "fetch | ledger | background | style | draft:<platform> | done",
+  "steps_done": 5,
+  "steps_total": 6,                  // 4 + one per platform
+  "platforms_ready": ["news"],       // drafts job_result can already return
+  "started_at": 1758000000.0,        // unix epoch seconds
+  "updated_at": 1758000183.0,
+  "elapsed_s": 183.0,
+  "message": "the redraft is finished — call `job_result` for it",
+  "result_available": true
+}
+```
+
+- **`state`** — `lost` means the id expired, came from another instance, or
+  predates a restart. Not a job that might still appear: call `generate` again.
+- **`kind`** — "finished" answers a different question for a first pass than for
+  a rewrite. A run produced a draft; a redraft **replaced** one.
+- **`message`** — the status line in words. On `state="done"` it says the draft
+  (or the redraft) is finished. Pass that on the moment you see it: the human is
+  watching and cannot tell a finished run from a slow one.
+
+Never crashes — an unreadable status comes back as `state="lost"` with the
+reason in `message`, rather than raising.
+
+---
+
+<a id="tool-job_result"></a>
+## Tool: `job_result`
+
+Fetch a background run's output — **partial while it is still running**.
+
+While the run is in flight this returns what already exists (the claim ledger,
+plus each platform's draft as it lands) with `status="running"`, so a caller can
+read the first draft while the rest are still being written. A partial **never**
+carries a finished status, so it cannot be mistaken for a reviewed result.
+
+### Parameters
+
+| Name | Type | Required | Default | Meaning |
+|------|------|----------|---------|---------|
+| `session_id` | string | ✅ | — | The id returned by `generate` or `redraft` |
+
+### Return value — `AgentOutput`
+
+The same contract as `generate`.
+
+- **still running** → a partial, `status="running"`, with a `running` notice.
+- **finished** → the whole result, carrying a [`done`](#notice-codes) notice
+  naming what it produced. Say it out loud; see
+  [Telling the human it finished](#long-runs).
+- **nothing behind that id** → `status="failed"` with an `unknown_session`
+  notice saying whether it expired or came from another instance.
+
+```json
+{
+  "name": "job_result",
+  "arguments": { "session_id": "j_a1b2c3_4d5e6f70" }
 }
 ```
 

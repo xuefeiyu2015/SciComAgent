@@ -286,3 +286,20 @@ def test_no_glossary_renders_no_glossary_section():
     out = AgentOutput(platform_outputs=[PlatformOutput(platform=Platform.news, body="b")])
 
     assert "术语与尺度" not in render_markdown(out)
+
+
+def test_the_done_notice_is_not_read_back_to_the_human():
+    """`done` tells the calling agent to speak; the reader is already looking."""
+    out = AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[PlatformOutput(platform=Platform.news, body="body")],
+        notices=[
+            Notice(code=NoticeCode.done, message="Finished — 1 draft ready (news)."),
+            Notice(code=NoticeCode.background_error, message="search skipped"),
+        ],
+    )
+
+    md = render_markdown(out)
+
+    assert "search skipped" in md
+    assert "Finished — 1 draft ready" not in md

@@ -53,7 +53,9 @@ from api.revise import revise_sentence  # noqa: E402
 from api.schema import (  # noqa: E402
     AgentInput,
     AgentOutput,
+    BackgroundMaterial,
     Claim,
+    Glossary,
     Language,
     OverreachFlag,
     Platform,
@@ -211,6 +213,44 @@ async def generate(request: Request) -> JSONResponse:
 
 
 @_endpoint
+async def redraft_route(request: Request) -> JSONResponse:
+    """Write an earlier run's paper again with different dials.
+
+    The board sends the session_id it is reviewing plus the dials the human
+    just confirmed; everything else — the paper, its ledger, its card — comes
+    off that id. The original run is untouched and stays in history.
+    """
+    body = await _json_body(request)
+    session_id = str(body.get("session_id", "")).strip()
+    if not session_id:
+        raise _HttpError(400, "nothing to redraft: 'session_id' is empty")
+    changes = body.get("changes")
+    if not isinstance(changes, dict):
+        raise _HttpError(400, "expected 'changes' to be an object of dials")
+    # Only ever true because a human clicked it on a `can_restate` offer.
+    allow_restate = bool(body.get("allow_restate"))
+
+    # The same refusal as `generate`, for the same reason: a redraft is a full
+    # draft-and-check chain, and a check that grades its own work is worthless.
+    if not settings.drafter_reviewer_distinct():
+        raise _HttpError(
+            409,
+            "The drafter and the reviewer are set to the same model. The "
+            "faithfulness check cannot grade its own work — pick a different "
+            "reviewer in the sidebar before redrafting.",
+        )
+
+    try:
+        return JSONResponse(
+            {"session_id": jobs.start_redraft(session_id, changes, allow_restate)}
+        )
+    except LookupError as err:
+        raise _HttpError(404, str(err)) from err
+    except ValueError as err:
+        raise _HttpError(400, str(err)) from err
+
+
+@_endpoint
 async def job_status(request: Request) -> JSONResponse:
     progress = jobs.status(request.path_params["session_id"])
     return JSONResponse(progress.model_dump(mode="json"))
@@ -315,9 +355,9 @@ async def revise(request: Request) -> JSONResponse:
 async def converse_route(request: Request) -> JSONResponse:
     """One turn of conversation about the draft on screen.
 
-    Answers a question, or proposes ONE edit for the human to apply. Nothing is
-    written here: the reply carries a located passage and a replacement produced
-    by the ledger-bounded rewrite path, and the human presses Apply.
+    Answers a question, proposes ONE edit, proposes a whole redraft, or looks
+    something up. Nothing is written or started here — every kind comes back as
+    a proposal, and the human presses Apply or Confirm.
     """
     body = await _json_body(request)
     message = str(body.get("message", "")).strip()
@@ -329,7 +369,43 @@ async def converse_route(request: Request) -> JSONResponse:
         raise _HttpError(400, "there is no draft to talk about yet")
     ledger = [_model(Claim, item, "claim") for item in body.get("ledger", [])]
     flags = [_model(OverreachFlag, item, "flag") for item in body.get("flags", [])]
-    inp = _model(
+    session_id = str(body.get("session_id", "")).strip()
+    inp = _conversing_input(session_id, body)
+    transcript = [
+        {"role": str(t.get("role", "you")), "text": str(t.get("text", ""))}
+        for t in body.get("transcript", [])
+        if isinstance(t, dict)
+    ]
+    background = [
+        _model(BackgroundMaterial, item, "background material")
+        for item in body.get("background_materials", [])
+    ]
+    glossary = _model(Glossary, body.get("glossary") or {}, "glossary")
+
+    reply = converse(
+        message, drafts, ledger, flags, inp, transcript,
+        card=jobs.read_card(session_id) if session_id else None,
+        background=background,
+        glossary=glossary,
+    )
+    return JSONResponse(reply.model_dump(mode="json"))
+
+
+def _conversing_input(session_id: str, body: dict) -> AgentInput:
+    """The run being talked about, as its own request.
+
+    Recovered from the run's sidecar, because a conversation that does not know
+    WHICH PAPER it is about cannot honestly offer to write it again — and a
+    rerun's dials are a diff against these, so they have to be the real ones.
+
+    The body is the fallback for a run with no sidecar (one mirrored before
+    they existed, or a board reloaded against a restarted server). Then only a
+    passage edit is possible, which is what this route could do all along.
+    """
+    recorded = jobs.read_request(session_id) if session_id else None
+    if recorded is not None:
+        return recorded
+    return _model(
         AgentInput,
         {
             "source": body.get("source") or "about:blank",
@@ -340,14 +416,6 @@ async def converse_route(request: Request) -> JSONResponse:
         },
         "request",
     )
-    transcript = [
-        {"role": str(t.get("role", "you")), "text": str(t.get("text", ""))}
-        for t in body.get("transcript", [])
-        if isinstance(t, dict)
-    ]
-
-    reply = converse(message, drafts, ledger, flags, inp, transcript)
-    return JSONResponse(reply.model_dump(mode="json"))
 
 
 @_endpoint
@@ -567,6 +635,7 @@ routes = [
     Route("/api/agent", agent),
     Route("/api/upload", upload, methods=["POST"]),
     Route("/api/generate", generate, methods=["POST"]),
+    Route("/api/redraft", redraft_route, methods=["POST"]),
     Route("/api/job/{session_id}/status", job_status),
     Route("/api/job/{session_id}/result", job_result),
     Route("/api/revise", revise, methods=["POST"]),

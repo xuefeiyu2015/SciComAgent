@@ -24,6 +24,9 @@ const state = {
   spans: {},          // platform -> {flags, spans, unlocated}
   drafts: {},         // platform -> working copy, carrying human edits
   decisions: {},      // "platform:flagIndex" -> "accepted" | "rewritten"
+  archive: [],        // earlier versions in this conversation, oldest first
+  replacing: null,    // the run a redraft would replace, until it actually lands
+  lastChanges: null,  // the dials of the redraft in flight, to repeat an offer
   settings: null,
   providers: [],
   history: [],
@@ -166,6 +169,7 @@ function resetRun() {
   Object.assign(state, {
     slots: { source: null, source_type: null, platforms: null, language: null, liveliness: null },
     sessionId: null, result: null, spans: {}, drafts: {}, decisions: {}, polling: null, openKey: null,
+    archive: [], replacing: null,
   });
   $('#board').hidden = true;
   $('#apparatus').hidden = true;
@@ -174,6 +178,45 @@ function resetRun() {
   $('#dialog').innerHTML = '';
   state.transcript = [];
   greeting();
+}
+
+/* A version of this paper, as it stood when something replaced it. Everything
+   the board needs to keep painting it: its own ledger, its own flags, its own
+   edits. Snapshotted, never aliased — the live state keeps mutating. */
+function snapshotRun() {
+  return {
+    sessionId: state.sessionId,
+    result: state.result,
+    spans: state.spans,
+    drafts: state.drafts,
+    decisions: state.decisions,
+    slots: { ...state.slots },
+    label: versionLabel(state.slots, state.result),
+  };
+}
+
+/* What to call a version in the stack: its language and its platforms. */
+function versionLabel(slots, result) {
+  const lang = t(slots.language === 'en' ? 'dialog.langEn' : 'dialog.langZh');
+  const platforms = (result.platform_outputs || [])
+    .map((d) => platformLabel(d.platform)).join(' · ');
+  return platforms ? `${lang} · ${platforms}` : lang;
+}
+
+/* A redraft failed. Put back exactly what was on screen before it started —
+   losing a finished draft to a link that has since gone down is the one
+   outcome a redraft must never have. */
+function restoreRun(snapshot) {
+  clearInterval(state.polling);
+  Object.assign(state, {
+    sessionId: snapshot.sessionId,
+    result: snapshot.result,
+    spans: snapshot.spans,
+    drafts: snapshot.drafts,
+    decisions: snapshot.decisions,
+    slots: { ...state.slots, ...snapshot.slots },
+    polling: null,
+  });
 }
 
 /* ── the run ────────────────────────────────────────────────────────── */
@@ -210,7 +253,13 @@ function poll(node) {
 
     if (progress.state === 'done' || progress.state === 'failed') {
       clearInterval(state.polling);
-      loadResult();
+      // The progress turn goes with it: a finished run must not leave a bar on
+      // screen that still looks like work going on — and a result that cannot
+      // be collected says so, for the same reason.
+      loadResult(node).catch((err) => {
+        node.remove();
+        turn(t('board.speaker'), `<span style="color:var(--flag)">${esc(err.message)}</span>`);
+      });
     } else if (progress.state === 'lost') {
       clearInterval(state.polling);
       line.textContent = progress.message;
@@ -218,15 +267,51 @@ function poll(node) {
   }, POLL_MS);
 }
 
-async function loadResult() {
+/* `node` is the progress turn this result was awaited in, when there was one.
+   It is what tells the difference between a run that just landed — which has to
+   ANNOUNCE itself, because somebody is watching this page — and a draft merely
+   reopened from History, which announced itself the day it was written. */
+async function loadResult(node) {
   const body = await api(`/api/job/${state.sessionId}/result`);
-  state.result = body.result;
+  const incoming = body.result;
+  if (node) node.remove();
+
+  // A run that produced nothing must not take the draft already on screen with
+  // it. Committing first and checking afterwards is how an unreachable link
+  // once erased a finished Chinese draft on the way to an English one.
+  if (incoming.status === 'failed' || incoming.status === 'no_claims') {
+    reportTerminal(incoming);
+    if (state.replacing) {
+      const kept = state.replacing;
+      state.replacing = null;
+      restoreRun(kept);
+      const node = turn(t('board.speaker'), esc(t('chat.rerunKept', { label: kept.label })));
+      // The source is gone, but the ledger kept the paper's own words. That is
+      // an offer, not an ending.
+      if ((incoming.notices || []).some((n) => n.code === 'can_restate')) {
+        node.append(restateOffer(state.lastChanges || {}));
+      }
+      renderBoard();
+      renderApparatus();
+    }
+    return;
+  }
+
+  // It landed. Only now does the version it replaces move into the stack,
+  // where it stays visible above this one.
+  const replaced = state.replacing;
+  if (state.replacing) {
+    state.archive.push(state.replacing);
+    state.replacing = null;
+    state.spans = {};
+    state.drafts = {};
+    state.decisions = {};
+  }
+
+  state.result = incoming;
   state.spans = body.spans;
   state.result.platform_outputs.forEach((d) => { state.drafts[d.platform] = structuredClone(d); });
 
-  if (state.result.status === 'failed' || state.result.status === 'no_claims') {
-    return reportTerminal(state.result);
-  }
   // The conversation STAYS. `reviewing` caps the dialog so the manuscript gets
   // the room; it no longer replaces the agent you were just talking to.
   $('#board').hidden = false;
@@ -236,6 +321,18 @@ async function loadResult() {
   renderBoard();
   renderApparatus();
   loadHistory();
+
+  // Say it is done. The board quietly filling with a new draft is not an
+  // answer to "is it still working?" — somebody sat through a finished rewrite
+  // waiting for it to end, because nothing here ever said that it had.
+  if (node) {
+    turn(t('board.speaker'), esc(replaced
+      ? t('chat.rerunLanded', { label: replaced.label })
+      : t('chat.ready')));
+    // The dock is not where their eyes are — the draft is.
+    toast(t(replaced ? 'chat.rerunLandedToast' : 'chat.runLandedToast'));
+  }
+
   // The dock must never be a blank pane: if this draft arrived without a
   // conversation (reopened from History, say), open one.
   if (!$('#dialog').querySelector('.turn')) {
@@ -250,7 +347,9 @@ function reportTerminal(result) {
   const notice = (result.notices || [])[0];
   const message = notice ? notice.message : t('dialog.noClaims');
   turn(t('board.speaker'), `${esc(message)}`);
-  if (notice && (notice.code === 'need_pdf' || notice.code === 'too_short')) {
+  // A rate limit is offered the same escape hatch as a paywall: uploading the
+  // PDF skips the fetch, which is the fastest way past a host saying "later".
+  if (notice && ['need_pdf', 'too_short', 'rate_limited'].includes(notice.code)) {
     turn(t('board.speaker'), esc(t('dialog.needPdf')));
     state.slots.source = null;
     state.slots.source_type = null;
@@ -263,17 +362,19 @@ function flagKey(platform, index) { return `${platform}:${index}`; }
 
 const HEDGED = new Set(['medium', 'low']);
 
-/* Confidence by ledger id, so a citation can show how solid its evidence is. */
-function confidenceById() {
+/* Confidence by ledger id, so a citation can show how solid its evidence is.
+   Takes a ledger rather than reading the live one: an earlier version in the
+   stack has its own, and a rebuilt ledger is not the one it was painted with. */
+function confidenceById(ledger) {
   const map = {};
-  (state.result.claim_ledger || []).forEach((c) => { map[c.id] = c.confidence; });
+  (ledger || []).forEach((c) => { map[c.id] = c.confidence; });
   return map;
 }
 
 function renderBoard() {
   const board = $('#board');
   board.innerHTML = '';
-  const confidence = confidenceById();
+  const confidence = confidenceById(state.result.claim_ledger);
 
   state.result.platform_outputs.forEach((original) => {
     const platform = original.platform;
@@ -342,6 +443,9 @@ function renderBoard() {
     board.append(notices);
   }
   board.append(tallyBar());
+  // Bindings run while only the live version is in the DOM. The earlier
+  // versions go in afterwards, so their marks and citations never pick up a
+  // handler that would look them up in the live run's flags.
   board.querySelectorAll('.mark').forEach(bindMark);
   board.querySelectorAll('.cite').forEach(bindCite);
   board.querySelectorAll('.hedged').forEach((node) => {
@@ -350,6 +454,69 @@ function renderBoard() {
       if (first) showCitation(first);
     });
   });
+
+  if ((state.result.notices || []).some((n) => n.code === 'restated')) {
+    const banner = el('div', 'restated-banner');
+    banner.textContent = t('board.restatedBanner');
+    board.prepend(banner);
+  }
+
+  // Oldest at the top, the one you are reviewing at the bottom. A redraft adds
+  // to this paper; it does not replace what you already read.
+  state.archive.slice().reverse().forEach((v) => board.prepend(archivedVersion(v)));
+}
+
+/* An earlier version of this paper, rendered as it stood. Its flags are still
+   painted — that is what it looked like when you were reading it — but nothing
+   here is clickable: its review is over, and its decisions are its own.
+
+   Reopen it from the History rail to work on it again. */
+function archivedVersion(snapshot) {
+  const section = el('section', 'archived');
+  const head = el('header', 'archived-head');
+  head.innerHTML = `<h2>${esc(snapshot.label)}</h2>`
+    + `<span class="count">${esc(t('board.earlierVersion'))}</span>`;
+  section.append(head);
+
+  const confidence = confidenceById(snapshot.result.claim_ledger);
+  (snapshot.result.platform_outputs || []).forEach((original) => {
+    const platform = original.platform;
+    // The working copy, so a human's accepted rewrites are what is preserved —
+    // not the draft as the model first wrote it.
+    const draft = snapshot.drafts[platform] || original;
+    const pack = snapshot.spans[platform] || { flags: [], spans: [], unlocated: [] };
+
+    const wrap = el('article', 'manuscript');
+    if (draft.title_options.length) {
+      wrap.append(fieldLabel(t('board.titles')));
+      const list = el('ol', 'titles');
+      draft.title_options.forEach((title, i) => {
+        const li = el('li');
+        li.innerHTML = paint(title, pack, platform, `title:${i}`, confidence);
+        list.append(li);
+      });
+      wrap.append(list);
+    }
+    if (draft.cover_copy) {
+      wrap.append(fieldLabel(t('board.cover')));
+      const cover = el('p', 'cover');
+      cover.innerHTML = paint(draft.cover_copy, pack, platform, 'cover_copy', confidence);
+      wrap.append(cover);
+    }
+    wrap.append(fieldLabel(t('board.body')));
+    const prose = el('div', 'prose');
+    prose.innerHTML = paint(draft.body, pack, platform, 'body', confidence);
+    wrap.append(prose);
+
+    if (draft.hashtags.length) {
+      wrap.append(fieldLabel(t('board.tags')));
+      const tags = el('p', 'tags');
+      tags.textContent = draft.hashtags.map((h) => `#${h.replace(/^[#＃]+/, '')}`).join(' ');
+      wrap.append(tags);
+    }
+    section.append(wrap);
+  });
+  return section;
 }
 
 function fieldLabel(text) {
@@ -904,6 +1071,23 @@ function drawTether(anchor, claimId) {
 
 /* ── apparatus ──────────────────────────────────────────────────────── */
 
+/* One background material, as a cited card. Shared by the rail and by a
+   lookup in the conversation: what the researcher found looks the same
+   wherever it surfaces, and it always carries the source it came from.
+
+   The rail is an audit trail — which sources framed this draft — so it shows
+   titles. A lookup is an ANSWER, so it shows the snippet too. */
+function sourceCard(m, { snippet = false } = {}) {
+  const node = el('div', 'source');
+  const title = esc(m.source_title || m.source_url);
+  node.innerHTML = m.source_url
+    ? `<a href="${esc(m.source_url)}" target="_blank" rel="noopener">${title}</a>`
+    : title;
+  if (snippet && m.snippet) node.innerHTML += `<span>${esc(m.snippet)}</span>`;
+  if (m.relation) node.innerHTML += `<span>${esc(m.relation)}</span>`;
+  return node;
+}
+
 function renderApparatus() {
   const rail = $('#apparatus');
   const result = state.result;
@@ -939,15 +1123,7 @@ function renderApparatus() {
     const sources = el('section');
     sources.innerHTML = `<h2>${esc(t('ledger.background'))}</h2>
       <p class="note">${esc(t('ledger.backgroundNote'))}</p>`;
-    result.background_materials.forEach((m) => {
-      const node = el('div', 'source');
-      const title = esc(m.source_title || m.source_url);
-      node.innerHTML = m.source_url
-        ? `<a href="${esc(m.source_url)}" target="_blank" rel="noopener">${title}</a>`
-        : title;
-      if (m.relation) node.innerHTML += `<span>${esc(m.relation)}</span>`;
-      sources.append(node);
-    });
+    result.background_materials.forEach((m) => sources.append(sourceCard(m)));
     rail.append(sources);
   }
 
@@ -1455,7 +1631,9 @@ function openFlagCount() {
   return total - Object.keys(state.decisions).length;
 }
 
-/* Ask the agent about the draft. It answers, or proposes one edit to apply. */
+/* Ask the agent about the draft. It answers, proposes one edit, proposes a
+   whole redraft, or goes and looks something up. Every kind is a PROPOSAL —
+   nothing reaches the draft, and no run starts, without the human saying so. */
 async function askAgent(message) {
   if (!state.result) { turn(t('board.speaker'), esc(t('chat.noDraft'))); return; }
   const pending = turn(t('board.speaker'), `<span class="thinking">${esc(t('chat.thinking'))}</span>`);
@@ -1464,9 +1642,15 @@ async function askAgent(message) {
   try {
     reply = await postJSON('/api/converse', {
       message,
+      // The session id is what lets the agent know WHICH PAPER this is: the
+      // server recovers the run's real request and card from it. Without one
+      // it can still edit a passage, but it cannot offer to write it again.
+      session_id: state.sessionId,
       drafts: Object.values(state.drafts),
       ledger: state.result.claim_ledger,
       flags: Object.values(state.spans).flatMap((pack) => pack.flags),
+      background_materials: state.result.background_materials || [],
+      glossary: state.result.glossary || {},
       language: state.slots.language || draftLanguage(),
       liveliness: state.slots.liveliness || 3,
       transcript: state.transcript.slice(-8),
@@ -1480,6 +1664,116 @@ async function askAgent(message) {
   pending.remove();
   const node = turn(t('board.speaker'), esc(reply.message), 'agent', reply.message);
   if (reply.kind === 'edit' && reply.replacement) node.append(proposal(reply));
+  if (reply.kind === 'rerun') node.append(rerunSlip(reply.changes, reply.before));
+  if (reply.kind === 'lookup') node.append(findings(reply));
+}
+
+/* What a lookup came back with. Empty is a real answer, and the queries are
+   shown either way — seeing WHAT was searched for is how you tell "there is
+   nothing out there" from "it asked the wrong question". */
+function findings(reply) {
+  const box = el('div', 'slip');
+  const queries = (reply.queries || []).join(' · ');
+  box.innerHTML = `<div class="turn-label">${esc(
+    (reply.materials || []).length ? t('chat.lookupFound') : t('chat.lookupEmpty')
+  )}</div><p class="note">${esc(queries)}</p>`;
+  (reply.materials || []).forEach((m) => box.append(sourceCard(m, { snippet: true })));
+  return box;
+}
+
+/* A redraft is minutes of work and real money, so it arrives as dials to
+   confirm — never as a run already going. */
+function rerunSlip(changes, before) {
+  const box = el('div', 'slip');
+  // `before` comes from the run's own recorded request, not from the board's
+  // slots — the slip has to show what will actually change, not what this tab
+  // happens to remember asking for.
+  const rows = Object.entries(changes || {})
+    .map(([dial, value]) => `<dt>${esc(t(`dialog.slip${dialKey(dial)}`))}</dt>`
+      + `<dd>${esc(dialText(dial, (before || {})[dial]))} → <b>${esc(dialText(dial, value))}</b></dd>`)
+    .join('');
+  box.innerHTML = `<div class="turn-label">${esc(t('chat.rerunHead'))}</div><dl>${rows}</dl>`;
+
+  const open = openFlagCount();
+  if (open) {
+    const warn = el('p', 'note');
+    warn.textContent = t('chat.rerunWarn', { count: open });
+    box.append(warn);
+  }
+
+  const go = el('button', 'btn btn-solid');
+  go.textContent = t('chat.rerunGo');
+  go.onclick = () => { box.remove(); startRedraft(changes); };
+  const stay = el('button', 'btn btn-quiet');
+  stay.textContent = t('chat.rerunStay');
+  stay.onclick = () => { box.remove(); toast(t('chat.rerunDropped')); };
+  const actions = el('div', 'chips');
+  actions.append(go, stay);
+  box.append(actions);
+  return box;
+}
+
+/* i18n key suffix for a dial, reusing the labels the opening dialog already
+   has — the human should read the same words in both places. */
+function dialKey(dial) {
+  return {
+    platforms: 'Platform', language: 'Language',
+    liveliness: 'Liveliness', length: 'Length',
+  }[dial] || dial.charAt(0).toUpperCase() + dial.slice(1);
+}
+
+function dialText(dial, value) {
+  if (value === undefined || value === null || value === '') return t('chat.dialUnset');
+  if (dial === 'platforms') return [].concat(value).map(platformLabel).join(' · ');
+  if (dial === 'language') return t(value === 'en' ? 'dialog.langEn' : 'dialog.langZh');
+  if (dial === 'background') return t(value ? 'chat.dialOn' : 'chat.dialOff');
+  // A bare "2" says nothing about which way is shorter.
+  if (dial === 'length') return `${value}/5 · ${t(`chat.length${value}`)}`;
+  return String(value);
+}
+
+/* Write this paper again. Nothing on screen is given up to do it: the version
+   being replaced is SNAPSHOTTED, and it only moves into the stack once the new
+   one has actually landed. If the redraft fails, the snapshot comes straight
+   back. The conversation stays either way — that is the point of a loop. */
+async function startRedraft(changes, allowRestate = false) {
+  const node = turn(t('board.speaker'),
+    `<div class="progress">${esc(t('chat.rerunRunning'))}</div><div class="progress-bar"><i style="width:4%"></i></div>`);
+  let body;
+  try {
+    body = await postJSON('/api/redraft', {
+      session_id: state.sessionId, changes, allow_restate: allowRestate,
+    });
+  } catch (err) {
+    node.remove();
+    turn(t('board.speaker'), `<span style="color:var(--flag)">${esc(err.message)}</span>`);
+    return;
+  }
+  clearInterval(state.polling);
+  state.replacing = snapshotRun();
+  state.lastChanges = changes;   // so a `can_restate` offer can repeat the ask
+  Object.assign(state.slots, changes);
+  state.sessionId = body.session_id;
+  poll(node);
+}
+
+/* The paper is out of reach, but its evidence is not. Offer the trade in
+   plain words and let the human decide — carrying provenance over instead of
+   reading it fresh is exactly the kind of call this agent never makes alone. */
+function restateOffer(changes) {
+  const box = el('div', 'slip');
+  box.innerHTML = `<div class="turn-label">${esc(t('chat.restateHead'))}</div>`
+    + `<p class="note">${esc(t('chat.restateNote'))}</p>`;
+  const go = el('button', 'btn btn-solid');
+  go.textContent = t('chat.restateGo');
+  go.onclick = () => { box.remove(); startRedraft(changes, true); };
+  const stay = el('button', 'btn btn-quiet');
+  stay.textContent = t('chat.restateStay');
+  stay.onclick = () => { box.remove(); toast(t('chat.rerunDropped')); };
+  const actions = el('div', 'chips');
+  actions.append(go, stay);
+  box.append(actions);
+  return box;
 }
 
 /* An edit arrives as a PROPOSAL. Nothing reaches the draft without Apply. */
