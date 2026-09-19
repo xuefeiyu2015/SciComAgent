@@ -16,6 +16,16 @@ an optional `style`, composes them onto the static base prompt in
 `api/prompts/cover.md`, and returns a string. No file writes, no network
 call, no model call — see api.draft for the same base-prompt-plus-sections
 composition pattern (`_base_prompt` / `_system_prompt` / `_voice_layer`).
+
+"Structurally cannot see the ledger" has to hold at the content level too,
+not just at the `Claim`-object level: `card["findings"]`, `card["methods"]`,
+`card["key_numbers"]`, `card["limitations"]` and `card["key_figures"]` are
+exactly the raw material `api.ledger.build_ledger` turns into `Claim`
+objects from this same `card` dict — numbers, p-values, causal wording. This
+module reads ONLY `card["title"]` and `card["contribution"]` (see
+`_card_layer`); the rest are never read, not even summarized or paraphrased,
+because nothing downstream checks this prompt before it reaches an image
+model (#28).
 """
 
 from __future__ import annotations
@@ -53,10 +63,13 @@ def build_cover_prompt(
     Args:
         card: a plain dict shaped like `api.extract.CARD_FIELDS` (`title`,
             `contribution`, `findings`, `methods`, `key_numbers`,
-            `limitations`, `key_figures`). `extract_card` normalizes missing
-            fields to `""`/`[]` rather than omitting keys, and a sparse card
-            (e.g. from a thin fetch) is handled the same way here: missing or
-            empty `title`/`contribution` falls back to a generic subject
+            `limitations`, `key_figures`). Only `title` and `contribution`
+            are ever read — the rest are claim-shaped raw material and are
+            excluded outright, never summarized or paraphrased (see the
+            module docstring). `extract_card` normalizes missing fields to
+            `""`/`[]` rather than omitting keys, and a sparse card (e.g. from
+            a thin fetch, or with `title`/`contribution` explicitly `None`)
+            is handled the same way here: falls back to a generic subject
             line rather than raising.
         language: the audience language (`api.schema.Language`). The image
             contains no text regardless, so this only steers culturally
@@ -85,24 +98,28 @@ def build_cover_prompt(
 def _card_layer(card: dict[str, Any]) -> str:
     """Render the card's subject matter as visual inspiration, never data.
 
-    A sparse card (missing/empty title and contribution — what a thin fetch
-    produces) falls back to a generic line instead of yielding an empty or
-    unusable section.
+    ONLY `title` and `contribution` are read here — by ruling on #27, those
+    two fields are framing, not fact, by the same convention api.draft
+    already applies (`contribution` is drafted as the "angle"). Every other
+    CARD_FIELDS key (`findings`, `methods`, `key_numbers`, `limitations`,
+    `key_figures`) is exactly the raw material api.ledger.build_ledger turns
+    into Claim objects — numbers, p-values, causal wording ("caused",
+    "proving") — and this prompt ships with no faithfulness review pass
+    (#39), so those fields must never be read here, not even summarized,
+    paraphrased or truncated. Do not add them back.
+
+    A sparse card (missing/empty/None title and contribution — what a thin
+    fetch produces) falls back to a generic line instead of yielding an
+    empty or unusable section.
     """
     title = str(card.get("title") or "").strip()
     contribution = str(card.get("contribution") or "").strip()
-    findings = [str(f).strip() for f in (card.get("findings") or []) if str(f).strip()]
 
     lines: list[str] = []
     if title:
         lines.append(f"- Paper title: {title}")
     if contribution:
         lines.append(f"- Core contribution: {contribution}")
-    if findings:
-        lines.append(
-            "- Thematic inspiration (mood/motif only — never render as text, "
-            "data, or a literal figure): " + "; ".join(findings[:2])
-        )
     if not lines:
         lines.append(
             "- No specific subject material is available; render a generic, "
