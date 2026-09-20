@@ -40,6 +40,72 @@ const $ = (sel) => document.querySelector(sel);
 const el = (tag, cls) => { const n = document.createElement(tag); if (cls) n.className = cls; return n; };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+/* ── images (issue #34) ─────────────────────────────────────────────────
+ *
+ * `ImageAsset.path` (api/schema.py) is repo-relative POSIX, e.g.
+ * "outputs/images/<session_id>/cover.png" (api/assets.py:repo_relative, #53).
+ * The `/images` mount (webui/app.py) serves exactly that `outputs/images/`
+ * tree, so the browser URL is derived by stripping the fixed prefix and
+ * prepending the mount's root. This mapping happens ONLY here, at render
+ * time — the payload's own `path` field is never rewritten in place; MCP and
+ * Markdown consumers still read it in its original repo-relative form.
+ */
+const IMAGES_PATH_PREFIX = 'outputs/images/';
+function imageUrl(path) {
+  return typeof path === 'string' && path.startsWith(IMAGES_PATH_PREFIX)
+    ? `/images/${path.slice(IMAGES_PATH_PREFIX.length)}`
+    : '';
+}
+
+/* One image slot: the run's cover (badge=true, model-generated decoration)
+   or a claim's explainer card (badge=false, deterministically rendered —
+   `ImageAsset.generated` is the faithfulness distinction this makes visible,
+   not just present in the JSON). A file missing on disk (404 from `/images`,
+   or no usable path at all) degrades to a placeholder in place via `onerror`
+   — it never throws, so it never aborts the rest of `renderBoard()`. */
+function imageFigure(asset, { badge } = {}) {
+  const wrap = el('figure', 'run-image');
+  const showMissing = () => {
+    const existing = wrap.querySelector('img');
+    if (existing) existing.remove();
+    if (wrap.querySelector('.run-image-missing')) return;
+    const missing = el('div', 'run-image-missing');
+    missing.style.cssText =
+      'border:1px dashed #999;padding:8px 10px;font-size:12px;color:#777;';
+    missing.textContent = t('board.images.missing');
+    wrap.prepend(missing);
+  };
+
+  const url = imageUrl(asset.path);
+  if (url) {
+    const img = el('img', 'run-image-img');
+    img.alt = asset.alt || '';
+    img.loading = 'lazy';
+    img.style.cssText = 'max-width:100%;height:auto;display:block;';
+    img.onerror = showMissing;
+    img.src = url;
+    wrap.append(img);
+  } else {
+    showMissing();
+  }
+
+  if (badge || asset.alt) {
+    const caption = el('figcaption', 'run-image-caption');
+    caption.style.cssText = 'font-size:11px;color:#777;margin-top:4px;';
+    if (badge) {
+      const tag = el('span', 'run-image-badge');
+      tag.style.cssText =
+        'display:inline-block;padding:1px 6px;margin-right:6px;border-radius:3px;'
+        + 'background:#2a5db0;color:#fff;font-weight:600;';
+      tag.textContent = t('board.images.generated');
+      caption.append(tag);
+    }
+    if (asset.alt) caption.append(document.createTextNode(asset.alt));
+    wrap.append(caption);
+  }
+  return wrap;
+}
+
 /* ── transport ──────────────────────────────────────────────────────── */
 
 async function api(path, options = {}) {
@@ -375,6 +441,12 @@ function renderBoard() {
   const board = $('#board');
   board.innerHTML = '';
   const confidence = confidenceById(state.result.claim_ledger);
+  // The run's cover, if this run has one. Looked up once, rendered once per
+  // draft (each draft is its own manuscript and carries its own cover slot).
+  // A run with no images leaves `coverAsset` undefined and the append below is
+  // skipped, so the board is byte-for-byte what it was before #34.
+  const coverAsset = (state.result.images || [])
+    .find((a) => a && a.kind === 'cover');
 
   state.result.platform_outputs.forEach((original) => {
     const platform = original.platform;
@@ -420,6 +492,9 @@ function renderBoard() {
       cover.innerHTML = paint(draft.cover_copy, pack, platform, 'cover_copy', confidence);
       wrap.append(cover);
     }
+    // Above the body, under the headline and cover copy it belongs to. Badged:
+    // the cover is the one MODEL-GENERATED asset in the run.
+    if (coverAsset) wrap.append(imageFigure(coverAsset, { badge: true }));
     wrap.append(fieldLabel(t('board.body')));
     const prose = el('div', 'prose');
     prose.dataset.field = 'body';
@@ -1104,6 +1179,11 @@ function renderApparatus() {
     });
     ledger.append(banner);
   }
+  // Explainer cards, by the claim each one illustrates. Deterministically
+  // rendered from the Claim itself (`generated === false`), so they carry NO
+  // "generated" badge — that is the faithfulness distinction, made visible.
+  const explainers = (result.images || [])
+    .filter((a) => a && a.kind === 'explainer');
   result.claim_ledger.forEach((claim) => {
     const node = el('div', 'claim');
     node.dataset.id = claim.id;
@@ -1113,6 +1193,11 @@ function renderApparatus() {
     node.innerHTML = `<span class="claim-id">${esc(claim.id)}</span>${esc(claim.claim)}
       <span class="claim-meta">${caution}${esc(claim.confidence)}${claim.qualifier ? ` · ${esc(claim.qualifier)}` : ''}</span>
       <details><summary>${esc(t('ledger.evidence'))}</summary><blockquote>${esc(claim.source_evidence)}</blockquote></details>`;
+    // Inside the claim's own card, under its evidence — the reviewer sees the
+    // picture and the claim it was rendered from as one unit, rather than in a
+    // separate gallery that would have to be matched up by eye.
+    const explainer = explainers.find((a) => a.claim_id === claim.id);
+    if (explainer) node.append(imageFigure(explainer, { badge: false }));
     node.tabIndex = 0;
     bindClaim(node);
     ledger.append(node);

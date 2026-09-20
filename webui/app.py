@@ -68,6 +68,15 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _I18N_PATH = Path(__file__).resolve().parent / "i18n.json"
 _UPLOAD_DIR = _REPO_ROOT / "outputs" / "uploads"
 _REVIEW_DIR = _REPO_ROOT / "outputs" / "reviews"
+_IMAGES_DIR = _REPO_ROOT / "outputs" / "images"
+
+# `StaticFiles(directory=...)` (below, the `/images` mount) raises at
+# CONSTRUCTION if the directory doesn't exist yet, and `routes = [...]` builds
+# that mount at IMPORT time — so this has to run here, at module scope, not
+# inside a request handler, or a fresh clone with no `outputs/` tree at all
+# would fail to start the server (api/assets.py owns the same directory for
+# writes; this is only the read-side mount for the browser).
+_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 # A paper PDF is a few MB; well past this it is not what the board is for.
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -650,6 +659,13 @@ routes = [
     Route("/api/settings/sources", write_sources, methods=["POST"]),
     Route("/api/settings/verify", verify, methods=["POST"]),
     Mount("/static", _RevalidatingStatic(directory=str(_STATIC_DIR)), name="static"),
+    # Serves outputs/images/<session_id>/<file>.png so the board can show what
+    # api/assets.py wrote. Containment (no path outside outputs/images/, no
+    # `..`/absolute/symlink escape) comes entirely from StaticFiles itself —
+    # the same mechanism that already protects /static — plus the loopback
+    # binding below (no remote caller exists to begin with). No hand-rolled
+    # path joining happens here or anywhere else in this module.
+    Mount("/images", _RevalidatingStatic(directory=str(_IMAGES_DIR)), name="images"),
 ]
 
 app = Starlette(routes=routes)

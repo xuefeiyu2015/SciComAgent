@@ -9,6 +9,7 @@ pipeline failure into a 500.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -17,6 +18,8 @@ from api.schema import (
     AgentOutput,
     Claim,
     ConfidenceLevel,
+    ImageAsset,
+    ImageKind,
     JobProgress,
     JobState,
     OverreachFlag,
@@ -554,3 +557,184 @@ def test_a_provider_failure_while_conversing_is_a_message_not_a_crash(client, mo
 
     assert resp.status_code == 502
     assert "provider is on fire" in resp.json()["error"]
+
+
+# --- images (#34) -------------------------------------------------------------
+
+_COVER = ImageAsset(
+    kind=ImageKind.cover,
+    path="outputs/images/sess1/cover.png",
+    alt="封面配图",
+    generated=True,
+    prompt="一张关于神经元的插画",
+    model="illustrator",
+)
+_EXPLAINER = ImageAsset(
+    kind=ImageKind.explainer,
+    claim_id="c1",
+    path="outputs/images/sess1/c1.png",
+    alt="c1 的说明卡",
+    generated=False,
+)
+
+_BOARD_JS = Path(webui.__file__).resolve().parent / "static" / "board.js"
+
+
+@pytest.fixture
+def images_client(tmp_path, monkeypatch):
+    """The live `/images` mount, pointed at a throwaway `outputs/images/` tree.
+
+    The mount is built at IMPORT time, so rebinding `webui._IMAGES_DIR` would
+    not reach it. Redirecting the already-constructed `StaticFiles` is what
+    keeps these tests on the real route and the real class — the containment
+    under test is Starlette's, and a hand-built stand-in would not test it.
+    """
+    mount = next(r for r in webui.routes if getattr(r, "name", "") == "images")
+    root = tmp_path / "outputs" / "images"
+    root.mkdir(parents=True)
+    monkeypatch.setattr(mount.app, "directory", str(root))
+    monkeypatch.setattr(mount.app, "all_directories", [str(root)])
+    with TestClient(webui.app) as test_client:
+        yield test_client, root
+
+
+def test_the_images_mount_serves_a_file_under_outputs_images(images_client):
+    client, root = images_client
+    (root / "sess1").mkdir()
+    (root / "sess1" / "cover.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    resp = client.get("/images/sess1/cover.png")
+
+    assert resp.status_code == 200
+    assert resp.content == b"\x89PNG\r\n\x1a\nfake"
+    # The mount reuses _RevalidatingStatic rather than a second static class.
+    assert resp.headers["cache-control"] == "no-cache"
+
+
+def test_the_images_mount_refuses_a_path_escape(images_client, tmp_path):
+    """Containment is Starlette's, not a hand-rolled filter in /webui.
+
+    `StaticFiles` resolves every request path against its own `directory` and
+    refuses anything that lands outside it — the same mechanism that already
+    protects `/static`. On top of that the server binds to 127.0.0.1 only
+    (`_HOST`), so there is no remote caller to attempt this in the first place.
+    """
+    client, root = images_client
+    secret = tmp_path / "outputs" / "secret.txt"
+    secret.write_text("token", encoding="utf-8")
+    assert secret.exists()          # the escape target really is there to find
+
+    # Percent-encoded on purpose: a plain "/images/../secret.txt" is collapsed
+    # to "/secret.txt" by the client before it is ever sent, so it would never
+    # reach the mount. These arrive at the mount with the escape intact, which
+    # is what a hand-crafted request would do.
+    for attempt in (
+        "/images/%2e%2e/secret.txt",
+        "/images/..%2Fsecret.txt",
+        "/images/sess1/%2e%2e/%2e%2e/secret.txt",
+        f"/images/{secret}",                     # an absolute path as the segment
+    ):
+        resp = client.get(attempt)
+        assert resp.request.url.raw_path.startswith(b"/images/"), attempt
+        assert resp.status_code != 200, attempt
+        assert b"token" not in resp.content, attempt
+
+
+def test_the_images_directory_exists_at_import(tmp_path):
+    """`StaticFiles` raises at CONSTRUCTION, and the mount is built at import.
+
+    So the `mkdir` has to be at module scope too — a fresh clone with no
+    `outputs/` tree at all must still start. This pins both halves: that the
+    construction really does fail without the directory, and that importing
+    `webui.app` has already created the real one.
+    """
+    missing = tmp_path / "outputs" / "images"
+    with pytest.raises(RuntimeError):
+        webui._RevalidatingStatic(directory=str(missing))
+
+    missing.mkdir(parents=True, exist_ok=True)      # what webui/app.py does at import
+    webui._RevalidatingStatic(directory=str(missing))    # now it constructs
+
+    assert webui._IMAGES_DIR == webui._REPO_ROOT / "outputs" / "images"
+    assert webui._IMAGES_DIR.is_dir()
+
+
+def test_with_spans_leaves_a_no_images_result_exactly_as_api_produced_it():
+    """A result with no images must reach the board unchanged (regression guard).
+
+    Mirrors the byte-identical empty-images guards #32 added for
+    `render_markdown`/`render_text`. Pinned against `model_dump` itself rather
+    than a frozen literal, so it keeps holding as the schema grows.
+    """
+    assert _RESULT.images == []
+    expected = _RESULT.model_dump(mode="json")
+    expected.pop("style_profile", None)
+
+    payload = webui._with_spans(_RESULT)["result"]
+
+    assert payload == expected
+    assert payload["images"] == []
+
+
+def test_with_spans_never_rewrites_an_images_path():
+    """`ImageAsset.path` stays repo-relative, exactly as /api produced it (#53).
+
+    The browser URL is derived in `board.js` at render time; MCP and Markdown
+    consumers read the same payload and depend on the repo-relative form.
+    """
+    out = _RESULT.model_copy(update={"images": [_COVER, _EXPLAINER]})
+
+    payload = webui._with_spans(out)["result"]
+
+    assert payload["images"] == [
+        _COVER.model_dump(mode="json"),
+        _EXPLAINER.model_dump(mode="json"),
+    ]
+    assert payload["images"][0]["path"] == "outputs/images/sess1/cover.png"
+    assert payload["images"][1]["path"] == "outputs/images/sess1/c1.png"
+    assert out.images[0].path == "outputs/images/sess1/cover.png"   # not mutated in place
+
+
+def test_a_missing_image_file_is_a_404_not_a_server_error(images_client):
+    """The slot 404s; `board.js` swaps in its placeholder via `img.onerror`.
+
+    What matters for the rest of the board is that the miss stays local: a 404
+    here, a placeholder there, and `renderBoard()` carries on.
+    """
+    client, _ = images_client
+
+    resp = client.get("/images/sess1/gone.png")
+
+    assert resp.status_code == 404
+
+
+def test_the_board_guards_both_image_call_sites():
+    """A result with no images must render exactly as it did before #34.
+
+    There is no JS test harness in this suite, so the guard is pinned at the
+    source: both call sites sit behind a truthiness check, so an absent cover
+    or explainer appends nothing at all.
+    """
+    source = _BOARD_JS.read_text(encoding="utf-8")
+
+    assert "if (coverAsset) wrap.append(imageFigure(coverAsset, { badge: true }));" in source
+    assert "if (explainer) node.append(imageFigure(explainer, { badge: false }));" in source
+
+
+def test_every_new_image_string_is_in_both_locales():
+    """No user-facing image string is hardcoded in board.js (#34 criterion)."""
+    strings = json.loads(
+        (Path(webui.__file__).resolve().parent / "i18n.json").read_text(encoding="utf-8")
+    )
+    for locale in ("zh", "en"):
+        assert strings[locale]["board.images.generated"]
+        assert strings[locale]["board.images.missing"]
+
+    source = _BOARD_JS.read_text(encoding="utf-8")
+    for literal in (
+        strings["zh"]["board.images.generated"], strings["en"]["board.images.generated"],
+        strings["zh"]["board.images.missing"], strings["en"]["board.images.missing"],
+    ):
+        assert literal not in source
+    assert "t('board.images.generated')" in source
+    assert "t('board.images.missing')" in source
