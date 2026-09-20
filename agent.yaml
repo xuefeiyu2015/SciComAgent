@@ -31,6 +31,8 @@ tools:
       liveliness: { required: false, default: 3, min: 1, max: 5, description: "Tone AND shape. 1 = sober and plain; 4-5 additionally ask for a narrative rather than a list of findings. Never the facts" }
       length:     { required: false, default: 3, min: 1, max: 5, description: "How long the piece runs, RELATIVE to the platform's own style card. 3 = the card's range; 2 = shorter, 1 = much shorter; 4-5 = longer. Length is shape, never the facts — a shorter draft drops findings, never qualifiers" }
       background: { required: false, default: true, description: "Run the researcher: external background materials for story framing, AND a glossary of what the paper's terms and quantities mean. Framing and wording only, never facts" }
+      # `off` is quoted: bare off is a YAML 1.1 boolean and would load as `false`.
+      images:     { required: false, default: "off", allowed: ["off", cover, all], description: "How much illustration to produce after the drafts are checked. `off` (default) = none; `cover` = one cover image; `all` = the cover plus one explainer per claim. The cover is model-generated decoration, an explainer is a deterministically rendered claim card — images never add facts, and a failure here never blocks the drafts (see the `image_error` notice)" }
       wait_seconds: { required: false, default: 10, min: 0, max: 25, description: "How long to hold the call open for a fast run before returning a session_id instead. Clamped server-side" }
     # Return contract (see AgentOutput in api/schema.py). Never auto-published.
     output:
@@ -40,6 +42,7 @@ tools:
       background_materials: "External context shown to the drafter (framing only, never facts; audit trail)"
       glossary:             "Plain-language meanings for the paper's jargon, plus scale anchors for its quantities (wording only, never facts; audit trail — an unsourced entry is marked)"
       jargon_flags:         "Terms a reader cannot parse that are still in a draft. Readability, not faithfulness — distinct from overreach_flags"
+      images:               "Image assets for this run, when `images` asked for them (absent or empty otherwise). Each is {kind: cover|explainer, claim_id, path, alt, generated}. A COVER is model-generated decoration — `generated: true`, with the prompt and model role that made it. An EXPLAINER is a deterministically rendered claim card: its content came from a `Claim` in the ledger, not from a model, so `generated: false` and there is no prompt. `generated: false` is therefore the marker that an image states nothing the ledger does not"
       style_profile:        "Learned voice distilled from api/styles/examples/ and applied to the drafts (voice & structure only, never facts; audit trail). Absent when the folder is empty"
       session_id:           "Async job handle; present when status=running, and echoed on the partial and final results"
       status:               { allowed: [ok, needs_review, failed, running], description: "Coarse outcome; running = still drafting, poll job_status" }
@@ -58,6 +61,7 @@ tools:
           draft_error:      "one platform's draft failed (the other platforms are unaffected)"
           background_error: "background search skipped (drafts unaffected, produced without background)"
           style_error:      "learned writing style skipped (drafts unaffected, produced in the default voice)"
+          image_error:      "one or more image assets were skipped (drafts unaffected; the run is complete, just without those images). The message says which image and why — an unconfigured image model, a missing font, a refused generation"
           running:          "the run was accepted and is still going -> poll job_status with the session_id"
           done:             "the run FINISHED and this is the whole result -> say so to the human and show it to them. A complete result looks no different from a partial one to whoever is waiting, and silence reads as still-working"
           unknown_session:  "no job for that session_id (expired, or from another instance / before a restart) -> call generate again"
@@ -72,6 +76,8 @@ tools:
       liveliness: { required: false, min: 1, max: 5, description: "Omit to keep the run's tone" }
       length:     { required: false, min: 1, max: 5, description: "Omit to keep the run's length. THIS is the setting for \"make it shorter\" (2) or \"much shorter\" (1) — not liveliness" }
       background: { required: false, description: "Omit to keep the run's setting. Turning it ON researches now, from the stored paper — no re-fetch" }
+      # `off` is quoted: bare off is a YAML 1.1 boolean and would load as `false`.
+      images:     { required: false, allowed: ["off", cover, all], description: "How much illustration the REDRAFT produces. Omit to keep the run's setting, like the other dials — but the setting is what carries over, never the IMAGES: a redraft always generates its own under its new session_id, so omitting this on a run drafted with images=off leaves the redraft without any. Changing only this still takes the fast ledger-reuse path. To illustrate the ORIGINAL run instead of writing it again, use `illustrate`" }
       from_ledger: { required: false, default: false, description: "Only after a redraft returned a `can_restate` notice. true = restate the ledger in the new language from the evidence the first run stored, instead of re-reading a paper that is out of reach. ASK THE HUMAN FIRST — provenance is carried over, not read fresh; the result is marked `restated`" }
       wait_seconds: { required: false, default: 10, min: 0, max: 25, description: "As in `generate`: how long to hold the call open before returning the NEW session_id instead" }
     # Same AgentOutput contract as `generate`, under a NEW session_id. The
@@ -146,6 +152,17 @@ tools:
       session_id: { required: true, description: "The run to illustrate, from `generate` or `redraft`. Must already be finished — a still-running job is refused" }
       images:     { required: true, allowed: [off, cover, all], description: "How much to generate: `cover` for just the cover image, `all` for the cover plus one explainer image per claim. `off` is accepted but generates nothing" }
       force:      { required: false, default: false, description: "Regenerate images even if this session already has some. false (default) leaves existing images alone" }
+    # The SAME AgentOutput contract as `generate`, under the SAME session_id:
+    # the run's stored result is rewritten in place, so a later job_result /
+    # render on that id shows the new images too. Drafts, ledger and flags are
+    # returned untouched — this tool never rewrites a word of the piece.
+    output:
+      images:           "The assets just produced, in the shape `generate` returns them: a model-generated cover (`generated: true`) and, for images=all, one deterministically rendered claim card per claim (`generated: false` — its content came from a `Claim`, not a model)"
+      platform_outputs: "The run's existing drafts, unchanged — illustrating never redrafts"
+      claim_ledger:     "The run's existing provenance, unchanged"
+      session_id:       "The id you passed in; there is no new run to poll"
+      status:           { allowed: [ok, needs_review, failed], description: "failed = unknown/expired session, or the job is still running (the notice says which); the run's stored result is left alone in that case" }
+      notices:          "image_error = an asset was skipped and why (an unconfigured image model, a missing font); the drafts and the rest of the result are unaffected"
 
   - name: ping
     description: Dummy connectivity check — returns one sentence; no models, no network, no pipeline
@@ -190,6 +207,14 @@ config_schema:
   # tavily may be added when TAVILY_API_KEY is provided via env (byo_key).
   search:
     sources: [arxiv, semantic_scholar, pubmed, crossref, wikipedia, ddgs]
+  # Image assets. HOW MUCH to generate is the per-call `images` dial on
+  # generate / redraft / illustrate, not a config key — these three only say
+  # which model draws a cover, how many explainers a run may render, and which
+  # font the claim cards use. GOOGLE_API_KEY is env-only (byo_key), never here.
+  images:
+    model:     env  # -> IMAGE_MODEL      (required for cover generation)
+    cap:       env  # -> IMAGE_CAP        (max images per run; default 3)
+    font_path: env  # -> IMAGE_FONT_PATH  (claim-card font; falls back to system fonts)
 
 # Health/readiness probe
 health: /health

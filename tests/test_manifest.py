@@ -71,3 +71,77 @@ def test_the_manifest_is_serialisable_for_the_page():
 
     assert payload["name"] == "scicomm-agent"
     assert isinstance(payload["tools"], list)
+
+
+# Parameters that exist on one side only for a legitimate reason — e.g. an
+# argument the MCP wrapper adds for transport that the manifest has no business
+# describing. Each entry must carry a one-line reason. Empty today: every
+# registered tool's signature is exactly what the manifest declares.
+PARAMETER_EXEMPTIONS: dict[str, dict[str, str]] = {}
+
+
+def _registered_tool_schemas() -> dict[str, dict]:
+    """The server's own view of every tool: {tool name: JSON input schema}.
+
+    Derived from the running server (the same `server.mcp.list_tools()` the
+    tool-name test calls), never from a hand-written list — a list written here
+    would be the test seeding its own expected value, and would go stale in
+    exactly the way it is supposed to catch.
+    """
+    import asyncio
+
+    from mcp_server import server
+
+    return {t.name: (t.inputSchema or {}) for t in asyncio.run(server.mcp.list_tools())}
+
+
+def test_every_tool_declares_the_servers_parameters():
+    """Parameter-level fidelity, for EVERY tool, not one.
+
+    The name-set check above goes green while a tool's parameters drift: the
+    manifest is what a calling agent reads to discover a dial, so a parameter
+    the server accepts and the manifest omits is a feature nobody can find.
+    Generalised over all tools on purpose — a check pinned to a single tool
+    would not have caught `generate`/`redraft` silently missing `images`.
+    """
+    schemas = _registered_tool_schemas()
+    problems: list[str] = []
+
+    for tool in load_manifest().tools:
+        schema = schemas.get(tool.name)
+        if schema is None:
+            continue  # covered by the tool-name test above
+
+        exempt = PARAMETER_EXEMPTIONS.get(tool.name, {})
+        served = {n for n in (schema.get("properties") or {}) if n not in exempt}
+        declared = {p.name for p in tool.parameters if p.name not in exempt}
+
+        for name in sorted(served - declared):
+            problems.append(
+                f"{tool.name}: parameter '{name}' is accepted by the server but "
+                f"is not declared in agent.yaml — a caller reading the manifest "
+                f"cannot discover it"
+            )
+        for name in sorted(declared - served):
+            problems.append(
+                f"{tool.name}: parameter '{name}' is declared in agent.yaml but "
+                f"the server does not accept it"
+            )
+
+        server_required = set(schema.get("required") or [])
+        for param in tool.parameters:
+            if param.name in exempt or param.name not in served:
+                continue
+            is_required = param.name in server_required
+            if param.required and not is_required:
+                problems.append(
+                    f"{tool.name}: parameter '{param.name}' is required in "
+                    f"agent.yaml but has a default in the server signature"
+                )
+            elif not param.required and is_required:
+                problems.append(
+                    f"{tool.name}: parameter '{param.name}' is optional in "
+                    f"agent.yaml but the server has no default for it"
+                )
+
+    assert not problems, "manifest/server parameter drift:\n  " + "\n  ".join(problems)
