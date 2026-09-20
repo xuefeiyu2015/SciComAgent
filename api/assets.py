@@ -19,7 +19,7 @@ import json
 import logging
 from pathlib import Path
 
-from api.jobs import _is_safe_session_id
+from api.paths import is_safe_session_id
 from api.schema import ImageAsset, ImageKind
 
 _log = logging.getLogger(__name__)
@@ -31,14 +31,15 @@ _MANIFEST_NAME = "images.json"
 
 
 def _require_safe(value: str, *, what: str) -> None:
-    """Reject anything `api.jobs._is_safe_session_id` would reject.
+    """Reject anything `api.paths.is_safe_session_id` would reject.
 
     Both `session_id` and `claim_id` are attacker-shaped inputs in principle —
     a claim id ultimately becomes a filename too — so both halves of the path
-    are checked with the SAME rule `api.jobs` already uses for its mirrors,
-    rather than a second, possibly-looser one invented here.
+    are checked with the SAME rule `api.jobs` uses for its mirrors, from the
+    one shared module both call rather than a second, possibly-looser copy
+    invented here.
     """
-    if not _is_safe_session_id(value):
+    if not is_safe_session_id(value):
         raise ValueError(f"unsafe {what}: {value!r}")
 
 

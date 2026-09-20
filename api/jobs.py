@@ -42,6 +42,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from api.paths import is_safe_session_id
 from api.pipeline import EventSink, redraft, run
 from api.schema import (
     AgentInput,
@@ -460,7 +461,7 @@ def read_request(session_id: str) -> AgentInput | None:
     Runs mirrored before this existed have no sidecar, so callers must treat a
     missing request as normal rather than as an error.
     """
-    if not _is_safe_session_id(session_id):
+    if not is_safe_session_id(session_id):
         return None
     path = _REQUESTS_DIR / f"{session_id}.json"
     try:
@@ -474,7 +475,7 @@ def read_request(session_id: str) -> AgentInput | None:
 
 def _write_card(session_id: str, card: dict) -> None:
     """Record what the paper said. Best effort — never sink a run over it."""
-    if not _is_safe_session_id(session_id):
+    if not is_safe_session_id(session_id):
         return
     try:
         _CARDS_DIR.mkdir(parents=True, exist_ok=True)
@@ -492,7 +493,7 @@ def read_card(session_id: str) -> dict | None:
     whose sidecar could not be written, has no card. That is normal — a caller
     without one redrafts the slow way, from the source.
     """
-    if not _is_safe_session_id(session_id):
+    if not is_safe_session_id(session_id):
         return None
     path = _CARDS_DIR / f"{session_id}.json"
     try:
@@ -534,7 +535,7 @@ def _mirror_safely(session_id: str, output: AgentOutput) -> None:
 
 def _read_mirror(session_id: str) -> AgentOutput | None:
     """Load a finished result written by an earlier life of this process."""
-    if not _is_safe_session_id(session_id):
+    if not is_safe_session_id(session_id):
         return None
     path = _mirror_path(session_id)
     try:
@@ -544,13 +545,6 @@ def _read_mirror(session_id: str) -> AgentOutput | None:
     except Exception as err:  # corrupt or unreadable mirror is the same as absent
         _log.debug("job %s: unreadable mirror (%s)", session_id, err)
         return None
-
-
-def _is_safe_session_id(session_id: str) -> bool:
-    """Guard the mirror path: ids are ours, never caller-shaped path fragments."""
-    return bool(session_id) and all(
-        part.isalnum() for part in session_id.split("_")
-    )
 
 
 __all__ = [
