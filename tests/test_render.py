@@ -6,13 +6,17 @@ clean-bill flag line, hashtag normalization, and terminal-status handling.
 
 from __future__ import annotations
 
-from api.render import render_markdown
+from api.render import render_markdown, render_text
 from api.schema import (
     AgentOutput,
     BackgroundMaterial,
     Claim,
     ConfidenceLevel,
+    FlagSpan,
     Glossary,
+    HedgedSpan,
+    ImageAsset,
+    ImageKind,
     JargonFlag,
     Notice,
     NoticeCode,
@@ -303,3 +307,357 @@ def test_the_done_notice_is_not_read_back_to_the_human():
 
     assert "search skipped" in md
     assert "Finished — 1 draft ready" not in md
+
+
+# --- render-time image injection (issue #32) ----------------------------------
+#
+# `out.images` (ImageAsset list) is not set by any fixture above, so every
+# test above this line exercises the empty-images path untouched. The tests
+# below are additive: they cover injection, non-mutation, and the byte-
+# identical regression guard for the empty-images case.
+
+# Literal baseline captured from `render_markdown`/`render_text` on `_output()`
+# BEFORE render-time image injection was implemented (api/render.py on
+# docs/image-generation-backlog, commit c410791). Used as a byte-for-byte
+# before/after diff, not a fresh assertion, for the images == [] regression
+# guard.
+_BASELINE_MD_PROVENANCE = (
+    '## WeChat · 公众号\n**标题选项 / Titles:**\n1. 标题一\n2. 标题二\n3. 标题三\n'
+    '**封面 / Cover:** 封面词\n\n正文第一段。\n\n正文第二段。\n\n'
+    '**标签 / Tags:** #脑科学 #光遗传学\n\n**⚠️ 过度声明 / Overstatement flags:**\n'
+    '- "过强的说法" — 缺少限定词\n\n## 依据清单 / Claim ledger\n'
+    '- `c1` 一个高置信声明 (high) · n=2\n- `c2` 一个中等置信声明 (medium)\n\n'
+    '## 背景来源 / Background sources\n- [背景文章](https://ex.org/a)\n  - 用于开篇的背景'
+)
+_BASELINE_MD_PUBLISH = (
+    '## WeChat · 公众号\n**标题选项 / Titles:**\n1. 标题一\n2. 标题二\n3. 标题三\n'
+    '**封面 / Cover:** 封面词\n\n正文第一段。\n\n正文第二段。\n\n'
+    '**标签 / Tags:** #脑科学 #光遗传学'
+)
+_BASELINE_TEXT = (
+    '标题一\n标题二\n标题三\n\n封面词\n\n正文第一段。\n\n正文第二段。\n\n#脑科学 #光遗传学'
+)
+
+
+def test_regression_render_markdown_byte_identical_with_empty_images():
+    """`out.images == []` must render byte-identically to before this change."""
+    out = _output()
+    assert out.images == []
+    assert render_markdown(out, include_provenance=True) == _BASELINE_MD_PROVENANCE
+    assert render_markdown(out, include_provenance=False) == _BASELINE_MD_PUBLISH
+
+
+def test_regression_render_text_byte_identical_with_empty_images():
+    """`render_text` has no image-aware code path; pinned as its own regression."""
+    out = _output()
+    assert out.images == []
+    assert render_text(out) == _BASELINE_TEXT
+
+
+def _cover_asset(**kw) -> ImageAsset:
+    base = dict(
+        kind=ImageKind.cover, path="outputs/images/sess1/cover.png", alt="封面配图",
+        generated=True, prompt="一张关于神经元的插画",
+    )
+    base.update(kw)
+    return ImageAsset(**base)
+
+
+def _explainer_asset(claim_id: str, **kw) -> ImageAsset:
+    base = dict(
+        kind=ImageKind.explainer, claim_id=claim_id,
+        path=f"outputs/images/sess1/{claim_id}.png", alt=f"{claim_id} 图解",
+    )
+    base.update(kw)
+    return ImageAsset(**base)
+
+
+def test_cover_injected_before_body_block_of_each_rendered_draft():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(platform=Platform.news, body="新闻正文。"),
+            PlatformOutput(platform=Platform.xhs, body="小红书正文。"),
+        ],
+        images=[_cover_asset()],
+    )
+    md = render_markdown(out, include_provenance=False)
+    assert md.count("![封面配图](outputs/images/sess1/cover.png)") == 2
+    # each cover sits immediately before its own draft's body
+    assert md.index("![封面配图]") < md.index("新闻正文。")
+    second_cover = md.index("![封面配图]", md.index("新闻正文。"))
+    assert second_cover < md.index("小红书正文。")
+
+
+def test_cover_still_shown_when_platform_filter_selects_one_draft():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(platform=Platform.news, body="新闻正文。"),
+            PlatformOutput(platform=Platform.xhs, body="小红书正文。"),
+        ],
+        images=[_cover_asset()],
+    )
+    md = render_markdown(out, platform=Platform.xhs, include_provenance=False)
+    assert "![封面配图](outputs/images/sess1/cover.png)" in md
+    assert "新闻正文" not in md
+
+
+def test_no_cover_asset_injects_nothing_and_leaves_no_stray_blank_line():
+    out = _output(images=[])
+    md = render_markdown(out, include_provenance=False)
+    assert "![" not in md
+    assert "\n\n\n" not in md
+
+
+def test_explainer_injected_at_end_of_paragraph_with_first_marker():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(
+                platform=Platform.wechat,
+                body="第一段说了要点 (c1)。\n\n第二段补充说明 (c2)。",
+            )
+        ],
+        images=[_explainer_asset("c1"), _explainer_asset("c2")],
+    )
+    md = render_markdown(out, include_provenance=False)
+    img1 = "![c1 图解](outputs/images/sess1/c1.png)"
+    img2 = "![c2 图解](outputs/images/sess1/c2.png)"
+    assert img1 in md and img2 in md
+    # c1's image lands with paragraph 1, before paragraph 2's text
+    assert md.index(img1) < md.index("第二段补充说明")
+    # c2's image lands after paragraph 2's own text
+    assert md.index(img2) > md.index("第二段补充说明")
+
+
+def test_full_width_markers_are_located_for_injection():
+    """#29 had exactly this gap for full-width （）markers."""
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(platform=Platform.wechat, body="疗效提升明显（c1）。"),
+        ],
+        images=[_explainer_asset("c1")],
+    )
+    md = render_markdown(out, include_provenance=False)
+    assert "![c1 图解](outputs/images/sess1/c1.png)" in md
+
+
+def test_grouped_full_width_marker_locates_both_ids():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(platform=Platform.wechat, body="两个结论都成立（c1，c2）。"),
+        ],
+        images=[_explainer_asset("c1"), _explainer_asset("c2")],
+    )
+    md = render_markdown(out, include_provenance=False)
+    assert "![c1 图解](outputs/images/sess1/c1.png)" in md
+    assert "![c2 图解](outputs/images/sess1/c2.png)" in md
+
+
+def test_two_claims_same_paragraph_both_appended_left_to_right():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(
+                platform=Platform.wechat,
+                body="一句话引用了 (c1)，接着又引用了 (c2)。\n\n第二段没有引用。",
+            )
+        ],
+        images=[_explainer_asset("c2"), _explainer_asset("c1")],  # listed reverse order
+    )
+    md = render_markdown(out, include_provenance=False)
+    img1 = "![c1 图解](outputs/images/sess1/c1.png)"
+    img2 = "![c2 图解](outputs/images/sess1/c2.png)"
+    assert img1 in md and img2 in md
+    assert md.index(img1) < md.index(img2)  # left-to-right by marker position
+    assert md.index(img2) < md.index("第二段没有引用")
+
+
+def test_two_claims_from_same_grouped_marker_ordered_by_split_ids():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(platform=Platform.wechat, body="两个结论都成立 (c22, c17)。"),
+        ],
+        images=[_explainer_asset("c17"), _explainer_asset("c22")],  # listed reverse order
+    )
+    md = render_markdown(out, include_provenance=False)
+    img17 = "![c17 图解](outputs/images/sess1/c17.png)"
+    img22 = "![c22 图解](outputs/images/sess1/c22.png)"
+    # split_ids("c22, c17") == ["c22", "c17"]: c22 appended before c17
+    assert md.index(img22) < md.index(img17)
+
+
+def test_marker_only_in_cover_copy_or_title_is_not_injected_into_body():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(
+                platform=Platform.wechat,
+                title_options=["标题引用了 (c9)"],
+                cover_copy="封面也引用了 (c9)。",
+                body="正文完全没有引用任何来源。",
+            ),
+            # same claim, cited in THIS platform's body: injected normally there.
+            PlatformOutput(platform=Platform.xhs, body="小红书正文引用了 (c9)。"),
+        ],
+        images=[_explainer_asset("c9")],
+    )
+    md = render_markdown(out, include_provenance=False)
+    img9 = "![c9 图解](outputs/images/sess1/c9.png)"
+    assert md.count(img9) == 1  # only injected under xhs, not wechat
+    assert md.index("Xiaohongshu") < md.index(img9)
+
+
+def test_empty_body_draft_renders_no_body_block_and_no_explainer():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(platform=Platform.news, body="   ", title_options=["标题"]),
+        ],
+        images=[_cover_asset(), _explainer_asset("c1")],
+    )
+    md = render_markdown(out, include_provenance=False)
+    assert "c1 图解" not in md  # nothing cited it — provenance-only, no crash
+    # the cover is still shown per draft; there is simply no body block below it
+    assert "![封面配图]" in md
+
+
+def test_marker_location_runs_on_raw_body_before_to_caret():
+    """Pins the order: locate on raw body, splice, THEN to_caret.
+
+    `to_caret` rewrites `(c1)` -> `^c1`, which no longer matches `MARKER_RE`.
+    A "caret-then-locate" implementation would therefore find zero markers on
+    the rewritten text and never inject either image at all — so this test
+    fails outright (rather than silently misplacing) under the wrong order.
+    """
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(
+                platform=Platform.wechat,
+                body="第一段说了要点 (c1)。\n\n第二段补充说明 (c2)。",
+            )
+        ],
+        images=[_explainer_asset("c1"), _explainer_asset("c2")],
+    )
+    md = render_markdown(out, include_provenance=False)
+    img1 = "![c1 图解](outputs/images/sess1/c1.png)"
+    img2 = "![c2 图解](outputs/images/sess1/c2.png)"
+    assert img1 in md
+    assert img2 in md
+    assert md.index(img1) < md.index("第二段补充说明") < md.index(img2)
+    # the caret rewrite itself still happened, downstream of injection
+    assert "^c1" in md and "^c2" in md
+    assert "(c1)" not in md and "(c2)" not in md
+
+
+def test_render_markdown_never_mutates_agent_output():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(
+                platform=Platform.wechat,
+                title_options=["标题一"],
+                cover_copy="封面词 (c1)。",
+                body="正文第一段 (c1)。\n\n正文第二段 (c2)。",
+                hashtags=["脑科学"],
+            )
+        ],
+        images=[_cover_asset(), _explainer_asset("c1"), _explainer_asset("c2")],
+    )
+    before = out.model_dump()
+
+    render_markdown(out, include_provenance=True)
+    render_markdown(out, include_provenance=False)
+
+    after = out.model_dump()
+    assert after == before  # not just body — cover_copy/title_options/images too
+
+
+def test_span_offsets_resolve_identically_with_and_without_images():
+    """The load-bearing guarantee: FlagSpan/HedgedSpan/JargonFlag offsets into
+    body/cover_copy/title:<n> keep resolving to the same substring whether or
+    not `render_markdown` injected images — proven by reading the offsets
+    directly off the SAME kind of `out` object, not by parsing render output.
+    """
+    def build(images: list[ImageAsset]) -> AgentOutput:
+        return _output(
+            platform_outputs=[
+                PlatformOutput(
+                    platform=Platform.wechat,
+                    title_options=["标题包含BLEU术语"],
+                    cover_copy="封面提到了23%的结果 (c1)。",
+                    body="正文第一段引用了 (c1) 一个结论。\n\n正文第二段 (c2)。",
+                )
+            ],
+            images=images,
+        )
+
+    flag_span = FlagSpan(start=8, end=13, flag_index=0, field="body")
+    hedged_span = HedgedSpan(start=4, end=9, field="cover_copy", claim_ids=["c1"])
+    jargon = JargonFlag(term="BLEU", category="metric", field="title:0", start=4, end=8,
+                         platform=Platform.wechat)
+
+    out_no_images = build([])
+    out_with_images = build([_cover_asset(), _explainer_asset("c1"), _explainer_asset("c2")])
+
+    def sliced(out: AgentOutput) -> tuple[str, str, str]:
+        draft = out.platform_outputs[0]
+        return (
+            draft.body[flag_span.start:flag_span.end],
+            draft.cover_copy[hedged_span.start:hedged_span.end],
+            draft.title_options[0][jargon.start:jargon.end],
+        )
+
+    before_no_images = sliced(out_no_images)
+    before_with_images = sliced(out_with_images)
+    assert before_no_images == before_with_images  # both built the same way
+
+    render_markdown(out_no_images, include_provenance=True)
+    render_markdown(out_with_images, include_provenance=True)
+
+    assert sliced(out_no_images) == before_no_images
+    assert sliced(out_with_images) == before_with_images
+    assert sliced(out_no_images) == sliced(out_with_images)
+
+
+def test_render_text_never_contains_image_markup_in_any_mode():
+    body = "正文第一段引用了 (c1)。\n\n正文第二段 (c2)。"
+
+    def make(images):
+        return _output(
+            platform_outputs=[PlatformOutput(platform=Platform.wechat, body=body)],
+            images=images,
+        )
+
+    combos = [
+        [],
+        [_cover_asset()],
+        [_explainer_asset("c1"), _explainer_asset("c2")],
+        [_cover_asset(), _explainer_asset("c1"), _explainer_asset("c2")],
+    ]
+    for images in combos:
+        text = render_text(make(images))
+        assert "![" not in text
+        assert "](" not in text
+        assert "outputs/" not in text
+
+
+def test_provenance_lists_every_image_with_cover_prompt():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(platform=Platform.wechat, body="正文引用了 (c1)。"),
+        ],
+        images=[_cover_asset(), _explainer_asset("c1")],
+    )
+    md = render_markdown(out, include_provenance=True)
+    assert "cover" in md and "explainer" in md
+    assert "`c1`" in md
+    assert "一张关于神经元的插画" in md  # the cover's prompt
+    assert "generated=True" in md
+    assert "generated=False" in md
+
+
+def test_uncited_asset_listed_in_provenance_but_injected_nowhere():
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(platform=Platform.wechat, body="正文完全不引用任何东西。"),
+        ],
+        images=[_explainer_asset("c99")],
+    )
+    md = render_markdown(out, include_provenance=True)
+    assert "`c99`" in md          # provenance still lists it
+    assert "c99 图解" not in md   # never injected anywhere

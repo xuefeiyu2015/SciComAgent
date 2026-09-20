@@ -24,13 +24,17 @@ already produced.
 
 from __future__ import annotations
 
-from api.markers import strip_markers, to_caret
+import re
+
+from api.markers import MARKER_RE, ids_in, split_ids, strip_markers, to_caret
 from api.schema import (
     AgentOutput,
     BackgroundMaterial,
     Claim,
     DensityFlag,
     Glossary,
+    ImageAsset,
+    ImageKind,
     JargonFlag,
     Notice,
     NoticeCode,
@@ -40,6 +44,10 @@ from api.schema import (
     Status,
     StyleProfile,
 )
+
+# A paragraph is a maximal run of text between two blank lines. A single "\n"
+# is a soft break and does not end a paragraph.
+_PARA_SPLIT_RE = re.compile(r"\n\s*\n")
 
 # Bilingual section labels — language-agnostic scaffolding around content that is
 # already in the run's language.
@@ -81,9 +89,19 @@ def render_markdown(
         if not drafts:
             return f"No draft for platform '{platform.value}' in this result."
 
+    cover_asset = next((img for img in out.images if img.kind == ImageKind.cover), None)
+    explainer_assets: dict[str, ImageAsset] = {}
+    for img in out.images:
+        if img.kind == ImageKind.explainer and img.claim_id:
+            explainer_assets.setdefault(img.claim_id, img)
+
     parts: list[str] = []
     for draft in drafts:
-        parts.append(_render_draft(draft))
+        cited = set(ids_in(draft.body))
+        draft_explainers = {
+            cid: img for cid, img in explainer_assets.items() if cid in cited
+        }
+        parts.append(_render_draft(draft, cover_asset, draft_explainers))
         if include_provenance:
             parts.append(_render_flags(_flags_for(out.overreach_flags, draft.platform)))
             parts.append(
@@ -110,6 +128,8 @@ def render_markdown(
             parts.append(_render_glossary(out.glossary))
         if out.style_profile is not None:
             parts.append(_render_style(out.style_profile))
+        if out.images:
+            parts.append(_render_images(out.images))
         rest = _render_notices(out.notices, header="Notices")
         if rest:
             parts.append(rest)
@@ -165,12 +185,23 @@ def _render_draft_text(draft: PlatformOutput, header: bool = False) -> str:
     return "\n".join(lines).strip()
 
 
-def _render_draft(draft: PlatformOutput) -> str:
-    """The post as reviewed: titles, cover copy, body, hashtags.
+def _render_draft(
+    draft: PlatformOutput,
+    cover: ImageAsset | None = None,
+    explainers: dict[str, ImageAsset] | None = None,
+) -> str:
+    """The post as reviewed: titles, cover copy, [cover image], body, hashtags.
 
     Ledger citations are written `^c1`, since Markdown cannot raise a
     character. `render_text` strips them instead — that view is the finished
     post, and a finished post carries no citations.
+
+    `cover`/`explainers` are injected into a COPY of the raw body — `draft`
+    itself is never touched, so every FlagSpan/HedgedSpan/JargonFlag offset
+    computed against `draft.body`/`draft.cover_copy`/`draft.title_options`
+    keeps resolving to the same substring. Marker locations are found on the
+    raw body BEFORE `to_caret` rewrites it, so an injected explainer lands in
+    the paragraph its marker actually occupied.
     """
     lines = [f"## {_PLATFORM_LABEL.get(draft.platform, draft.platform.value)}"]
     if draft.title_options:
@@ -178,13 +209,89 @@ def _render_draft(draft: PlatformOutput) -> str:
         lines.extend(f"{i}. {to_caret(t)}" for i, t in enumerate(draft.title_options, 1))
     if draft.cover_copy.strip():
         lines.append(f"**封面 / Cover:** {to_caret(draft.cover_copy.strip())}")
-    if draft.body.strip():
+    if cover is not None:
         lines.append("")
-        lines.append(to_caret(draft.body.strip()))
+        lines.append(f"![{cover.alt}]({cover.path})")
+    raw_body = draft.body.strip()
+    if raw_body:
+        lines.append("")
+        lines.append(to_caret(_inject_explainers(raw_body, explainers or {})))
     if draft.hashtags:
         lines.append("")
         lines.append("**标签 / Tags:** " + " ".join(_as_tag(h) for h in draft.hashtags))
     return "\n".join(lines)
+
+
+def _paragraph_spans(text: str) -> list[tuple[int, int]]:
+    """Character spans of every paragraph in `text` — split on blank lines."""
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    for m in _PARA_SPLIT_RE.finditer(text):
+        spans.append((pos, m.start()))
+        pos = m.end()
+    spans.append((pos, len(text)))
+    return spans
+
+
+def _paragraph_index(spans: list[tuple[int, int]], offset: int) -> int:
+    """Which paragraph span a character offset falls in."""
+    for i, (start, end) in enumerate(spans):
+        if start <= offset < end:
+            return i
+    return len(spans) - 1
+
+
+def _first_marker_positions(text: str) -> dict[str, tuple[int, int]]:
+    """First-occurrence (marker start offset, position within that marker's
+    group) for every ledger id cited in `text` — the tie-break that lets two
+    ids from the same grouped marker (e.g. `(c17, c22)`) sort left-to-right
+    in `split_ids` order rather than compare equal.
+    """
+    positions: dict[str, tuple[int, int]] = {}
+    for m in MARKER_RE.finditer(text):
+        for i, cid in enumerate(split_ids(m.group(1))):
+            if cid not in positions:
+                positions[cid] = (m.start(), i)
+    return positions
+
+
+def _inject_explainers(raw_body: str, explainers: dict[str, ImageAsset]) -> str:
+    """Splice each explainer image into its claim's first-marker paragraph.
+
+    Runs on the RAW body (markers intact) — paragraph boundaries and marker
+    positions are computed here, before `to_caret` ever sees the text, so a
+    marker that `to_caret` would rewrite/shift cannot move it to the wrong
+    paragraph. Returns a NEW string; `raw_body` itself is never mutated.
+    """
+    if not raw_body or not explainers:
+        return raw_body
+
+    spans = _paragraph_spans(raw_body)
+    positions = _first_marker_positions(raw_body)
+
+    assigned: dict[int, list[str]] = {}
+    for cid in explainers:
+        pos = positions.get(cid)
+        if pos is None:
+            continue
+        idx = _paragraph_index(spans, pos[0])
+        assigned.setdefault(idx, []).append(cid)
+    if not assigned:
+        return raw_body
+
+    for idx, cids in assigned.items():
+        cids.sort(key=lambda cid: positions[cid])
+
+    parts: list[str] = []
+    for i, (start, end) in enumerate(spans):
+        para = raw_body[start:end]
+        if i in assigned:
+            image_lines = [
+                f"![{explainers[cid].alt}]({explainers[cid].path})" for cid in assigned[i]
+            ]
+            para = para + "\n\n" + "\n\n".join(image_lines)
+        parts.append(para)
+    return "\n\n".join(parts)
 
 
 def _render_flags(flags: list[OverreachFlag], header: str | None = None) -> str:
@@ -298,6 +405,23 @@ def _render_style(profile: StyleProfile) -> str:
             lines.append(f"- **{label}:** " + "; ".join(value))
     if profile.sources:
         lines.append(f"- **来源样本 / Distilled from:** {', '.join(profile.sources)}")
+    return "\n".join(lines)
+
+
+def _render_images(images: list[ImageAsset]) -> str:
+    """Every image asset the run produced, whether or not it was injected.
+
+    Lists kind, claim id (blank for the cover) and whether it was
+    model-generated; the cover additionally shows the prompt it was
+    generated from. Membership here is independent of injection — an asset
+    cited nowhere in a rendered body still appears.
+    """
+    lines = ["## 配图 / Images"]
+    for img in images:
+        line = f"- {img.kind.value} · `{img.claim_id}` · generated={img.generated}"
+        if img.kind == ImageKind.cover and img.prompt.strip():
+            line += f" · prompt: {img.prompt.strip()}"
+        lines.append(line)
     return "\n".join(lines)
 
 
