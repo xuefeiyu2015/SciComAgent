@@ -14,6 +14,8 @@ from api.schema import (
     ImageKind,
     ImageMode,
     NoticeCode,
+    REDRAFTABLE_DIALS,
+    merge_dials,
 )
 
 
@@ -77,3 +79,21 @@ def test_agent_input_still_constructs_with_no_new_arguments():
     agent_input = AgentInput(source="https://example.com/paper", source_type="url")
 
     assert agent_input.images == ImageMode.off
+
+
+def test_images_is_in_redraftable_dials():
+    """#33: without this, `merge_dials` silently drops an `images` change —
+    a redraft's `images` argument would be accepted and do nothing."""
+    assert "images" in REDRAFTABLE_DIALS
+
+
+def test_merge_dials_actually_applies_an_images_change():
+    before = AgentInput(source="https://example.com/paper", source_type="url")
+    assert before.images == ImageMode.off
+
+    after = merge_dials(before, {"images": ImageMode.cover})
+
+    assert after.images == ImageMode.cover
+    # everything else carried over unchanged
+    assert after.source == before.source
+    assert after.language == before.language

@@ -162,7 +162,7 @@ class AgentInput(BaseModel):
 # ABSENT: a redraft writes the same paper again, and nothing proposed by a model
 # in conversation may quietly turn it into a different one.
 REDRAFTABLE_DIALS = frozenset(
-    {"platforms", "language", "audience", "liveliness", "length", "background"}
+    {"platforms", "language", "audience", "liveliness", "length", "background", "images"}
 )
 
 

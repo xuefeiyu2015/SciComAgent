@@ -45,6 +45,7 @@ from api.schema import (  # noqa: E402
     AgentOutput,
     CheckFlag,
     Claim,
+    ImageMode,
     JobKind,
     JobProgress,
     JobState,
@@ -80,6 +81,7 @@ def generate(
     liveliness: int = 3,
     length: int = 3,
     background: bool = True,
+    images: ImageMode = ImageMode.off,
     wait_seconds: int = _DEFAULT_WAIT_S,
 ) -> AgentOutput:
     """Turn a research paper into multi-platform sci-comm drafts.
@@ -106,6 +108,11 @@ def generate(
         background: gather external background materials (web/arXiv/scholarly
             APIs) as framing context for the drafts; failure degrades to a
             background_error notice, never sinks the run.
+        images: how much of the image asset service to run: `off` (default)
+            generates nothing, `cover` generates only the cover image, `all`
+            also renders one explainer image per claim. Chained into the run
+            automatically — no separate call needed; see `illustrate` for
+            adding images to a run that already finished without one.
         wait_seconds: how long to wait for the result before handing back a
             session_id instead. Clamped to 0–25 seconds.
     """
@@ -119,6 +126,7 @@ def generate(
             liveliness=liveliness,
             length=length,
             background=background,
+            images=images,
         )
         session_id = jobs.start(inp)
     except Exception as exc:  # never crash the tool — surface as a failed result
@@ -157,6 +165,7 @@ def redraft(
     liveliness: int | None = None,
     length: int | None = None,
     background: bool | None = None,
+    images: ImageMode | None = None,
     from_ledger: bool = False,
     wait_seconds: int = _DEFAULT_WAIT_S,
 ) -> AgentOutput:
@@ -192,6 +201,12 @@ def redraft(
             norm. THIS is the setting for "make it shorter" (2) or "much
             shorter" (1) — not liveliness. Omit to keep the run's length.
         background: whether to gather external background materials.
+        images: how much of the image asset service to run (`off` / `cover` /
+            `all`). Omit to keep the run's setting. Turning it on generates
+            images for THIS redraft's session — it is not carried forward
+            from the run being redrafted. Changing only `images` still takes
+            the fast ledger-reuse path, exactly like toggling `background`
+            alone does.
         from_ledger: only meaningful after a redraft came back with a
             `can_restate` notice, which means the paper could not be read
             again. Setting it true restates the ledger in the new language
@@ -209,6 +224,7 @@ def redraft(
         "liveliness": liveliness,
         "length": length,
         "background": background,
+        "images": images,
     }
     try:
         new_id = jobs.start_redraft(
@@ -304,6 +320,55 @@ def job_result(session_id: str) -> AgentOutput:
         session_id: the id returned by `generate`.
     """
     return _collect(session_id)
+
+
+@mcp.tool()
+def illustrate(session_id: str, images: ImageMode, force: bool = False) -> AgentOutput:
+    """Generate image assets for a run that already finished, without redrafting.
+
+    For a run made before images existed, or one drafted with `images='off'`:
+    this adds the cover / explainer images to it in place, rather than writing
+    the whole thing again. Use `redraft(session_id, images=...)` instead when
+    anything besides images should also change.
+
+    Delegates entirely to `api.jobs.illustrate_session`, which reads the
+    finished run, its source card and its original dials (falling back to
+    `Language.zh` / `liveliness=3` when those were never recorded) straight
+    from `session_id`, calls the image pipeline, and rewrites the run's
+    stored result so a later `job_result`/`render` on the same id shows the
+    new images too. This wrapper assembles none of that itself — it only
+    passes the three arguments through and returns what comes back.
+
+    NEVER auto-publishes.
+
+    Args:
+        session_id: the run to illustrate, from `generate` or `redraft`. Must
+            already be finished — a still-running job is refused (see below).
+        images: how much to generate: `cover` for just the cover image, `all`
+            for the cover plus one explainer image per claim. `off` is
+            accepted but generates nothing.
+        force: regenerate images even if this session already has some.
+            False (default) leaves existing images alone.
+
+    Returns:
+        The run's AgentOutput with `images` populated (and the rest of the
+        result unchanged). An unknown/expired `session_id` or one whose job
+        is still running comes back as `status='failed'` with a notice
+        explaining which, rather than raising — `illustrate_session`
+        guarantees this for both cases, so no extra handling is needed here
+        for them. Any other unexpected failure is caught below and returned
+        the same way, so this tool never raises.
+    """
+    try:
+        return jobs.illustrate_session(session_id, images, force=force)
+    except Exception as exc:  # never crash the tool — surface as a failed result
+        return AgentOutput(
+            status=Status.failed,
+            session_id=session_id,
+            notices=[
+                Notice(code=NoticeCode.fetch_error, message=f"illustrate failed: {exc}")
+            ],
+        )
 
 
 def _collect(session_id: str, kind: JobKind | None = None) -> AgentOutput:
