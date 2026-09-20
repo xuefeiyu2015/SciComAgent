@@ -473,3 +473,387 @@ def test_the_elision_fixture_really_elides():
         f"lengthen the fixture or narrow its canvas"
     )
     assert layout.claim.text != fixture.claim.claim
+
+
+# =============================================================================
+# --- #55: a card never shows a FRAGMENT of a number -------------------------
+# =============================================================================
+#
+# The invariants above are character-level: they ask whether each numeral
+# drawn on the card occurs *somewhere* in the source. That cannot see the
+# defect in #55, where a width-chosen elision cut lands in the middle of a
+# number: `"Only 48…"` for a claim that says `"Only 4823 …"` is a legal
+# prefix, carries one ellipsis, and every digit it shows is in the claim — so
+# every assertion above passes while the card states a number the claim never
+# made.
+#
+# What is needed is a RUN-level invariant: a *prefix of a number is not the
+# number*. Two are pinned below, and they close the class rather than the
+# example:
+#
+#   - `test_every_numeral_run_on_the_card_is_a_complete_run_in_the_source`:
+#     every maximal numeral run displayed on a card must appear as a COMPLETE
+#     run in `claim.claim`/`claim.qualifier`, not merely have its characters
+#     present. It runs over the #36 fixtures as well as #55's.
+#   - `test_elision_never_cuts_inside_a_numeral_run`: stated positionally
+#     instead — the index where the claim was cut may not fall strictly inside
+#     a numeral run of the source. This is the one that also sees a `%` sheared
+#     off its number, which the run-comparison above cannot (`"48"` is a
+#     complete run of `"48%"` once the sign is set aside).
+#
+# The run scanner below is this file's own, written from #55's definition and
+# never imported from `api.claimcard`: a test that asks the code under test
+# where the numbers are agrees with it by construction.
+
+# QA's fixed-width fake, copied verbatim from the reproduction on #55 — half a
+# `font_size` per character, `font_size + 6` tall. It is NOT `_measure` above:
+# the defect reproduces at the character widths QA reported, and a paraphrased
+# metric would silently stop reproducing it.
+def _qa_measure(text: str, font_size: int) -> tuple[int, int]:
+    """QA's fixed-width fake from #55: each character is `font_size // 2` wide."""
+    return (len(text) * font_size // 2, font_size + 6)
+
+
+# A numeral run is the span that has to be shown whole or not at all, per #55:
+# decimal digits (ASCII and fullwidth) and the CJK numerals already scanned by
+# `_numerals` above, a `.` or `,` sitting BETWEEN two digits, and — only where
+# `with_suffix` asks for it — an immediately trailing `%`/`％`/`‰`.
+#
+# The suffix is a parameter because the two invariants need different answers.
+# Comparing displayed runs against source runs must NOT attach the sign: the
+# figure slot holds `"48"` extracted from `"48%"` (#36's fixtures pin exactly
+# that, and the figure is never elided), so attaching it would make a correct
+# card look wrong. The cut-position invariant DOES attach it: a claim line cut
+# between `"48"` and `"%"` moves the magnitude by a factor of 100.
+_NUMERAL_SUFFIXES = "%％‰"
+_NUMERAL_SEPARATORS = ".,"
+
+
+def _is_decimal_digit(ch: str) -> bool:
+    return _DECIMAL_DIGIT_RE.fullmatch(ch) is not None
+
+
+def _is_numeral_char(ch: str) -> bool:
+    return _is_decimal_digit(ch) or ch in _CJK_NUMERALS
+
+
+def _run_spans(text: str, *, with_suffix: bool) -> list[tuple[int, int]]:
+    """Half-open `(start, end)` spans of every maximal numeral run in `text`."""
+    spans: list[tuple[int, int]] = []
+    i, n = 0, len(text)
+    while i < n:
+        if not _is_numeral_char(text[i]):
+            i += 1
+            continue
+        j = i + 1
+        while j < n:
+            if _is_numeral_char(text[j]):
+                j += 1
+            elif (
+                text[j] in _NUMERAL_SEPARATORS
+                and j + 1 < n
+                and _is_decimal_digit(text[j - 1])
+                and _is_decimal_digit(text[j + 1])
+            ):
+                j += 2  # an interior separator: "2.5", "12,500"
+            else:
+                break
+        if with_suffix and j < n and text[j] in _NUMERAL_SUFFIXES:
+            j += 1
+        spans.append((i, j))
+        i = j
+    return spans
+
+
+def _numeral_runs(text: str) -> list[str]:
+    """Every maximal numeral run in `text`, as strings, in order."""
+    return [text[start:end] for start, end in _run_spans(text, with_suffix=False)]
+
+
+@dataclass(frozen=True)
+class ElisionFixture:
+    """One claim laid out on a canvas narrow enough to force an elision.
+
+    `expected_claim_text` is a hand-written literal — the exact string the card
+    must carry — or `None` when the only faithful answer is refusal. It is
+    never computed from `api.claimcard`.
+    """
+
+    name: str
+    claim: Claim
+    size: tuple[int, int]
+    expected_claim_text: str | None
+
+
+ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
+    ElisionFixture(
+        # QA's reproduction on #55, exactly as reported: this claim, this
+        # qualifier, this canvas, `_qa_measure`. Renders "Only 48…" on the
+        # unfixed code — a card that says 48 for a claim that says 4823.
+        name="qa_only_4823",
+        claim=_claim(
+            id="c9",
+            claim="Only 4823 of the participants responded to the follow-up survey",
+            qualifier="preliminary",
+        ),
+        size=(180, 900),
+        expected_claim_text="Only…",
+    ),
+    ElisionFixture(
+        # The wider case from #55: the split numeral is NOT the one in the
+        # figure slot, so nothing else on the card contradicts it. Unfixed,
+        # this renders "Response rate rose 1…" beside a figure reading "12".
+        name="qa_split_numeral_is_not_the_figure",
+        claim=_claim(
+            id="c10",
+            claim="Response rate rose 12 points among the 4823 enrolled participants",
+            qualifier="preliminary",
+        ),
+        size=(360, 900),
+        expected_claim_text="Response rate rose…",
+    ),
+    ElisionFixture(
+        # The same claim on the narrower canvas #55 calls out as already fine:
+        # the cut falls inside a word, not inside a number, so it must land
+        # exactly where it lands today. The fix narrows elision; it does not
+        # move cuts that were already safe.
+        name="control_cut_inside_a_word_is_unchanged",
+        claim=_claim(
+            id="c10",
+            claim="Response rate rose 12 points among the 4823 enrolled participants",
+            qualifier="preliminary",
+        ),
+        size=(180, 900),
+        expected_claim_text="Respons…",
+    ),
+    ElisionFixture(
+        # A cut that falls after a whole numeral is safe and stays put: the
+        # card may show "4823" in running text, it may not show "48".
+        name="control_cut_after_a_whole_numeral_is_unchanged",
+        claim=_claim(
+            id="c9",
+            claim="Only 4823 of the participants responded to the follow-up survey",
+            qualifier="preliminary",
+        ),
+        size=(358, 900),
+        expected_claim_text="Only 4823 of the par…",
+    ),
+    ElisionFixture(
+        # CJK, where there is no word boundary to cut on and no Arabic digit
+        # involved. Unfixed, this renders "试验共纳入四千…" — a reader parses
+        # the fragment as 4000 for a claim that says 4823.
+        name="cjk_numeral_run",
+        claim=_claim(
+            id="c40",
+            claim="试验共纳入四千八百二十三名参与者",
+            qualifier="初步结果",
+        ),
+        size=(230, 900),
+        expected_claim_text="试验共纳入…",
+    ),
+    ElisionFixture(
+        # The run starts at the very first character, so backing the cut up to
+        # its start leaves nothing but the ellipsis. Refuse, per #43's
+        # fit-or-refuse posture. Unfixed, this renders "四千八百…" — 4800.
+        name="cjk_numeral_run_at_the_start_refuses",
+        claim=_claim(
+            id="c41",
+            claim="四千八百二十三名参与者完成了随访",
+            qualifier="初步结果",
+        ),
+        size=(180, 900),
+        expected_claim_text=None,
+    ),
+    ElisionFixture(
+        # A decimal point is interior to the number: "2.5" may never be shown
+        # as "2." or "2". (Losing the word-form unit "x" is accepted by #55 and
+        # is not what this fixture is about.)
+        name="decimal_point_is_interior",
+        claim=_claim(
+            id="c7",
+            claim="Reaction times improved 2.5x in the treated group",
+            qualifier="mice only, preliminary",
+        ),
+        size=(428, 900),
+        expected_claim_text="Reaction times improved…",
+    ),
+    ElisionFixture(
+        # A thousands separator is interior too: "12,500" may never be shown
+        # as "12,5". The figure slot holds "3" here on purpose, so the card's
+        # big numeral is not itself the number being split.
+        name="thousands_separator_is_interior",
+        claim=_claim(
+            id="c11",
+            claim="Overall 3 sites enrolled 12,500 participants nationwide",
+            qualifier="preliminary",
+        ),
+        size=(484, 900),
+        expected_claim_text="Overall 3 sites enrolled…",
+    ),
+    ElisionFixture(
+        # A trailing percent sign belongs to its number: cutting between "48"
+        # and "%" changes the magnitude by a factor of 100.
+        name="percent_sign_belongs_to_its_number",
+        claim=_claim(
+            id="c12",
+            claim="Vaccine efficacy reached 48% in the trial",
+            qualifier="preliminary",
+        ),
+        size=(456, 900),
+        expected_claim_text="Vaccine efficacy reached…",
+    ),
+)
+
+_ELISION_LAID_OUT = tuple(
+    f for f in ELISION_FIXTURES if f.expected_claim_text is not None
+)
+
+
+def _elision_ids(fixtures: tuple[ElisionFixture, ...]) -> list[str]:
+    return [f.name for f in fixtures]
+
+
+# Every card this file produces, from both fixture tables, each with the
+# `measure` fake it was written against. The run-level invariants below run
+# over all of them: the #36 fixtures prove the new rule does not fire on cards
+# that were already faithful, the #55 fixtures prove it fires on the ones that
+# were not.
+_ALL_CARDS: tuple[tuple[str, Claim, tuple[int, int], object], ...] = tuple(
+    [(f.name, f.claim, f.size, _measure) for f in _LAID_OUT]
+    + [(f.name, f.claim, f.size, _qa_measure) for f in _ELISION_LAID_OUT]
+)
+_ALL_CARD_IDS = [card[0] for card in _ALL_CARDS]
+
+
+@pytest.mark.parametrize("name,claim,size,measure", _ALL_CARDS, ids=_ALL_CARD_IDS)
+def test_every_numeral_run_on_the_card_is_a_complete_run_in_the_source(
+    name: str, claim: Claim, size: tuple[int, int], measure
+):
+    """A prefix of a number is not the number (CLAUDE.md #1, issue #55).
+
+    The character-level scan above asks whether each numeral is *somewhere* in
+    the source. This asks the stronger question: is the whole RUN there? "48"
+    drawn for a claim that says "4823" fails here and passes there, which is
+    exactly the gap #55 reports.
+    """
+    layout = compute_card_layout(claim, size, measure)
+    assert layout is not None, f"[{name}] expected a layout, got None"
+
+    source_runs = set(_numeral_runs(claim.claim)) | set(_numeral_runs(claim.qualifier))
+
+    for element_name in ("figure", "claim", "qualifier"):
+        element = getattr(layout, element_name)
+        if element is None:  # only `figure` can be absent
+            continue
+        for run in _numeral_runs(element.text):
+            assert run in source_runs, (
+                f"[{name}] layout.{element_name}.text shows the numeral run "
+                f"{run!r}, which is not a COMPLETE numeral run of "
+                f"claim.claim {claim.claim!r} / claim.qualifier "
+                f"{claim.qualifier!r} (its complete runs are "
+                f"{sorted(source_runs)!r}). Full element text: "
+                f"{element.text!r}. A prefix of a number is not the number: "
+                f"a card may not state a magnitude the claim never stated"
+            )
+
+
+@pytest.mark.parametrize("name,claim,size,measure", _ALL_CARDS, ids=_ALL_CARD_IDS)
+def test_elision_never_cuts_inside_a_numeral_run(
+    name: str, claim: Claim, size: tuple[int, int], measure
+):
+    """The same invariant stated positionally: where may the cut fall?
+
+    Unlike the run comparison above, this one sees a `%` sheared off its
+    number — `"48"` is a complete run of `"48%"` once the sign is set aside,
+    but a card reading "…reached 48…" for a claim that says "48%" is off by a
+    factor of 100.
+    """
+    layout = compute_card_layout(claim, size, measure)
+    assert layout is not None, f"[{name}] expected a layout, got None"
+
+    text = layout.claim.text
+    if not text.endswith(ELLIPSIS):
+        return  # nothing was cut; there is no cut position to check
+
+    stem = text[: -len(ELLIPSIS)]
+    assert claim.claim.startswith(stem), (
+        f"[{name}] elided claim {text!r} is not a prefix of "
+        f"{claim.claim!r}"
+    )
+    cut = len(stem)
+
+    for start, end in _run_spans(claim.claim, with_suffix=True):
+        assert not (start < cut < end), (
+            f"[{name}] the claim was cut at index {cut}, strictly inside the "
+            f"numeral run {claim.claim[start:end]!r} (indices {start}..{end}) "
+            f"of {claim.claim!r}. The card therefore shows "
+            f"{claim.claim[start:cut]!r} where the claim says "
+            f"{claim.claim[start:end]!r}. Full claim line: {text!r}"
+        )
+
+
+@pytest.mark.parametrize("fixture", ELISION_FIXTURES, ids=_elision_ids(ELISION_FIXTURES))
+def test_elided_claim_text_is_exactly_what_the_fixture_declares(
+    fixture: ElisionFixture,
+):
+    """The exact string each #55 fixture must render, or refusal.
+
+    Hand-written literals: nothing here is computed from `api.claimcard`.
+    """
+    layout = compute_card_layout(fixture.claim, fixture.size, _qa_measure)
+
+    if fixture.expected_claim_text is None:
+        assert layout is None, (
+            f"[{fixture.name}] expected refusal (None): backing the cut up to "
+            f"the start of the numeral run leaves nothing but an ellipsis, and "
+            f"a card whose claim line is an ellipsis alone is not a card. Got "
+            f"a layout reading {layout.claim.text!r}"
+        )
+        return
+
+    assert layout is not None, (
+        f"[{fixture.name}] expected a card reading "
+        f"{fixture.expected_claim_text!r}, got None"
+    )
+    assert layout.claim.text == fixture.expected_claim_text, (
+        f"[{fixture.name}] claim line is {layout.claim.text!r}, expected "
+        f"{fixture.expected_claim_text!r} for claim {fixture.claim.claim!r} "
+        f"on a {fixture.size[0]}x{fixture.size[1]} canvas"
+    )
+
+
+def test_the_elision_fixtures_really_elide():
+    """Guards the #55 fixtures: if they stop eliding they pin nothing.
+
+    Every non-refusing fixture above must come back shortened — otherwise the
+    run-level invariants meet only whole claims and go quietly vacuous.
+    """
+    for fixture in _ELISION_LAID_OUT:
+        assert fixture.expected_claim_text.endswith(ELLIPSIS), (
+            f"[{fixture.name}] expected text "
+            f"{fixture.expected_claim_text!r} is not an elision; narrow the "
+            f"canvas or lengthen the claim"
+        )
+        layout = compute_card_layout(fixture.claim, fixture.size, _qa_measure)
+        assert layout is not None, f"[{fixture.name}] expected a layout, got None"
+        assert layout.claim.text != fixture.claim.claim, (
+            f"[{fixture.name}] claim {fixture.claim.claim!r} was not elided on "
+            f"a {fixture.size[0]}x{fixture.size[1]} canvas"
+        )
+
+
+def test_a_claim_that_needs_no_elision_is_untouched():
+    """The narrowing applies only to cuts: a claim that fits is byte-for-byte
+    the claim, numeral runs and all."""
+    fixture = _by_name_elision()["qa_only_4823"]
+    layout = compute_card_layout(fixture.claim, (2000, 2000), _qa_measure)
+
+    assert layout is not None
+    assert layout.claim.text == fixture.claim.claim, (
+        f"a claim that fits must be unchanged, got {layout.claim.text!r}"
+    )
+    assert ELLIPSIS not in layout.claim.text
+
+
+def _by_name_elision() -> dict:
+    return {f.name: f for f in ELISION_FIXTURES}

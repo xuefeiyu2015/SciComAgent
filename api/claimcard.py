@@ -136,20 +136,126 @@ def figure_of(text: str) -> str:
     return match.group(0) if match else ""
 
 
+# --- numeral runs: what elision may never cut in half (#55) ------------------
+# `_elide` picks its cut by width alone, so without this the cut can land in
+# the middle of a number: `"Only 4823 …"` elides to `"Only 48…"`, a card that
+# states 48 for a claim that says 4823 (#55). The character-level provenance
+# rules cannot see it — `"Only 48"` is a legal prefix and both digits are in
+# the claim — but a *prefix of a number is not the number*, and CLAUDE.md #1
+# is about magnitudes, not characters.
+#
+# A numeral run is therefore the span that has to be shown whole or not at
+# all:
+#   - decimal digits, ASCII `0-9` and fullwidth `０-９`;
+#   - the CJK numerals, so `四千八` is never shown for `四千八百二十三` —
+#     a reader parses that fragment as 4800;
+#   - a `.` or `,` sitting BETWEEN two digits, so `2.5` is never shown as
+#     `2.` or `2`, and `12,500` is never shown as `12,5`;
+#   - an immediately trailing `%` / `％` / `‰`, because a cut between `48`
+#     and `%` moves the magnitude by a factor of 100.
+#
+# Deliberately NOT part of a run: word-form units (`2.5x`, `12 points`,
+# `4823 人`). Eliding `2.5x improvement` to `2.5…` shows the source's number
+# complete and unaltered — the reader loses the unit, not the value, and the
+# trailing ellipsis already says text follows. That is a readability limit,
+# not a faithfulness one (#55), and widening the run to swallow following
+# words would make elision refuse far more often for no provenance gain.
+#
+# This is a separate notion from `_FIGURE_RE` above and is not derived from
+# it: `figure_of` *extracts* the one numeral to display, this decides where a
+# cut is allowed to fall.
+_DECIMAL_DIGIT_RE = re.compile(r"\d")  # Unicode decimal digits: 0-9 and ０-９
+_CJK_NUMERALS = frozenset("〇一二三四五六七八九十百千万亿兆两半倍分之")
+_NUMERAL_SEPARATORS = frozenset(".,")
+_NUMERAL_SUFFIXES = frozenset("%％‰")
+
+
+def _is_decimal_digit(ch: str) -> bool:
+    return _DECIMAL_DIGIT_RE.fullmatch(ch) is not None
+
+
+def _is_numeral_char(ch: str) -> bool:
+    return _is_decimal_digit(ch) or ch in _CJK_NUMERALS
+
+
+def _numeral_runs(text: str) -> list[tuple[int, int]]:
+    """Half-open `(start, end)` spans of every maximal numeral run in `text`."""
+    runs: list[tuple[int, int]] = []
+    i, n = 0, len(text)
+    while i < n:
+        if not _is_numeral_char(text[i]):
+            i += 1
+            continue
+        j = i + 1
+        while j < n:
+            if _is_numeral_char(text[j]):
+                j += 1
+            elif (
+                text[j] in _NUMERAL_SEPARATORS
+                and j + 1 < n
+                and _is_decimal_digit(text[j - 1])
+                and _is_decimal_digit(text[j + 1])
+            ):
+                j += 2  # an interior separator: "2.5", "12,500"
+            else:
+                break
+        if j < n and text[j] in _NUMERAL_SUFFIXES:
+            j += 1
+        runs.append((i, j))
+        i = j
+    return runs
+
+
+def _cut_clear_of_numerals(text: str, cut: int, runs: list[tuple[int, int]]) -> int:
+    """`cut`, moved back to the start of the numeral run it would split.
+
+    WHY BACK UP TO THE START, and not by one character: showing `"Only 48…"`
+    for `"Only 4823 …"` states a number the claim never made, and one digit
+    less (`"Only 4…"`) is exactly as wrong. The reader gets the whole number
+    or none of it — there is no such thing as a safely shortened number. Do
+    not "simplify" this to `cut - 1`; it is not an off-by-one (#55).
+
+    The whitespace that ran up to the number goes too, so the card reads
+    `"Only…"` rather than `"Only …"`. That is still a contiguous prefix of the
+    source: nothing is inserted, only less is kept.
+    """
+    for start, end in runs:
+        if start >= cut:
+            break
+        if cut < end:  # the cut falls strictly inside this run
+            return len(text[:start].rstrip())
+    return cut
+
+
 # --- elision -------------------------------------------------------------
 
 def _elide(text: str, font_size: int, available_width: int, measure: Measure) -> str | None:
     """`text` if it already fits; else truncated from the end plus one
     `ELLIPSIS`, as short as it needs to be to fit. `None` if nothing short of
     the empty string with an ellipsis fits `available_width`.
+
+    A cut that would fall inside a numeral run is backed up to the start of
+    that run first (see `_cut_clear_of_numerals`), so a card never shows part
+    of a number as if it were the number. When backing up leaves nothing but
+    the ellipsis, this refuses with `None` — the same fit-or-refuse posture
+    the figure and the `id_tag` already take (#43): no card beats a card
+    carrying a wrong magnitude.
     """
     if not text:
         return text
     width, _ = measure(text, font_size)
     if width <= available_width:
         return text
+    runs = _numeral_runs(text)
     for cut in range(len(text) - 1, -1, -1):
-        candidate = text[:cut] + ELLIPSIS
+        safe_cut = _cut_clear_of_numerals(text, cut, runs)
+        if safe_cut != cut and safe_cut <= 0:
+            # Backing up reached the front of the text: the run starts there,
+            # so every shorter cut lands inside the same run and there is no
+            # faithful prefix left to show. Refuse rather than render a lone
+            # ellipsis.
+            return None
+        candidate = text[:safe_cut] + ELLIPSIS
         width, _ = measure(candidate, font_size)
         if width <= available_width:
             return candidate
