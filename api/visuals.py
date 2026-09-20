@@ -48,7 +48,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from api.assets import image_path, read_manifest, write_manifest
+from api.assets import image_path, read_manifest, repo_relative, write_manifest
 from api.claimcard import CardLayoutRefusedError, FontRefusedError, render_claim_card
 from api.config_loader import resolve_setting
 from api.explainer import select_claim_ids
@@ -256,7 +256,7 @@ def _generate_cover(
         ImageAsset(
             kind=ImageKind.cover,
             claim_id="",
-            path=str(path),
+            path=repo_relative(path),
             alt=_cover_alt(card),
             generated=True,
             prompt=prompt,
@@ -330,7 +330,7 @@ def _generate_card(
         ImageAsset(
             kind=ImageKind.explainer,
             claim_id=claim.id,
-            path=str(path),
+            path=repo_relative(path),
             alt=claim.claim,
             generated=False,
             prompt="",

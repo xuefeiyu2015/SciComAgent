@@ -27,7 +27,7 @@ from __future__ import annotations
 import pytest
 
 from api import visuals
-from api.assets import image_path, read_manifest
+from api.assets import image_path, read_manifest, repo_relative
 from api.claimcard import CardLayoutRefusedError, FontRefusedError
 from api.imagegen import (
     ImageGenConfigError,
@@ -126,7 +126,12 @@ def test_cover_mode_produces_only_a_cover_asset():
 
     saved_path = image_path(_SESSION, ImageKind.cover)
     assert saved_path.read_bytes() == _PNG
-    assert asset.path == str(saved_path)
+    assert asset.path == repo_relative(saved_path)
+    # what the code PRODUCES, not what it was handed: repo-relative, POSIX,
+    # never the absolute filesystem path (#53)
+    assert asset.path == f"outputs/images/{_SESSION}/cover.png"
+    assert not asset.path.startswith("/")
+    assert "\\" not in asset.path
 
 
 def test_cover_mode_writes_no_explainer_even_with_a_ledger():
@@ -153,7 +158,10 @@ def test_all_mode_produces_cover_and_selected_cards():
             assert asset.prompt == ""
             path = image_path(_SESSION, ImageKind.explainer, asset.claim_id)
             assert path.read_bytes() == _PNG
-            assert asset.path == str(path)
+            assert asset.path == repo_relative(path)
+            assert asset.path == f"outputs/images/{_SESSION}/{asset.claim_id}.png"
+            assert not asset.path.startswith("/")
+            assert "\\" not in asset.path
 
 
 def test_all_mode_respects_cap(monkeypatch):

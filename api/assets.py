@@ -51,6 +51,21 @@ def image_dir(session_id: str) -> Path:
     return path
 
 
+def repo_relative(path: Path) -> str:
+    """`path` (as returned by `image_dir`/`image_path`) as a POSIX-separated
+    string relative to the repo root — this is the form stored in
+    `ImageAsset.path`, never the absolute filesystem path.
+
+    Relative to `_REPO_ROOT`, not the process's current working directory, so
+    the recorded string is identical whether the pipeline runs locally or on
+    the deployed platform. This is the ONLY place that relativization
+    happens (#53) — callers (`api.visuals`) pass the `Path` `image_path`/
+    `image_dir` gave them straight through here rather than relativizing it
+    themselves.
+    """
+    return path.resolve().relative_to(_REPO_ROOT).as_posix()
+
+
 def image_path(session_id: str, kind: ImageKind, claim_id: str = "") -> Path:
     """The only place an image filename is built.
 
@@ -114,6 +129,7 @@ def read_manifest(session_id: str) -> list[ImageAsset]:
 __all__ = [
     "image_dir",
     "image_path",
+    "repo_relative",
     "write_manifest",
     "read_manifest",
 ]

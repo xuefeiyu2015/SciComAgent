@@ -77,6 +77,41 @@ def test_image_path_rejects_unsafe_claim_id_even_for_cover(bad):
         assets.image_path("sess1", ImageKind.cover, claim_id=bad)
 
 
+# --- repo_relative ----------------------------------------------------------
+#
+# #53: assert what the real path-construction code PRODUCES, not what a test
+# hands write_manifest/read_manifest as a literal string (that only proves
+# the round-trip doesn't mangle a string — see
+# test_manifest_path_recorded_repo_relative_posix_round_trips_unchanged
+# below, and the issue's own account of why that test didn't catch the bug).
+
+def test_repo_relative_of_a_real_cover_path_is_repo_relative_posix():
+    path = assets.image_path("sess1", ImageKind.cover)
+    result = assets.repo_relative(path)
+
+    assert result == "outputs/images/sess1/cover.png"
+    assert not result.startswith("/")
+    assert "\\" not in result
+    assert str(assets._REPO_ROOT) not in result
+
+
+def test_repo_relative_of_a_real_explainer_path_is_repo_relative_posix():
+    path = assets.image_path("sess1", ImageKind.explainer, claim_id="c17")
+    result = assets.repo_relative(path)
+
+    assert result == "outputs/images/sess1/c17.png"
+    assert not result.startswith("/")
+    assert "\\" not in result
+    assert str(assets._REPO_ROOT) not in result
+
+
+def test_repo_relative_of_a_real_image_dir_path_is_repo_relative_posix():
+    """`image_dir`'s return value must relativize the same way `image_path`'s
+    does — both are `Path`s built from the same `_IMAGES_DIR`."""
+    path = assets.image_dir("sess1") / "cover.png"
+    assert assets.repo_relative(path) == "outputs/images/sess1/cover.png"
+
+
 # --- write_manifest / read_manifest ----------------------------------------
 
 def _full_asset(**overrides) -> ImageAsset:

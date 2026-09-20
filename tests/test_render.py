@@ -661,3 +661,59 @@ def test_uncited_asset_listed_in_provenance_but_injected_nowhere():
     md = render_markdown(out, include_provenance=True)
     assert "`c99`" in md          # provenance still lists it
     assert "c99 图解" not in md   # never injected anywhere
+
+
+# --- #53: rendered Markdown never leaks an absolute filesystem path --------
+#
+# The fixtures above (`_cover_asset`/`_explainer_asset`) hand-type a
+# repo-relative `path=` string — that only proves render.py doesn't mangle
+# whatever string it's given, the same gap #53 flagged in #24's manifest
+# round-trip test. This test instead builds the `ImageAsset.path` the way
+# `api.visuals` actually does (`api.assets.image_path` -> real bytes on disk
+# -> `api.assets.repo_relative`), so it fails if the production path ever
+# regresses back to absolute.
+
+def test_rendered_markdown_embeds_the_real_repo_relative_path_not_absolute():
+    from api import assets
+
+    cover_path = assets.image_path("sess1", ImageKind.cover)
+    cover_path.write_bytes(b"fake-png-bytes")
+    explainer_path = assets.image_path("sess1", ImageKind.explainer, claim_id="c1")
+    explainer_path.write_bytes(b"fake-png-bytes")
+
+    cover = ImageAsset(
+        kind=ImageKind.cover,
+        path=assets.repo_relative(cover_path),
+        alt="封面配图",
+        generated=True,
+        prompt="一张关于神经元的插画",
+    )
+    explainer = ImageAsset(
+        kind=ImageKind.explainer,
+        claim_id="c1",
+        path=assets.repo_relative(explainer_path),
+        alt="c1 图解",
+    )
+
+    # Sanity: the fixture-building code above really did produce a
+    # repo-relative string, not accidentally an absolute one — otherwise
+    # this test would pass for the wrong reason.
+    assert not cover.path.startswith("/")
+    assert not explainer.path.startswith("/")
+    assert cover.path == "outputs/images/sess1/cover.png"
+    assert explainer.path == "outputs/images/sess1/c1.png"
+
+    out = _output(
+        platform_outputs=[
+            PlatformOutput(platform=Platform.wechat, body="正文引用了 (c1)。"),
+        ],
+        images=[cover, explainer],
+    )
+    md = render_markdown(out, include_provenance=True)
+
+    assert f"![封面配图]({cover.path})" in md
+    assert f"![c1 图解]({explainer.path})" in md
+    # no absolute path anywhere in the rendered output, in particular not
+    # the machine-specific repo root that produced this run
+    assert str(assets._REPO_ROOT) not in md
+    assert "](/" not in md  # a Markdown image link never starts with '/'
