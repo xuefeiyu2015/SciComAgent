@@ -25,6 +25,34 @@ it a fixed-width fake and assert exact positions. #26 then does the only thing
 left to do — hand `CardLayout`'s fields to Pillow's draw calls, computing no
 position of its own.
 
+THE COMPOSITION RULE (#65), in one sentence: **the headline block (the figure
+over the claim, both left-aligned on the margin) is centred on the card's
+upper-third line, and the qualifier is a footer anchored to the bottom
+margin, one `CARD_GAP` above the `id_tag`.**
+
+Why a thirds anchor and not vertical centring. Until #65 the card stacked
+downward from `CARD_MARGIN` and simply stopped, so a real 1080x1080 card put
+every element in the top 14% and left an 892px blank band below it — correct
+by every faithfulness criterion and unreadable as anything but an error page.
+A card has two jobs on it, not one: a headline to be read first and a
+qualifier that must be read but read last. Centring the whole stack as a
+single block says they are one thing and leaves a dead band under it; putting
+the headline on the upper-third line and the qualifier on the bottom margin
+gives each of them a line of the canvas to sit on, which is what makes the
+white space read as deliberate rather than as missing content. The `id_tag`
+keeps its bottom-right corner: it is provenance, not composition, and #26's
+renderer and #43's fit checks both already speak in terms of that corner.
+
+What this rule deliberately does NOT do is scale type to the canvas. Every
+type size here is pinned from below by the elision fixtures in
+`tests/faithfulness/test_claimcard_faithfulness.py`, which declare, by hand,
+the exact string a claim elides to on a narrow canvas; those strings are a
+function of the font size, so raising `FONT_SIZE_QUALIFIER`,
+`FONT_SIZE_CLAIM_WITH_FIGURE` or `FONT_SIZE_FIGURE` by as little as 2px
+changes what the card refuses and what it cuts. Faithfulness beats
+appearance, so the sizes stay and only the composition moves (see the comment
+on #65).
+
 Two rules from CLAUDE.md #1-2 shape every decision here:
   - A number/magnitude may be written, but only as a verbatim substring of the
     claim — `figure_of` extracts, it never reformats.
@@ -59,6 +87,12 @@ from api.schema import Claim
 
 CARD_MARGIN = 32   # px, all four sides
 CARD_GAP = 16      # px, vertical gap between stacked elements
+
+# The line the headline block (figure + claim) is centred on: `height //
+# HEADLINE_ANCHOR_DIVISOR`, i.e. the card's upper-third line. An integer
+# divisor rather than a float fraction so the whole layout stays integer
+# arithmetic and a test can recompute every position by hand (#65).
+HEADLINE_ANCHOR_DIVISOR = 3
 
 FONT_SIZE_ID = 14              # corner provenance tag (claim.id, e.g. "c17")
 FONT_SIZE_QUALIFIER = 20       # footer qualifier line
@@ -509,22 +543,30 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
     source of text metrics (see `Measure`); this function never imports a font
     library and never reads or writes anything.
 
-    Layout, top to bottom inside a `CARD_MARGIN` border:
-      1. the figure (if `claim.claim` carries a numeral), centred
-      2. the claim text, elided from the end if it does not fit
-      3. the qualifier, verbatim, never elided
-    plus a small `claim.id` tag pinned to the bottom-right corner, for the
-    same provenance reason `api.markers` puts `(c17)` next to a sentence: the
-    card should be traceable back to its ledger entry.
+    Composition — two blocks inside a `CARD_MARGIN` border, not one stack
+    (#65; see the module docstring for why):
+
+      HEADLINE, one left-aligned block centred on the card's upper-third
+      line (`height // HEADLINE_ANCHOR_DIVISOR`), clamped so it never leaves
+      the band between the top margin and the footer:
+        1. the figure (if `claim.claim` carries a numeral)
+        2. the claim text, elided from the end if it does not fit
+
+      FOOTER, measured up from the bottom margin:
+        3. the qualifier, verbatim, never elided, one `CARD_GAP` above
+        4. the `claim.id` tag in the bottom-right corner — unchanged by #65,
+           for the same provenance reason `api.markers` puts `(c17)` next to
+           a sentence: the card should be traceable back to its ledger entry.
 
     Returns `None` when there is nothing to render (`claim.claim == ""`), when
     the qualifier alone does not fit `size` (it is never elided, so nothing
     can be done), when the claim does not fit even fully elided, when the
     figure (a verbatim extracted numeral, never elided) does not fit, when
     the `id_tag` (a verbatim ledger id, never elided) does not fit the card's
-    width, or when the figure/claim/qualifier/id_tag stack does not fit the
-    card's height even after eliding the claim — refusing beats overflowing,
-    dropping the qualifier, or truncating the figure/id.
+    width, or when the headline and the footer do not both fit the card's
+    height with a `CARD_GAP` between them, even after eliding the claim —
+    refusing beats overflowing, dropping the qualifier, or truncating the
+    figure/id.
     """
     if not claim.claim:
         return None
@@ -551,29 +593,55 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
     if id_w > available_width:
         return None  # the id tag is a verbatim ledger id; it is never elided
 
-    y = CARD_MARGIN
-    figure_el: TextElement | None = None
-    if figure_text:
-        figure_w, figure_h = measure(figure_text, FONT_SIZE_FIGURE)
-        figure_x = CARD_MARGIN + max((available_width - figure_w) // 2, 0)
-        figure_el = TextElement(text=figure_text, x=figure_x, y=y, font_size=FONT_SIZE_FIGURE)
-        y += figure_h + CARD_GAP
-
-    _claim_w, claim_h = measure(claim_text, claim_font_size)
-    claim_el = TextElement(text=claim_text, x=CARD_MARGIN, y=y, font_size=claim_font_size)
-    y += claim_h + CARD_GAP
-
+    # --- the footer, measured from the bottom margin upward ------------------
+    # The id tag's corner is unchanged (#43, #65: provenance, not
+    # composition); the qualifier sits one CARD_GAP above it, so the two read
+    # as one footer band and a long qualifier can never run under the tag.
     _qualifier_w, qualifier_h = measure(claim.qualifier, FONT_SIZE_QUALIFIER)
-    qualifier_el = TextElement(
-        text=claim.qualifier, x=CARD_MARGIN, y=y, font_size=FONT_SIZE_QUALIFIER
-    )
-    y += qualifier_h
-
-    if y + id_h + CARD_MARGIN > height:
-        return None  # the stack, including the id tag, does not fit the card height
-
     id_x = max(width - CARD_MARGIN - id_w, CARD_MARGIN)
     id_y = max(height - CARD_MARGIN - id_h, CARD_MARGIN)
+    qualifier_y = id_y - CARD_GAP - qualifier_h
+
+    # --- the headline block: figure over claim, as one unit ------------------
+    figure_h = 0
+    if figure_text:
+        _figure_w, figure_h = measure(figure_text, FONT_SIZE_FIGURE)
+    _claim_w, claim_h = measure(claim_text, claim_font_size)
+    headline_h = claim_h + (figure_h + CARD_GAP if figure_text else 0)
+
+    # The band the headline may occupy: top margin down to one CARD_GAP above
+    # the qualifier. Refusing here is the same fit-or-refuse posture the old
+    # downward stack took, one CARD_GAP stricter: the headline and the footer
+    # are two blocks now, and two blocks that touch are one block.
+    region_top = CARD_MARGIN
+    region_bottom = qualifier_y - CARD_GAP
+    if region_bottom - region_top < headline_h:
+        return None  # headline + footer + margins do not fit the card height
+
+    # Centred on the card's upper-third line, clamped into that band: on a
+    # canvas too short for the anchor the block simply sits as high as it can,
+    # which is the pre-#65 behaviour and never off-canvas.
+    anchor = height // HEADLINE_ANCHOR_DIVISOR
+    headline_top = max(region_top, min(anchor - headline_h // 2, region_bottom - headline_h))
+
+    figure_el: TextElement | None = None
+    if figure_text:
+        # Left-aligned ON the claim, not centred over it (#65). A centred
+        # numeral above a left-aligned claim line reads as two unrelated
+        # elements — the reason this is a composition change and not a
+        # styling one is visible the moment a card is actually rendered: the
+        # figure has to sit over the first character of the sentence it
+        # belongs to for the two to read as one headline.
+        figure_el = TextElement(
+            text=figure_text, x=CARD_MARGIN, y=headline_top, font_size=FONT_SIZE_FIGURE
+        )
+
+    claim_y = headline_top + (figure_h + CARD_GAP if figure_text else 0)
+    claim_el = TextElement(text=claim_text, x=CARD_MARGIN, y=claim_y, font_size=claim_font_size)
+
+    qualifier_el = TextElement(
+        text=claim.qualifier, x=CARD_MARGIN, y=qualifier_y, font_size=FONT_SIZE_QUALIFIER
+    )
     id_el = TextElement(text=claim.id, x=id_x, y=id_y, font_size=FONT_SIZE_ID)
 
     return CardLayout(
@@ -938,6 +1006,7 @@ __all__ = [
     "FONT_SIZE_FIGURE",
     "FONT_SIZE_ID",
     "FONT_SIZE_QUALIFIER",
+    "HEADLINE_ANCHOR_DIVISOR",
     "CardLayout",
     "CardLayoutRefusedError",
     "FontRefusedError",

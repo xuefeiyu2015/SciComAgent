@@ -22,12 +22,14 @@ import inspect
 from api.claimcard import (
     CARD_GAP,
     CARD_MARGIN,
+    CARD_SIZE,
     ELLIPSIS,
     FONT_SIZE_CLAIM_NO_FIGURE,
     FONT_SIZE_CLAIM_WITH_FIGURE,
     FONT_SIZE_FIGURE,
     FONT_SIZE_ID,
     FONT_SIZE_QUALIFIER,
+    HEADLINE_ANCHOR_DIVISOR,
     compute_card_layout,
     figure_of,
 )
@@ -108,6 +110,15 @@ def test_cjk_claim_with_no_numeral_lays_out_cleanly():
 
 
 # --- exact positions, by hand, against the module's own constants --------
+#
+# These pin the COMPOSITION (#65): a headline block (figure over claim, both
+# left-aligned on CARD_MARGIN) centred on the card's upper-third line, and a footer measured up from the
+# bottom margin — the qualifier one CARD_GAP above the id tag, the id tag in
+# its unchanged corner. Before #65 the three text elements stacked downward
+# from CARD_MARGIN and stopped, which put every one of them in the top 14% of
+# a 1080x1080 card. The numbers below are recomputed by hand from the
+# module's own constants, not softened: a snapshot test that stops being
+# exact stops being a test.
 
 def test_exact_positions_with_a_figure_present():
     claim = _claim(id="c9", claim="疗效提升了42%", qualifier="II期临床，样本量小")
@@ -115,34 +126,88 @@ def test_exact_positions_with_a_figure_present():
 
     layout = compute_card_layout(claim, size, _measure)
 
-    available_width = size[0] - 2 * CARD_MARGIN
-    figure_text = "42"
-    figure_w = len(figure_text) * FONT_SIZE_FIGURE
-    figure_x = CARD_MARGIN + (available_width - figure_w) // 2
-    figure_y = CARD_MARGIN
-    assert layout.figure is not None
-    assert layout.figure.text == figure_text
-    assert layout.figure.x == figure_x
-    assert layout.figure.y == figure_y
-    assert layout.figure.font_size == FONT_SIZE_FIGURE
+    # the footer, from the bottom margin up.
+    id_w = len(claim.id) * FONT_SIZE_ID
+    id_y = size[1] - CARD_MARGIN - FONT_SIZE_ID
+    assert layout.id_tag.text == "c9"
+    assert layout.id_tag.x == size[0] - CARD_MARGIN - id_w
+    assert layout.id_tag.y == id_y
+    assert layout.id_tag.font_size == FONT_SIZE_ID
 
-    claim_y = figure_y + FONT_SIZE_FIGURE + CARD_GAP
-    assert layout.claim.text == claim.claim
-    assert layout.claim.x == CARD_MARGIN
-    assert layout.claim.y == claim_y
-    assert layout.claim.font_size == FONT_SIZE_CLAIM_WITH_FIGURE
-
-    qualifier_y = claim_y + FONT_SIZE_CLAIM_WITH_FIGURE + CARD_GAP
+    qualifier_y = id_y - CARD_GAP - FONT_SIZE_QUALIFIER
     assert layout.qualifier.text == claim.qualifier
     assert layout.qualifier.x == CARD_MARGIN
     assert layout.qualifier.y == qualifier_y
     assert layout.qualifier.font_size == FONT_SIZE_QUALIFIER
 
-    id_w = len(claim.id) * FONT_SIZE_ID
-    assert layout.id_tag.text == "c9"
-    assert layout.id_tag.x == size[0] - CARD_MARGIN - id_w
-    assert layout.id_tag.y == size[1] - CARD_MARGIN - FONT_SIZE_ID
-    assert layout.id_tag.font_size == FONT_SIZE_ID
+    # the headline block, centred on the upper-third line.
+    headline_h = FONT_SIZE_FIGURE + CARD_GAP + FONT_SIZE_CLAIM_WITH_FIGURE
+    headline_top = size[1] // HEADLINE_ANCHOR_DIVISOR - headline_h // 2
+    # not clamped on this canvas: the band runs from CARD_MARGIN to one
+    # CARD_GAP above the qualifier, and the block fits inside it whole.
+    assert CARD_MARGIN <= headline_top
+    assert headline_top + headline_h <= qualifier_y - CARD_GAP
+
+    assert layout.figure is not None
+    assert layout.figure.text == "42"
+    # the figure is left-aligned ON the claim: one headline block, not a
+    # centred numeral floating over a left-aligned sentence (#65).
+    assert layout.figure.x == CARD_MARGIN
+    assert layout.figure.y == headline_top
+    assert layout.figure.font_size == FONT_SIZE_FIGURE
+
+    claim_y = headline_top + FONT_SIZE_FIGURE + CARD_GAP
+    assert layout.claim.text == claim.claim
+    assert layout.claim.x == CARD_MARGIN
+    assert layout.claim.y == claim_y
+    assert layout.claim.font_size == FONT_SIZE_CLAIM_WITH_FIGURE
+
+    # the arithmetic above, spelled out once as literals, so a change to the
+    # composition has to be written down twice before it can pass quietly.
+    assert (layout.figure.y, layout.claim.y) == (283, 355)
+    assert (layout.qualifier.y, layout.id_tag.y) == (918, 954)
+
+
+def test_exact_positions_without_a_figure():
+    # No numeral: the headline block is the claim line alone, still centred
+    # on the upper-third line, and the footer is unchanged.
+    claim = _claim(id="c1", claim="细胞通过有丝分裂一分为二", qualifier="小鼠模型，初步结果")
+    size = (1000, 1000)
+
+    layout = compute_card_layout(claim, size, _measure)
+
+    assert layout.figure is None
+
+    headline_top = size[1] // HEADLINE_ANCHOR_DIVISOR - FONT_SIZE_CLAIM_NO_FIGURE // 2
+    assert layout.claim.x == CARD_MARGIN
+    assert layout.claim.y == headline_top
+    assert layout.claim.font_size == FONT_SIZE_CLAIM_NO_FIGURE
+
+    id_y = size[1] - CARD_MARGIN - FONT_SIZE_ID
+    assert layout.qualifier.y == id_y - CARD_GAP - FONT_SIZE_QUALIFIER
+    assert layout.id_tag.y == id_y
+
+    assert (layout.claim.y, layout.qualifier.y, layout.id_tag.y) == (313, 918, 954)
+
+
+def test_the_card_uses_the_canvas_rather_than_its_top_sixth():
+    # The defect #65 reports, stated as a property of the real card size:
+    # content began at CARD_MARGIN and ended at y=156 of 1080 (14% used,
+    # 892px of blank below it). Nothing here is about beauty — it is the one
+    # measurement the bug report made.
+    claim = _claim(id="c17", claim="样本量为 4823 名参与者", qualifier="单中心")
+
+    layout = compute_card_layout(claim, CARD_SIZE, _measure)
+
+    assert layout is not None
+    _width, height = CARD_SIZE
+    top = layout.figure.y
+    bottom = layout.id_tag.y + FONT_SIZE_ID
+
+    assert top > height // 6, "the headline still sits in the top sixth of the card"
+    assert bottom - top > height // 2, "content still occupies a minority of the canvas"
+    # and the qualifier is a footer, not a line floating mid-canvas.
+    assert layout.qualifier.y + FONT_SIZE_QUALIFIER > height - 3 * CARD_MARGIN
 
 
 # --- elision -------------------------------------------------------------
