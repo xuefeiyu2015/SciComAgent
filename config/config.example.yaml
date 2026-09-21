@@ -68,6 +68,6 @@ pipeline:
 # Optional env key, never stored here (byo_key):
 #   GOOGLE_API_KEY  — required for cover generation; env only, never in config
 images:
-  model: env      # -> IMAGE_MODEL      (image model; unset -> cover generation is skipped with an image_error notice)
+  model: env      # -> IMAGE_MODEL      (image model, e.g. gemini-2.5-flash-image — what a standard Gemini API key serves; an imagen-* model works on a key that has one; unset -> cover generation is skipped with an image_error notice)
   cap: env        # -> IMAGE_CAP        (max explainer cards per run; default 3, non-numeric falls back to 3, negative means none)
   font_path: env  # -> IMAGE_FONT_PATH  (font the claim cards are drawn with; a missing path falls back to system fonts, and if none load the card is refused rather than drawn as tofu)
