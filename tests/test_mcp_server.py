@@ -583,6 +583,43 @@ def test_no_tool_raises_on_a_malformed_or_unsafe_session_id():
         assert redraft_out.status == Status.failed
 
 
+def test_no_tool_raises_on_a_none_session_id():
+    """`None` is the case the malformed-id sweep above missed.
+
+    Every tool here has an `except Exception` fallback, and three of them used
+    to echo the caller's raw `session_id` straight back into
+    `JobProgress(session_id=...)` / `AgentOutput(session_id=...)`. Both models
+    declare `session_id: str`, so with `None` the FALLBACK ITSELF raised — the
+    error escaped the handler written to contain it, breaking this file's
+    "never crashes the tool" contract for one specific input.
+
+    `redraft` was always safe because it omits the field and lets it default;
+    that is the pattern the other three now follow via `session_id or ""`.
+    """
+    progress = job_status(None)  # type: ignore[arg-type]
+    assert progress.state == JobState.lost
+    assert progress.session_id == ""
+
+    for out in (
+        job_result(None),  # type: ignore[arg-type]
+        illustrate(session_id=None, images=ImageMode.cover),  # type: ignore[arg-type]
+        redraft(session_id=None, language=None, liveliness=5),  # type: ignore[arg-type]
+    ):
+        assert out.status == Status.failed
+        assert out.session_id == ""
+        assert out.notices, "a failure must say why"
+
+
+def test_generate_is_unaffected_by_the_none_session_id_fix(monkeypatch):
+    """The fix touches only failure paths; a real run still reports its own id."""
+    monkeypatch.setattr(jobs, "run", _accepting(
+        lambda inp: AgentOutput(status=Status.needs_review)
+    ))
+    out = generate(source="s", source_type=SourceType.url, wait_seconds=5)
+    assert out.session_id
+    assert job_status(out.session_id).session_id == out.session_id
+
+
 def test_job_status_reports_progress(monkeypatch):
     monkeypatch.setattr(jobs, "run", _accepting(
         lambda inp: AgentOutput(status=Status.needs_review)

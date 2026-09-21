@@ -296,7 +296,7 @@ def job_status(session_id: str) -> JobProgress:
         return jobs.status(session_id)
     except Exception as exc:  # never crash the tool
         return JobProgress(
-            session_id=session_id,
+            session_id=session_id or "",
             state=JobState.lost,
             message=f"status unavailable: {exc}",
         )
@@ -364,7 +364,7 @@ def illustrate(session_id: str, images: ImageMode, force: bool = False) -> Agent
     except Exception as exc:  # never crash the tool — surface as a failed result
         return AgentOutput(
             status=Status.failed,
-            session_id=session_id,
+            session_id=session_id or "",
             notices=[
                 Notice(code=NoticeCode.fetch_error, message=f"illustrate failed: {exc}")
             ],
@@ -400,7 +400,7 @@ def _collect(session_id: str, kind: JobKind | None = None) -> AgentOutput:
     if out is None:
         return AgentOutput(
             status=Status.failed,
-            session_id=session_id,
+            session_id=session_id or "",
             notices=[
                 Notice(
                     code=NoticeCode.unknown_session,
