@@ -150,7 +150,7 @@ tools:
     description: Generate image assets (cover and/or per-claim explainers) for an EARLIER RUN that already finished, without redrafting it. Use this for a run made before images existed, or one drafted with images=off. Never publishes
     parameters:
       session_id: { required: true, description: "The run to illustrate, from `generate` or `redraft`. Must already be finished — a still-running job is refused" }
-      images:     { required: true, allowed: [off, cover, all], description: "How much to generate: `cover` for just the cover image, `all` for the cover plus one explainer image per claim. `off` is accepted but generates nothing" }
+      images:     { required: true, allowed: ["off", cover, all], description: "How much to generate: `cover` for just the cover image, `all` for the cover plus one explainer image per claim. `off` is accepted but generates nothing" }
       force:      { required: false, default: false, description: "Regenerate images even if this session already has some. false (default) leaves existing images alone" }
     # The SAME AgentOutput contract as `generate`, under the SAME session_id:
     # the run's stored result is rewritten in place, so a later job_result /
