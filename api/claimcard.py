@@ -156,10 +156,18 @@ _SIGN_CHARS = (
     "\ufb29"    # HEBREW LETTER ALTERNATIVE PLUS SIGN
 )
 
+# A COMPLETE exponent: the marker, an optional sign, at least one digit. Named
+# and shared on purpose — `_FIGURE_RE` below uses it to decide what to extract
+# and `_binder_end` further down uses it to decide where a cut may fall, and
+# those two have to agree about where a number ends. Two copies of the pattern
+# would be free to drift into disagreeing (#57). The internal sign is ASCII
+# only: `1e\u22125` is not a form anything writes.
+_EXPONENT_RE = re.compile(r"[eE][-+]?\d+")
+
 _FIGURE_RE = re.compile(
     rf"(?P<sign>[{re.escape(_SIGN_CHARS)}])?"  # 1. the sign, if there is one
     r"\d+(?:\.\d+)?"                          # 2. the numeral
-    r"(?:[eE][-+]?\d+)?"                       # 3. a complete exponent
+    rf"(?:{_EXPONENT_RE.pattern})?"            # 3. a complete exponent
 )
 
 
@@ -261,29 +269,91 @@ def figure_of(text: str) -> str:
 # is about magnitudes, not characters.
 #
 # A numeral run is therefore the span that has to be shown whole or not at
-# all:
-#   - decimal digits, ASCII `0-9` and fullwidth `０-９`;
-#   - the CJK numerals, so `四千八` is never shown for `四千八百二十三` —
-#     a reader parses that fragment as 4800;
-#   - a `.` or `,` sitting BETWEEN two digits, so `2.5` is never shown as
-#     `2.` or `2`, and `12,500` is never shown as `12,5`;
-#   - an immediately trailing `%` / `％` / `‰`, because a cut between `48`
-#     and `%` moves the magnitude by a factor of 100.
+# all. THE RULE, in one sentence: a run is one QUANTITY, and a quantity ends
+# only where a reader's eye ends it — at a space or at a word. Three clauses
+# follow from that, and only the first is about which characters are numerals:
+#
+#   1. NUMERAL CHARACTERS. Decimal digits (ASCII `0-9` and fullwidth
+#      `０-９`) and the CJK numerals, so `四千八` is never shown for
+#      `四千八百二十三` — a reader parses that fragment as 4800.
+#
+#   2. BINDERS: material BETWEEN two numerals that composes them into one
+#      quantity rather than ending the first. Two forms, and neither is a list
+#      of examples:
+#        - punctuation or a symbol (Unicode category P* or S*), because
+#          punctuation between two numerals never closes a quantity, it builds
+#          one: `2.5`, `12,500`, `12-18`, `12–18`, `1/3`, `3:1`, `12:30`,
+#          `10^5`, `50%-60%` are one span each;
+#        - a complete exponent (`_EXPONENT_RE`), the one binder written with a
+#          letter, because scientific notation is a single numeric literal and
+#          #58 already decided at extraction that `1e5` is emitted whole. Cut
+#          placement has to agree with extraction or the module contradicts
+#          itself about where that number ends. `5e-cigarette` has no complete
+#          exponent, so it does not bind — same answer #58 gives.
+#      `12` shown for `12-18` is a RANGE displayed as its LOWER BOUND: the
+#      card states a quantity the claim did not, which is CLAUDE.md #1, not a
+#      readability nit. Same for `1` shown for `1/3` or `1e5`, and `12` for
+#      `12:30`.
+#
+#   3. A TRAILING SCALE MARK (`%`, `‰`, and their Unicode kin —
+#      `_NUMERAL_SCALES`), across any whitespace in between. A scale mark is
+#      not a unit that follows the number, it MULTIPLIES it: dropping it moves
+#      the magnitude by 100 or 1000, the hazard #55 exists to prevent. Whether
+#      the writer typed `48%` or `48 %` is typography — `48 %` is the standard
+#      form in French and in several style guides — so a rule that keyed on
+#      adjacency would be measuring the space bar, not the meaning (#57).
+#
+# WHY CATEGORIES AND NOT LISTS. Every clause above names a Unicode property or
+# a named pattern, never an enumeration of the characters somebody thought of.
+# A list is the failure mode that reopened #58: its first attempt guarded with
+# an ASCII-only letter class and fabricated a minus on `Aβ-42`. The same
+# pressure is here — `-` binds a range in `12-18` but signs a number in
+# `shifted -3.2`, and `12–18` uses an en dash — and the answer is the same:
+# ask what CLASS the character is in, and what is on each side of it. That
+# also makes this rule and #58's sign rule two consequences of ONE reading
+# rather than two rules that could contradict each other: both say a sign-ish
+# character standing between two word characters is glue, not a sign. `12-18`
+# is where they meet — #58 drops the hyphen from the figure (`12`), this keeps
+# the whole span together when choosing a cut.
+#
+# THE ASYMMETRY THAT JUSTIFIES ERRING WIDE. Binding too much costs readability
+# (elision backs up further, or refuses); binding too little states a wrong
+# magnitude in 28px type. Only one of those is a faithfulness failure, so
+# where the reading is ambiguous this takes the wider span.
 #
 # Deliberately NOT part of a run: word-form units (`2.5x`, `12 points`,
-# `4823 人`). Eliding `2.5x improvement` to `2.5…` shows the source's number
-# complete and unaltered — the reader loses the unit, not the value, and the
-# trailing ellipsis already says text follows. That is a readability limit,
-# not a faithfulness one (#55), and widening the run to swallow following
-# words would make elision refuse far more often for no provenance gain.
+# `4823 人`). A word ENDS a quantity — that is clause 2's whole point — so
+# eliding `2.5x improvement` to `2.5…` shows the source's number complete and
+# unaltered: the reader loses the unit, not the value, and the trailing
+# ellipsis already says text follows. That is a readability limit, not a
+# faithfulness one (#55). It also keeps two numbers in CJK prose, which has no
+# spaces, from binding into one enormous run: `三名参与者5组` has letters
+# between its numerals, so it is two runs.
 #
 # This is a separate notion from `_FIGURE_RE` above and is not derived from
 # it: `figure_of` *extracts* the one numeral to display, this decides where a
-# cut is allowed to fall.
+# cut is allowed to fall. `_EXPONENT_RE` is the one piece they share, and they
+# share it precisely so they cannot disagree about it.
 _DECIMAL_DIGIT_RE = re.compile(r"\d")  # Unicode decimal digits: 0-9 and ０-９
 _CJK_NUMERALS = frozenset("〇一二三四五六七八九十百千万亿兆两半倍分之")
-_NUMERAL_SEPARATORS = frozenset(".,")
-_NUMERAL_SUFFIXES = frozenset("%％‰")
+
+# Every character whose Unicode NAME says PERCENT, PER MILLE or PER TEN
+# THOUSAND, less the invisible TAG PERCENT SIGN (category Cf, not text). Read
+# off `unicodedata` rather than typed from memory — a hand-typed set of three
+# is exactly how the fullwidth sign came to be missing in #58 — and then
+# spelled out here rather than rediscovered by walking the code space on every
+# import, the same trade `_SIGN_CHARS` makes above. The test re-derives it
+# from the database and fails if this set ever drifts from it.
+_NUMERAL_SCALES = frozenset(
+    "%"         # U+0025 PERCENT SIGN
+    "\u0609"    # ARABIC-INDIC PER MILLE SIGN
+    "\u060a"    # ARABIC-INDIC PER TEN THOUSAND SIGN
+    "\u066a"    # ARABIC PERCENT SIGN
+    "\u2030"    # PER MILLE SIGN
+    "\u2031"    # PER TEN THOUSAND SIGN
+    "\ufe6a"    # SMALL PERCENT SIGN
+    "\uff05"    # FULLWIDTH PERCENT SIGN
+)
 
 
 def _is_decimal_digit(ch: str) -> bool:
@@ -292,6 +362,55 @@ def _is_decimal_digit(ch: str) -> bool:
 
 def _is_numeral_char(ch: str) -> bool:
     return _is_decimal_digit(ch) or ch in _CJK_NUMERALS
+
+
+def _is_binder_char(ch: str) -> bool:
+    """Whether `ch` can COMPOSE a quantity rather than end one.
+
+    Unicode general category P* (punctuation) or S* (symbol). A category, not
+    an alphabet: to a reader `.`, `,`, `-`, `–`, `/`, `:`, `^` and `％` are one
+    class, and a rule written as the list of them somebody happened to think
+    of is a rule with a hole in it (#58). Letters, marks and whitespace are
+    excluded because those are what ENDS a quantity.
+    """
+    return unicodedata.category(ch)[0] in ("P", "S")
+
+
+def _binder_end(text: str, i: int) -> int | None:
+    """Index just past the binder at `text[i:]`, or `None` if there is none.
+
+    `text[i]` is known not to be a numeral character, and `text[i - 1]` is.
+    A binder is only a binder when a numeral follows it: `48% in the trial`
+    has punctuation after the number but a space and a word after that, so
+    the `%` is a trailing scale mark (clause 3), not glue.
+    """
+    n = len(text)
+    if i > 0 and _is_decimal_digit(text[i - 1]):
+        exponent = _EXPONENT_RE.match(text, i)
+        if exponent is not None:
+            return exponent.end()  # "1e5" is one literal, never "1"
+    j = i
+    while j < n and _is_binder_char(text[j]):
+        j += 1
+    if i < j < n and _is_numeral_char(text[j]):
+        return j  # punctuation with numerals on both sides: "12-18", "2.5"
+    return None
+
+
+def _scale_end(text: str, i: int) -> int:
+    """Index just past a trailing scale mark at `text[i:]`, else `i` unmoved.
+
+    Whitespace between the numeral and the mark is stepped over and taken
+    into the run: `48 %` is one quantity, and a cut after the `48` renders a
+    card that is wrong by a factor of 100 (#57).
+    """
+    n = len(text)
+    j = i
+    while j < n and text[j].isspace():
+        j += 1
+    if j < n and text[j] in _NUMERAL_SCALES:
+        return j + 1
+    return i
 
 
 def _numeral_runs(text: str) -> list[tuple[int, int]]:
@@ -306,17 +425,12 @@ def _numeral_runs(text: str) -> list[tuple[int, int]]:
         while j < n:
             if _is_numeral_char(text[j]):
                 j += 1
-            elif (
-                text[j] in _NUMERAL_SEPARATORS
-                and j + 1 < n
-                and _is_decimal_digit(text[j - 1])
-                and _is_decimal_digit(text[j + 1])
-            ):
-                j += 2  # an interior separator: "2.5", "12,500"
-            else:
+                continue
+            binder = _binder_end(text, j)
+            if binder is None:
                 break
-        if j < n and text[j] in _NUMERAL_SUFFIXES:
-            j += 1
+            j = binder
+        j = _scale_end(text, j)
         runs.append((i, j))
         i = j
     return runs

@@ -520,14 +520,42 @@ def _qa_measure(text: str, font_size: int) -> tuple[int, int]:
 # `_numerals` above, a `.` or `,` sitting BETWEEN two digits, and — only where
 # `with_suffix` asks for it — an immediately trailing `%`/`％`/`‰`.
 #
-# The suffix is a parameter because the two invariants need different answers.
-# Comparing displayed runs against source runs must NOT attach the sign: the
-# figure slot holds `"48"` extracted from `"48%"` (#36's fixtures pin exactly
-# that, and the figure is never elided), so attaching it would make a correct
-# card look wrong. The cut-position invariant DOES attach it: a claim line cut
-# between `"48"` and `"%"` moves the magnitude by a factor of 100.
-_NUMERAL_SUFFIXES = "%％‰"
-_NUMERAL_SEPARATORS = ".,"
+# Both the suffix and the binders (#57) are parameters, because the two
+# invariants need different answers.
+#
+# Comparing displayed runs against source runs must NOT attach either. The
+# figure slot holds `"48"` extracted from `"48%"` (#36 pins exactly that) and
+# `"12"` extracted from `"12-18"` (#58 pins exactly that, the hyphen being a
+# joiner it must not show as a sign), and the figure is never elided — so a
+# scanner that attached the `%` or the `-18` would make a correct card look
+# wrong. That invariant keeps exactly the strength it had.
+#
+# The cut-position invariant attaches both, because it is about a different
+# question: not "is this string in the source" but "may the claim line END
+# here". A claim line cut between `"48"` and `"%"` moves the magnitude by a
+# factor of 100; one cut between `"12"` and `"-18"` states a range\'s lower
+# bound as the quantity. Both are CLAUDE.md #1 failures (#55, #57).
+# The scale marks, enumerated from the Unicode database by NAME: every
+# character called a PERCENT, PER MILLE or PER TEN THOUSAND sign. Derived
+# rather than typed (#57): the three characters `%％‰` this file used to
+# list are the three somebody thought of, and a listed alphabet is what
+# reopened #58. The scan stops at U+FFFF, which drops only TAG PERCENT SIGN
+# (U+E0025) — an invisible tag character, not text on a card.
+def _derive_scale_marks() -> tuple[str, ...]:
+    """Every character this file will call a scale mark, from `unicodedata`."""
+    names = ("PERCENT", "PER MILLE", "PER TEN THOUSAND")
+    found = []
+    for cp in range(0x20, 0x10000):
+        try:
+            name = unicodedata.name(chr(cp))
+        except ValueError:
+            continue
+        if any(word in name for word in names):
+            found.append(chr(cp))
+    return tuple(found)
+
+
+SCALE_MARKS: tuple[str, ...] = _derive_scale_marks()
 
 
 def _is_decimal_digit(ch: str) -> bool:
@@ -538,7 +566,80 @@ def _is_numeral_char(ch: str) -> bool:
     return _is_decimal_digit(ch) or ch in _CJK_NUMERALS
 
 
-def _run_spans(text: str, *, with_suffix: bool) -> list[tuple[int, int]]:
+def _separator_end(text: str, i: int) -> int | None:
+    """#55's interior-separator rule, unchanged and always on.
+
+    A `.` or `,` sitting BETWEEN two digits: `2.5` is one run, `12,500` is
+    one run. Kept as its own clause rather than folded into `_binder_end`
+    below so that the NARROW scanner — the one the displayed-run comparison
+    uses — keeps exactly the strength #55 gave it. Widening this file for #57
+    may not cost #55 an assertion.
+    """
+    if (
+        text[i] in ".,"
+        and i + 1 < len(text)
+        and _is_decimal_digit(text[i - 1])
+        and _is_decimal_digit(text[i + 1])
+    ):
+        return i + 2
+    return None
+
+
+def _binder_end(text: str, i: int) -> int | None:
+    """Index just past the binder at `text[i:]`, or `None` (#57).
+
+    A binder is material that glues two numerals into ONE quantity, so that a
+    cut inside the pair shows a fragment: `12-18` cut to `12` is a range
+    displayed as its lower bound. This file's definition is deliberately a
+    different SHAPE from production's, not a paraphrase of it — production
+    asks what Unicode category the characters are in; this one asks only
+    about the shape of the span:
+
+        a run of non-whitespace characters, flanked by numeral characters on
+        both sides, that is either a single character or contains no
+        alphanumeric character at all.
+
+    That is enough to bind `12-18`, `12–18`, `1e5`, `1/3`, `3:1`, `12:30`,
+    `2.5`, `12,500` and `50%-60%` without knowing which of those characters
+    are punctuation, which are letters and which are symbols — so it cannot
+    inherit an alphabet gap from production, which is the failure QA reported
+    on #55 (the old scanner imported nothing and still re-implemented the
+    same definition). Where the two disagree, this one is the wider: a single
+    letter between two digits (`3x4`) binds here and does not bind in
+    production. That direction is safe — it can only make this file complain
+    about a cut production allowed, never hide one.
+    """
+    n = len(text)
+    j = i
+    while j < n and not text[j].isspace() and not _is_numeral_char(text[j]):
+        j += 1
+    if not (i < j < n and _is_numeral_char(text[j])):
+        return None
+    glue = text[i:j]
+    if len(glue) > 1 and any(ch.isalnum() for ch in glue):
+        return None  # a word between two numbers ends the first one
+    return j
+
+
+def _scale_end(text: str, i: int) -> int:
+    """Index just past a trailing scale mark at `text[i:]`, else `i` (#57).
+
+    Whitespace in between is stepped over: `48 %` is one quantity however the
+    writer spaced it, and a card cut between the `48` and the `%` is wrong by
+    a factor of 100.
+    """
+    n = len(text)
+    j = i
+    while j < n and text[j].isspace():
+        j += 1
+    if j < n and text[j] in SCALE_MARKS:
+        return j + 1
+    return i
+
+
+def _run_spans(
+    text: str, *, with_suffix: bool, with_binders: bool
+) -> list[tuple[int, int]]:
     """Half-open `(start, end)` spans of every maximal numeral run in `text`."""
     spans: list[tuple[int, int]] = []
     i, n = 0, len(text)
@@ -550,17 +651,15 @@ def _run_spans(text: str, *, with_suffix: bool) -> list[tuple[int, int]]:
         while j < n:
             if _is_numeral_char(text[j]):
                 j += 1
-            elif (
-                text[j] in _NUMERAL_SEPARATORS
-                and j + 1 < n
-                and _is_decimal_digit(text[j - 1])
-                and _is_decimal_digit(text[j + 1])
-            ):
-                j += 2  # an interior separator: "2.5", "12,500"
-            else:
+                continue
+            step = _separator_end(text, j)  # #55's rule, in both modes
+            if step is None and with_binders:
+                step = _binder_end(text, j)  # #57's, only where asked for
+            if step is None:
                 break
-        if with_suffix and j < n and text[j] in _NUMERAL_SUFFIXES:
-            j += 1
+            j = step
+        if with_suffix:
+            j = _scale_end(text, j)
         spans.append((i, j))
         i = j
     return spans
@@ -568,7 +667,10 @@ def _run_spans(text: str, *, with_suffix: bool) -> list[tuple[int, int]]:
 
 def _numeral_runs(text: str) -> list[str]:
     """Every maximal numeral run in `text`, as strings, in order."""
-    return [text[start:end] for start, end in _run_spans(text, with_suffix=False)]
+    return [
+        text[start:end]
+        for start, end in _run_spans(text, with_suffix=False, with_binders=False)
+    ]
 
 
 @dataclass(frozen=True)
@@ -703,6 +805,93 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
         size=(456, 900),
         expected_claim_text="Vaccine efficacy reached…",
     ),
+    # --- #57: the two gaps in the rule above, one fixture per reported case -
+    # Each claim, canvas and expected string below was read off the defect
+    # report; the expected strings are hand-written, never computed. Every one
+    # of them renders the FRAGMENT named in the comment on unfixed code.
+    ElisionFixture(
+        # `48` for a claim that says `48 %`. One space defeated the adjacency
+        # test, and the card is then wrong by a factor of 100 — the exact
+        # hazard the fixture above was written to prevent.
+        name="whitespace_before_the_percent_sign",
+        claim=_claim(
+            id="c120",
+            claim="Vaccine efficacy reached 48 % in the trial overall",
+            qualifier="preliminary",
+        ),
+        size=(456, 900),
+        expected_claim_text="Vaccine efficacy reached…",
+    ),
+    ElisionFixture(
+        # `12` for `12-18`: a RANGE rendered as its LOWER BOUND.
+        name="hyphen_range_is_one_quantity",
+        claim=_claim(
+            id="c121",
+            claim="Participants aged 12-18 were enrolled in the trial",
+            qualifier="preliminary",
+        ),
+        size=(358, 900),
+        expected_claim_text="Participants aged…",
+    ),
+    ElisionFixture(
+        # The same range with an en dash, the form a copy editor leaves
+        # behind. A rule that listed `-` and stopped would pass the fixture
+        # above and fail this one.
+        name="en_dash_range_is_one_quantity",
+        claim=_claim(
+            id="c122",
+            claim="Participants aged 12–18 were enrolled in the trial",
+            qualifier="preliminary",
+        ),
+        size=(358, 900),
+        expected_claim_text="Participants aged…",
+    ),
+    ElisionFixture(
+        # `1` for `1e5`: the claim line understates by a factor of 100000.
+        # #58 already refuses to do this in the figure slot; the claim line
+        # has to agree with it.
+        name="exponent_is_one_quantity",
+        claim=_claim(
+            id="c123",
+            claim="Neurons numbered 1e5 per sample in the cortex",
+            qualifier="preliminary",
+        ),
+        size=(330, 900),
+        expected_claim_text="Neurons numbered…",
+    ),
+    ElisionFixture(
+        # `1` for `1/3`: a third of the participants becomes one of them.
+        name="fraction_is_one_quantity",
+        claim=_claim(
+            id="c124",
+            claim="About 1/3 of the participants completed the follow-up",
+            qualifier="preliminary",
+        ),
+        size=(176, 900),
+        expected_claim_text="About…",
+    ),
+    ElisionFixture(
+        # `3` for `3:1`: a ratio rendered as its first term.
+        name="ratio_is_one_quantity",
+        claim=_claim(
+            id="c125",
+            claim="The treated to control ratio was 3:1 in the study",
+            qualifier="preliminary",
+        ),
+        size=(554, 900),
+        expected_claim_text="The treated to control ratio was…",
+    ),
+    ElisionFixture(
+        # `12` for `12:30`: a clock time rendered as an hour count.
+        name="clock_time_is_one_quantity",
+        claim=_claim(
+            id="c126",
+            claim="Sessions began at 12:30 on the second day of testing",
+            qualifier="preliminary",
+        ),
+        size=(358, 900),
+        expected_claim_text="Sessions began at…",
+    ),
 )
 
 _ELISION_LAID_OUT = tuple(
@@ -783,7 +972,7 @@ def test_elision_never_cuts_inside_a_numeral_run(
     )
     cut = len(stem)
 
-    for start, end in _run_spans(claim.claim, with_suffix=True):
+    for start, end in _run_spans(claim.claim, with_suffix=True, with_binders=True):
         assert not (start < cut < end), (
             f"[{name}] the claim was cut at index {cut}, strictly inside the "
             f"numeral run {claim.claim[start:end]!r} (indices {start}..{end}) "
@@ -1477,4 +1666,303 @@ def test_the_sign_fixture_table_still_covers_every_class():
         f"the sign alphabet derived from unicodedata collapsed to "
         f"{SIGN_ALPHABET!r}; the sign-form properties are running on almost "
         f"nothing"
+    )
+
+
+# =============================================================================
+# --- #57: a quantity is shown whole or not at all ---------------------------
+# =============================================================================
+#
+# #55 stated the rule as "a prefix of a number is not the number" and then
+# wrote a scanner for it. QA's finding on #57 is that the scanner and the
+# code it guarded shared a DEFINITION of where a number ends, so the two
+# places that definition was too narrow were invisible to both:
+#
+#   - a `%` one space away from its digits (`48 %` rendering `48`), and
+#   - a separator binding two numerals into one quantity (`12-18` rendering
+#     `12`, `1e5` rendering `1`, `1/3` rendering `1`, `3:1` rendering `3`,
+#     `12:30` rendering `12`).
+#
+# `12` for `12-18` is a range shown as its lower bound: the card states a
+# quantity the claim never stated, which is CLAUDE.md #1, not a readability
+# complaint. The same goes for the rest.
+#
+# So this section does not add another scanner. It pins two kinds of thing
+# that need no opinion at all about where a number ends:
+#
+#   1. A HUMAN-DECLARED QUANTITY. Each fixture names the literal substring a
+#      person reads as one quantity. Over a sweep of canvas widths the claim
+#      line must contain that substring whole or not begin it at all. Ground
+#      truth is a hand-written string, exactly as #58's `expected_figure` is.
+#
+#   2. A METAMORPHIC RELATION, the shape #58 landed on. A binder between two
+#      numerals must be cut exactly like a DIGIT in the same position: the
+#      control string is all digits, so it is one numeral run under any
+#      definition anybody could write, including a wrong one. The test never
+#      says which characters bind — it says the answer may not depend on
+#      whether the character in the middle is a digit or a dash.
+#
+# Neither knows this file's `_run_spans` or production's `_numeral_runs`, so
+# neither can inherit a hole from either.
+
+_SWEEP_WIDTHS = tuple(range(140, 700, 4))  # every cut position, at 14px/char
+
+
+def _cut_outcome(claim_text: str, width: int) -> object:
+    """What the card does with `claim_text` at `width`: a cut index, or why not.
+
+    `"refused"` for `None`, `"whole"` for an unelided line, otherwise the
+    index in `claim_text` the claim line was cut at.
+    """
+    claim = _claim(id="c57", claim=claim_text, qualifier="preliminary")
+    layout = compute_card_layout(claim, (width, 900), _qa_measure)
+    if layout is None:
+        return "refused"
+    text = layout.claim.text
+    if not text.endswith(ELLIPSIS):
+        return "whole"
+    stem = text[: -len(ELLIPSIS)]
+    assert claim_text.startswith(stem), (
+        f"elided claim {text!r} is not a prefix of {claim_text!r}"
+    )
+    return len(stem)
+
+
+# --- 1. the declared quantity ------------------------------------------------
+
+
+@dataclass(frozen=True)
+class QuantityFixture:
+    """One claim and the literal substring of it that is ONE quantity.
+
+    `quantity` is hand-written: a person read the claim and marked the span
+    whose fragments would misstate it. Nothing computes it.
+    """
+
+    name: str
+    claim_text: str
+    quantity: str
+
+
+QUANTITY_FIXTURES: tuple[QuantityFixture, ...] = (
+    QuantityFixture(
+        name="percent_sign_one_space_away",
+        claim_text="Vaccine efficacy reached 48 % in the trial overall",
+        quantity="48 %",
+    ),
+    QuantityFixture(
+        name="hyphen_range",
+        claim_text="Participants aged 12-18 were enrolled in the trial",
+        quantity="12-18",
+    ),
+    QuantityFixture(
+        name="en_dash_range",
+        claim_text="Participants aged 12–18 were enrolled in the trial",
+        quantity="12–18",
+    ),
+    QuantityFixture(
+        name="exponent",
+        claim_text="Neurons numbered 1e5 per sample in the cortex",
+        quantity="1e5",
+    ),
+    QuantityFixture(
+        name="fraction",
+        claim_text="About 1/3 of the participants completed the follow-up",
+        quantity="1/3",
+    ),
+    QuantityFixture(
+        name="ratio",
+        claim_text="The treated to control ratio was 3:1 in the study",
+        quantity="3:1",
+    ),
+    QuantityFixture(
+        name="clock_time",
+        claim_text="Sessions began at 12:30 on the second day of testing",
+        quantity="12:30",
+    ),
+)
+
+_QUANTITY_IDS = [f.name for f in QUANTITY_FIXTURES]
+
+
+@pytest.mark.parametrize("fixture", QUANTITY_FIXTURES, ids=_QUANTITY_IDS)
+def test_a_declared_quantity_is_shown_whole_or_not_at_all(fixture: QuantityFixture):
+    """The claim line may not end INSIDE a quantity, at any canvas width.
+
+    Swept across widths so the cut walks over the quantity from both sides,
+    rather than pinning the one canvas that happened to reproduce the bug.
+    """
+    start = fixture.claim_text.index(fixture.quantity)
+    end = start + len(fixture.quantity)
+
+    cuts = []
+    for width in _SWEEP_WIDTHS:
+        outcome = _cut_outcome(fixture.claim_text, width)
+        if not isinstance(outcome, int):
+            continue
+        cuts.append(outcome)
+        assert not (start < outcome < end), (
+            f"[{fixture.name}] at width {width} the card reads "
+            f"{fixture.claim_text[:outcome] + ELLIPSIS!r}, cut at index "
+            f"{outcome}, strictly inside the quantity "
+            f"{fixture.quantity!r} (indices {start}..{end}). The card shows "
+            f"{fixture.claim_text[start:outcome]!r} where the claim says "
+            f"{fixture.quantity!r} — a different quantity from the one the "
+            f"claim states (CLAUDE.md #1, issue #57)"
+        )
+
+    assert cuts and min(cuts) < start and max(cuts) > end, (
+        f"[{fixture.name}] the width sweep never straddled the quantity "
+        f"(cuts seen: {sorted(set(cuts))!r}, quantity at {start}..{end}); the "
+        f"assertion above passed vacuously"
+    )
+
+
+@pytest.mark.parametrize("mark", SCALE_MARKS, ids=[hex(ord(m)) for m in SCALE_MARKS])
+@pytest.mark.parametrize("spacing", ("", " ", "  "), ids=("tight", "one_space", "two_spaces"))
+def test_a_scale_mark_stays_with_its_number_however_it_is_spaced(
+    mark: str, spacing: str
+):
+    """`%` and its kin multiply the number; a cut may not separate them.
+
+    Parametrised over an alphabet read out of `unicodedata` (`SCALE_MARKS`)
+    and over the spacing, because both are places a hand-written rule goes
+    short: production listed three marks and required adjacency, so `48 %`
+    rendered `48` and `48٪` was not a quantity at all (#57).
+    """
+    claim_text = f"Vaccine efficacy reached 48{spacing}{mark} in the trial overall"
+    quantity = f"48{spacing}{mark}"
+    start = claim_text.index(quantity)
+    end = start + len(quantity)
+
+    straddled = [False, False]
+    for width in _SWEEP_WIDTHS:
+        outcome = _cut_outcome(claim_text, width)
+        if not isinstance(outcome, int):
+            continue
+        straddled[0] |= outcome < start
+        straddled[1] |= outcome > end
+        assert not (start < outcome < end), (
+            f"[U+{ord(mark):04X}, spacing {spacing!r}] at width {width} the "
+            f"claim line is cut at index {outcome}, inside {quantity!r}: the "
+            f"card reads {claim_text[start:outcome]!r} for a claim that says "
+            f"{quantity!r}, a magnitude wrong by a factor of 100 or more (#57)"
+        )
+
+    assert all(straddled), (
+        f"[U+{ord(mark):04X}, spacing {spacing!r}] the sweep never straddled "
+        f"{quantity!r}; the assertion above passed vacuously"
+    )
+
+
+# --- 2. the metamorphic relation ---------------------------------------------
+
+# Each entry is a quantity written with a binder and the SAME quantity with a
+# digit in the binder's place — same length, so the two claims are
+# character-for-character the same width under `_qa_measure` and every layout
+# decision but the run rule is identical. The control is all digits, which is
+# one numeral run under any definition of a numeral run at all.
+_BINDER_AND_ITS_DIGIT_CONTROL: tuple[tuple[str, str, str], ...] = (
+    ("hyphen_range", "12-18", "12718"),
+    ("en_dash_range", "12–18", "12718"),
+    ("exponent", "1e5", "175"),
+    ("fraction", "1/3", "173"),
+    ("ratio", "3:1", "371"),
+    ("clock_time", "12:30", "12730"),
+)
+
+# The quantity sits mid-claim, after a number of its own, so that the FIGURE
+# slot holds the same `7` in both claims. A control whose figure differed in
+# width would change the layout for reasons that have nothing to do with the
+# cut, and the relation below would stop being about the run rule.
+_BINDER_TEMPLATE = "Cohort 7 reported {quantity} across the nine study sites"
+
+
+@pytest.mark.parametrize(
+    "name,binder_form,digit_form",
+    _BINDER_AND_ITS_DIGIT_CONTROL,
+    ids=[row[0] for row in _BINDER_AND_ITS_DIGIT_CONTROL],
+)
+def test_a_binder_is_cut_exactly_like_a_digit(
+    name: str, binder_form: str, digit_form: str
+):
+    """Two numerals bound into one quantity are cut like one long numeral.
+
+    This is the #58-shaped property: stated as a relation between two claims,
+    it needs no opinion about which characters bind. `12718` is protected by
+    the rule #55 already shipped — nobody can write a definition of a numeral
+    run under which five digits are not one — so if `12-18` is cut anywhere
+    `12718` is not, the card is showing a fragment of a quantity, whatever the
+    rule happens to say.
+    """
+    assert len(binder_form) == len(digit_form), (
+        f"[{name}] {binder_form!r} and {digit_form!r} differ in length; the "
+        f"two claims would not lay out identically and the relation would "
+        f"compare nothing"
+    )
+
+    bound = _BINDER_TEMPLATE.format(quantity=binder_form)
+    control = _BINDER_TEMPLATE.format(quantity=digit_form)
+
+    disagreements = [
+        (width, _cut_outcome(bound, width), _cut_outcome(control, width))
+        for width in _SWEEP_WIDTHS
+        if _cut_outcome(bound, width) != _cut_outcome(control, width)
+    ]
+    assert not disagreements, (
+        f"[{name}] {bound!r} is not cut where {control!r} is. First "
+        f"disagreements (width, bound, control): {disagreements[:5]!r}. The "
+        f"only difference between the two claims is whether the character "
+        f"between the numerals is a digit or a binder, and a binder joins "
+        f"them into one quantity exactly as a digit does: cutting between "
+        f"them shows a fragment — a range as its lower bound, a ratio as its "
+        f"first term (#57)"
+    )
+
+    cuts = [_cut_outcome(control, w) for w in _SWEEP_WIDTHS]
+    quantity_start = _BINDER_TEMPLATE.index("{quantity}")
+    assert any(
+        isinstance(c, int) and c > quantity_start + len(binder_form) for c in cuts
+    ) and any(isinstance(c, int) and c < quantity_start for c in cuts), (
+        f"[{name}] the sweep never cut on both sides of {binder_form!r}; the "
+        f"relation above compared nothing interesting"
+    )
+
+
+def test_the_57_fixture_tables_still_pin_every_reported_string():
+    """Guards the tables: the strings the defect named must still be in them.
+
+    #58 was reopened because a table that looked like coverage had a whole
+    class missing. These are the exact strings from the #57 report.
+    """
+    reported = ("48 %", "12-18", "12–18", "1e5", "1/3", "3:1", "12:30")
+
+    quantities = {f.quantity for f in QUANTITY_FIXTURES}
+    for string in reported:
+        assert string in quantities, (
+            f"{string!r} is no longer pinned by a QuantityFixture; the case "
+            f"#57 reported would go unnoticed"
+        )
+
+    elided = {f.name: f for f in ELISION_FIXTURES}
+    for name in (
+        "whitespace_before_the_percent_sign",
+        "hyphen_range_is_one_quantity",
+        "en_dash_range_is_one_quantity",
+        "exponent_is_one_quantity",
+        "fraction_is_one_quantity",
+        "ratio_is_one_quantity",
+        "clock_time_is_one_quantity",
+    ):
+        fixture = elided[name]
+        assert fixture.expected_claim_text is not None
+        assert not any(ch.isdigit() for ch in fixture.expected_claim_text), (
+            f"[{name}] expects {fixture.expected_claim_text!r}, which still "
+            f"carries a digit — this fixture exists to pin that the cut backs "
+            f"up PAST the quantity, not into it"
+        )
+
+    assert len(SCALE_MARKS) >= 5, (
+        f"the scale-mark alphabet derived from unicodedata collapsed to "
+        f"{SCALE_MARKS!r}; the spacing property is running on almost nothing"
     )
