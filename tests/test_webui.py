@@ -18,17 +18,20 @@ import pytest
 from starlette.testclient import TestClient
 
 from api.schema import (
+    AgentInput,
     AgentOutput,
     Claim,
     ConfidenceLevel,
     ImageAsset,
     ImageKind,
+    ImageMode,
     JobProgress,
     JobState,
     OverreachFlag,
     Platform,
     PlatformOutput,
     Status,
+    merge_dials,
 )
 from webui import app as webui
 
@@ -738,16 +741,10 @@ def test_the_board_guards_both_image_call_sites():
 _NODE = shutil.which("node")
 _NO_NODE = "node is not installed; the board.js render harness needs it"
 
-_BOARD_HARNESS_JS = r"""
-'use strict';
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
-
-const opts = JSON.parse(process.env.BOARD_HARNESS);
-
-/* A DOM only as big as imageFigure needs: elements that can be built, styled,
-   nested, searched and serialised. */
+# A DOM only as big as the board functions under test need: elements that can
+# be built, styled, nested, searched and serialised. Shared by both harnesses
+# below — the render one (#59) and the composer one (#64).
+_BOARD_DOM_JS = r"""
 class Txt {
   constructor(text) { this.text = String(text); }
   get html() { return this.text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
@@ -755,8 +752,10 @@ class Txt {
 class Elem {
   constructor(tag) {
     this.tag = tag; this.className = ''; this.children = []; this.attrs = {};
-    this.style = { cssText: '' }; this.parent = null;
+    this.style = { cssText: '' }; this.dataset = {}; this.parent = null;
   }
+  addEventListener() {}
+  setAttribute(name, value) { this.attrs[name] = value; }
   set textContent(v) { this.children = [new Txt(v)]; }
   get textContent() { return this.children.map((c) => (c instanceof Txt ? c.text : c.textContent)).join(''); }
   append(...nodes) { for (const n of nodes) { if (n instanceof Elem) n.parent = this; this.children.push(n); } }
@@ -787,7 +786,16 @@ for (const name of ['src', 'alt', 'loading', 'hidden', 'tabIndex']) {
     set(v) { this.attrs[name] = v; },
   });
 }
+"""
 
+_BOARD_HARNESS_JS = r"""
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const opts = JSON.parse(process.env.BOARD_HARNESS);
+""" + _BOARD_DOM_JS + r"""
 const stub = new Elem('div');
 stub.addEventListener = () => {};
 globalThis.document = {
@@ -920,3 +928,295 @@ def test_every_new_image_string_is_in_both_locales():
         assert literal not in source
     assert "t('board.images.generated')" in source
     assert "t('board.images.missing')" in source
+
+
+# ── the images dial, exercised through board.js itself (#64) ────────────────
+#
+# The bug was that the board never SENT `images`, so the only assertion worth
+# making is over the bytes the board puts on the wire and what those bytes
+# become on the server. The composer harness runs the real dialog — askNext,
+# the real chips, confirm, startRun — with fetch replaced by a recorder, and
+# every test below reads what board.js actually posted.
+
+_BOARD_COMPOSER_JS = r"""
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const opts = JSON.parse(process.env.BOARD_COMPOSER);
+""" + _BOARD_DOM_JS + r"""
+/* Each #id the board reaches for is its own element, so a turn appended to
+   #dialog can be found again afterwards. */
+const panes = {};
+const pane = (sel) => (panes[sel] = panes[sel] || new Elem('div'));
+
+globalThis.document = {
+  createElement: (tag) => new Elem(tag),
+  createTextNode: (text) => new Txt(text),
+  querySelector: (sel) => pane(sel),
+  querySelectorAll: () => [],
+  addEventListener: () => {},
+  body: { classList: { add() {}, remove() {} } },
+};
+globalThis.window = globalThis;
+globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+/* A run's poll would never finish here, and nothing under test is in it. */
+globalThis.setInterval = () => 0;
+globalThis.clearInterval = () => {};
+
+/* The whole point of the harness: what the board puts on the wire. A GET is
+   still a network the harness does not serve — `init()` dies on its first
+   one, exactly as it does in the render harness. */
+const sent = [];
+globalThis.fetch = async (url, init) => {
+  if (!init || init.method !== 'POST') throw new Error('the harness serves no network');
+  sent.push({ url, body: init.body });
+  return { ok: true, json: async () => ({ session_id: 'j_harness' }) };
+};
+process.on('unhandledRejection', () => {});
+
+const source = ['i18n.js', 'board.js']
+  .map((f) => fs.readFileSync(path.join(opts.static_dir, f), 'utf8'))
+  .join('\n');
+const epilogue = '\n'
+  + 'I18N.strings = ' + fs.readFileSync(opts.i18n_json, 'utf8') + ';\n'
+  + 'I18N.lang = ' + JSON.stringify(opts.locale) + ';\n'
+  /* `state` is a const, so it reaches the harness only by being handed over. */
+  + 'globalThis.__board = { state, askNext, rerunSlip };\n';
+vm.runInThisContext(source + epilogue, { filename: 'board-composer.js' });
+
+const board = globalThis.__board;
+const dialog = pane('#dialog');
+const lastTurn = () => dialog.children[dialog.children.length - 1];
+const out = { asked: [], sent };
+
+/* Answer the dialog by clicking its real chips, in order. `ask` is wrapped
+   rather than replaced: the chips under test are the ones board.js drew. */
+const realAsk = globalThis.ask;
+const queue = (opts.picks || []).slice();
+globalThis.ask = (label, prompt, options, onPick) => {
+  out.asked.push({
+    prompt,
+    options: options.map(([value, text, sub]) => ({ value, text, sub })),
+  });
+  realAsk(label, prompt, options, onPick);
+  const chips = lastTurn().querySelector('.chips');
+  const want = queue.shift();
+  const index = options.findIndex(([value]) => JSON.stringify(value) === JSON.stringify(want));
+  if (index < 0) throw new Error('no chip offers ' + JSON.stringify(want));
+  out.chips = options.map(([, text, sub]) => text + (sub ? ' [' + sub + ']' : ''));
+  chips.children[index].onclick();
+};
+
+if (opts.mode === 'generate') {
+  Object.assign(board.state.slots, { source: opts.source, source_type: opts.source_type });
+  board.askNext();
+  const slip = lastTurn().querySelector('.slip');
+  out.slip = slip.innerHTML;
+  slip.querySelector('.btn-solid').onclick();     // "start drafting"
+} else {
+  board.state.sessionId = 'sess-old';
+  board.state.result = { platform_outputs: [], claim_ledger: [] };
+  Object.assign(board.state.slots, opts.slots || {});
+  const box = board.rerunSlip(opts.changes, opts.before);
+  dialog.append(box);
+  out.slip = box.innerHTML;
+  const dial = box.querySelector('.chips');       // the images dial, before the buttons
+  out.dial = dial.children.map((chip) => chip.textContent);
+  if (opts.pick) {
+    dial.children[['off', 'cover', 'all'].indexOf(opts.pick)].onclick();
+    out.dialPicked = dial.children.map((chip) => chip.textContent);
+  }
+  box.querySelector('.btn-solid').onclick();      // "rewrite it"
+}
+
+/* The post is awaited inside board.js; let its microtasks drain first. */
+setImmediate(() => setImmediate(() => {
+  process.stdout.write(JSON.stringify(out));
+  process.exit(0);                                // a pending toast timer must not hold this open
+}));
+"""
+
+
+def _drive_board(mode: str, *, locale: str = "zh", **options) -> dict:
+    """Run the board's own dialog in node and report what it posted."""
+    static_dir = Path(webui.__file__).resolve().parent / "static"
+    env = {
+        **os.environ,
+        "BOARD_COMPOSER": json.dumps({
+            "static_dir": str(static_dir),
+            "i18n_json": str(static_dir.parent / "i18n.json"),
+            "locale": locale,
+            "mode": mode,
+            **options,
+        }),
+    }
+    proc = subprocess.run(
+        [_NODE, "-e", _BOARD_COMPOSER_JS],
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+    assert proc.returncode == 0, f"the board.js composer harness failed:\n{proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def _compose(images: str | None, locale: str = "zh") -> dict:
+    """One full composer run, answering the images dial with `images`."""
+    picks = [["news"], "zh", 3]
+    if images is not None:
+        picks.append(images)
+    return _drive_board(
+        "generate", locale=locale, picks=picks,
+        source="https://arxiv.org/abs/1706.03762", source_type="url",
+    )
+
+
+def _strings() -> dict:
+    return json.loads(
+        (Path(webui.__file__).resolve().parent / "i18n.json").read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+def test_the_composer_offers_the_images_dial_with_three_values():
+    """`ImageMode` is three-valued, so the control is three chips, `off` first."""
+    run = _compose("off")
+
+    dial = [a for a in run["asked"] if a["options"][0]["value"] == "off"]
+    assert len(dial) == 1, "the composer asks about images exactly once"
+    assert [o["value"] for o in dial[0]["options"]] == ["off", "cover", "all"]
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+@pytest.mark.parametrize("locale", ["zh", "en"])
+def test_the_images_dial_says_what_it_costs(locale):
+    """A paid call is never a surprise: the control states the price (#64)."""
+    strings = _strings()[locale]
+    run = _compose("off", locale=locale)
+
+    dial = next(a for a in run["asked"] if a["options"][0]["value"] == "off")
+
+    assert strings["board.images.note"] in dial["prompt"]
+    assert strings["board.images.coverHint"] in run["chips"][1]
+    assert strings["board.images.allHint"] in run["chips"][2]
+    # the two halves of the price: a paid call, and a card per claim
+    for word in ("paid", "card") if locale == "en" else ("付费", "卡片"):
+        assert word in strings["board.images.note"]
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+def test_the_confirmation_slip_shows_the_images_dial():
+    """The slip is the last thing read before money is spent."""
+    strings = _strings()["zh"]
+
+    run = _compose("cover")
+
+    assert strings["board.images.dial"] in run["slip"]
+    assert strings["board.images.cover"] in run["slip"]
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+@pytest.mark.parametrize("mode", ["cover", "all"])
+def test_a_chosen_images_value_reaches_agent_input(mode, client, monkeypatch):
+    """End to end: the board's own bytes, through the real route, into AgentInput."""
+    run = _compose(mode)
+    posted = json.loads(run["sent"][0]["body"])
+    assert run["sent"][0]["url"] == "/api/generate"
+    assert posted["images"] == mode
+
+    seen = []
+    monkeypatch.setattr(webui.jobs, "start", lambda inp: seen.append(inp) or "j")
+    resp = client.post("/api/generate", json=posted)
+
+    assert resp.status_code == 200
+    assert seen[0].images is ImageMode(mode)
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+def test_choosing_off_posts_exactly_what_the_board_posted_before(client, monkeypatch):
+    """`off` is the default and costs nothing, so it says nothing (#64)."""
+    run = _compose("off")
+    body = run["sent"][0]["body"]
+
+    assert body == json.dumps({
+        "source": "https://arxiv.org/abs/1706.03762",
+        "source_type": "url",
+        "platforms": ["news"],
+        "language": "zh",
+        "liveliness": 3,
+    }, separators=(",", ":"))
+
+    seen = []
+    monkeypatch.setattr(webui.jobs, "start", lambda inp: seen.append(inp) or "j")
+    resp = client.post("/api/generate", json=json.loads(body))
+
+    assert resp.status_code == 200
+    assert seen[0].images is ImageMode.off
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+def test_the_redraft_slip_carries_the_images_dial_into_the_changes(client, monkeypatch):
+    """`images` is redraftable (#33), so the board offers it on a rerun too."""
+    run = _drive_board(
+        "redraft", changes={"language": "en"}, before={"language": "zh"},
+        slots={"language": "zh", "images": "off"}, pick="cover",
+    )
+    posted = json.loads(run["sent"][0]["body"])
+
+    assert run["sent"][0]["url"] == "/api/redraft"
+    assert posted["changes"] == {"language": "en", "images": "cover"}
+
+    seen = []
+    monkeypatch.setattr(
+        webui.jobs, "start_redraft",
+        lambda session_id, changes, allow_restate: seen.append(changes) or "j2",
+    )
+    resp = client.post("/api/redraft", json=posted)
+
+    assert resp.status_code == 200
+    # and the dials the route hands on are the ones AgentInput ends up with
+    before = AgentInput(source="https://arxiv.org/abs/1706.03762", source_type="url")
+    assert merge_dials(before, seen[0]).images is ImageMode.cover
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+def test_the_redraft_dial_starts_at_what_the_run_already_has():
+    """Three chips, marked on the value this run was drafted with."""
+    run = _drive_board(
+        "redraft", changes={"language": "en"}, before={"language": "zh"},
+        slots={"language": "zh", "images": "off"}, pick="all",
+    )
+
+    assert len(run["dial"]) == 3
+    assert run["dial"][0].startswith("·") or "· " in run["dial"][0]
+    assert "· " in run["dialPicked"][2]      # the pick moved the mark onto `all`
+    assert "· " not in run["dialPicked"][0]
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+def test_a_redraft_that_would_change_nothing_is_never_started():
+    """Reverting the only proposed change spends nothing — no run, no call."""
+    run = _drive_board(
+        "redraft", changes={"images": "cover"}, before={"images": "off"},
+        slots={"images": "off"}, pick="off",
+    )
+
+    assert run["sent"] == []
+
+
+def test_every_images_dial_string_is_in_both_locales():
+    """No dial label is hardcoded in board.js, in either language (#64)."""
+    strings = _strings()
+    keys = [
+        "board.images.dial", "board.images.ask", "board.images.note",
+        "board.images.off", "board.images.offHint",
+        "board.images.cover", "board.images.coverHint",
+        "board.images.all", "board.images.allHint",
+    ]
+    source = _BOARD_JS.read_text(encoding="utf-8")
+    for locale in ("zh", "en"):
+        for key in keys:
+            assert strings[locale][key], f"{key} is missing from {locale}"
+            assert strings[locale][key] not in source
+    assert "t('board.images.ask')" in source
+    assert "t('board.images.note')" in source

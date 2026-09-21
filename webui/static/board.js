@@ -15,10 +15,14 @@ const ROLE_HINTS = {
 };
 const PLATFORM_KEY = { news: 'dialog.platformNews', xhs: 'dialog.platformXhs', wechat: 'dialog.platformXhs' };
 const platformLabel = (p) => t(PLATFORM_KEY[p] || 'dialog.platformNews');
+// api/schema.py's ImageMode, in the order the dial offers it. `off` first, and
+// `off` is what an unanswered dial means: images cost real money per call.
+const IMAGE_MODES = ['off', 'cover', 'all'];
+const imagesLabel = (v) => t(`board.images.${IMAGE_MODES.includes(v) ? v : 'off'}`);
 const POLL_MS = 1500;
 
 const state = {
-  slots: { source: null, source_type: null, platforms: null, language: null, liveliness: null },
+  slots: { source: null, source_type: null, platforms: null, language: null, liveliness: null, images: null },
   sessionId: null,
   result: null,
   spans: {},          // platform -> {flags, spans, unlocated}
@@ -210,7 +214,16 @@ function askNext() {
       `${esc(t('dialog.askLiveliness'))}<em>${esc(t('dialog.livelinessNote'))}</em>`, [
       [1, '1', t('dialog.lively1')], [2, '2', ''], [3, '3', t('dialog.lively3')],
       [4, '4', ''], [5, '5', t('dialog.lively5')],
-    ], (v) => { s.liveliness = v; confirm(); });
+    ], (v) => { s.liveliness = v; askNext(); });
+  }
+  if (!s.images) {
+    // Three-valued, not a checkbox, and `off` is what a run gets by default:
+    // `cover` and `all` each spend a paid image call, so the board asks before
+    // the money goes rather than reporting it afterwards.
+    return ask(t('board.speaker'),
+      `${esc(t('board.images.ask'))}<em>${esc(t('board.images.note'))}</em>`,
+      IMAGE_MODES.map((mode) => [mode, t(`board.images.${mode}`), t(`board.images.${mode}Hint`)]),
+      (v) => { s.images = v; confirm(); });
   }
   confirm();
 }
@@ -225,6 +238,7 @@ function confirm() {
     <dt>${esc(t('dialog.slipPlatform'))}</dt><dd>${s.platforms.map((p) => esc(platformLabel(p))).join(' · ')}</dd>
     <dt>${esc(t('dialog.slipLanguage'))}</dt><dd>${s.language === 'zh' ? esc(t('dialog.langZh')) : esc(t('dialog.langEn'))}</dd>
     <dt>${esc(t('dialog.slipLiveliness'))}</dt><dd>${s.liveliness}/5</dd>
+    <dt>${esc(t('board.images.dial'))}</dt><dd>${esc(imagesLabel(s.images))}</dd>
   </dl>`;
   const start = el('button', 'btn btn-solid');
   start.textContent = t('dialog.start');
@@ -241,7 +255,7 @@ function confirm() {
 function resetRun() {
   clearInterval(state.polling);
   Object.assign(state, {
-    slots: { source: null, source_type: null, platforms: null, language: null, liveliness: null },
+    slots: { source: null, source_type: null, platforms: null, language: null, liveliness: null, images: null },
     sessionId: null, result: null, spans: {}, drafts: {}, decisions: {}, polling: null, openKey: null,
     archive: [], replacing: null,
   });
@@ -300,10 +314,15 @@ async function startRun() {
   const node = turn(t('board.speaker'),
     `<div class="progress">${esc(t('dialog.starting'))}</div><div class="progress-bar"><i style="width:4%"></i></div>`);
   try {
-    const { session_id } = await postJSON('/api/generate', {
+    const body = {
       source: s.source, source_type: s.source_type, platforms: s.platforms,
       language: s.language, liveliness: s.liveliness,
-    });
+    };
+    // `off` is AgentInput's own default, so a run that wants no images posts
+    // exactly the five fields it always posted — byte for byte what the board
+    // sent before this dial existed. Only a request for images is spelt out.
+    if (s.images && s.images !== 'off') body.images = s.images;
+    const { session_id } = await postJSON('/api/generate', body);
     state.sessionId = session_id;
     poll(node);
   } catch (err) {
@@ -1783,10 +1802,37 @@ function rerunSlip(changes, before) {
   // slots — the slip has to show what will actually change, not what this tab
   // happens to remember asking for.
   const rows = Object.entries(changes || {})
-    .map(([dial, value]) => `<dt>${esc(t(`dialog.slip${dialKey(dial)}`))}</dt>`
+    .map(([dial, value]) => `<dt>${esc(dialLabel(dial))}</dt>`
       + `<dd>${esc(dialText(dial, (before || {})[dial]))} → <b>${esc(dialText(dial, value))}</b></dd>`)
     .join('');
   box.innerHTML = `<div class="turn-label">${esc(t('chat.rerunHead'))}</div><dl>${rows}</dl>`;
+
+  // `images` is redraftable (api/schema.py: REDRAFTABLE_DIALS), and it is the
+  // one dial that spends money, so a redraft carries it whether or not the
+  // conversation proposed it: the human sets it here, on the same slip that
+  // confirms the rerun, instead of discovering afterwards that it was off.
+  const standing = (changes || {}).images || state.slots.images || 'off';
+  let images = standing;
+  const dial = el('div', 'chips');
+  const hints = IMAGE_MODES.map((mode) => {
+    const chip = el('button', 'chip');
+    chip.type = 'button';
+    chip.append(document.createTextNode(imagesLabel(mode)));
+    const hint = el('small');
+    chip.append(hint);
+    chip.onclick = () => { images = mode; paintDial(); };
+    dial.append(chip);
+    return hint;
+  });
+  // The chosen one is marked the way the opening dialog marks a preselected
+  // language — with a dot, since the board's chips have no selected state.
+  const paintDial = () => IMAGE_MODES.forEach((mode, i) => {
+    hints[i].textContent = (mode === images ? '· ' : '') + t(`board.images.${mode}Hint`);
+  });
+  paintDial();
+  const dialHead = el('p', 'note');
+  dialHead.textContent = `${t('board.images.dial')} — ${t('board.images.note')}`;
+  box.append(dialHead, dial);
 
   const open = openFlagCount();
   if (open) {
@@ -1797,7 +1843,18 @@ function rerunSlip(changes, before) {
 
   const go = el('button', 'btn btn-solid');
   go.textContent = t('chat.rerunGo');
-  go.onclick = () => { box.remove(); startRedraft(changes); };
+  go.onclick = () => {
+    box.remove();
+    // The run's own images value is what a change is measured against: asking
+    // again for what it already has is not a change, and a redraft whose only
+    // "change" is a no-op would spend a full draft-and-check chain for the
+    // draft already on screen.
+    const now = (before || {}).images || state.slots.images || 'off';
+    const wanted = { ...(changes || {}) };
+    if (images === now) delete wanted.images; else wanted.images = images;
+    if (!Object.keys(wanted).length) { toast(t('chat.rerunDropped')); return; }
+    startRedraft(wanted);
+  };
   const stay = el('button', 'btn btn-quiet');
   stay.textContent = t('chat.rerunStay');
   stay.onclick = () => { box.remove(); toast(t('chat.rerunDropped')); };
@@ -1816,11 +1873,20 @@ function dialKey(dial) {
   }[dial] || dial.charAt(0).toUpperCase() + dial.slice(1);
 }
 
+/* What to call a dial in the slip. `images` keeps the board.images.* namespace
+   the image strings already live in; everything else reads the opening
+   dialog's own label. */
+function dialLabel(dial) {
+  return dial === 'images' ? t('board.images.dial') : t(`dialog.slip${dialKey(dial)}`);
+}
+
 function dialText(dial, value) {
   if (value === undefined || value === null || value === '') return t('chat.dialUnset');
   if (dial === 'platforms') return [].concat(value).map(platformLabel).join(' · ');
   if (dial === 'language') return t(value === 'en' ? 'dialog.langEn' : 'dialog.langZh');
   if (dial === 'background') return t(value ? 'chat.dialOn' : 'chat.dialOff');
+  // "cover" is a mode, not a word the reader should have to translate.
+  if (dial === 'images') return imagesLabel(value);
   // A bare "2" says nothing about which way is shorter.
   if (dial === 'length') return `${value}/5 · ${t(`chat.length${value}`)}`;
   return String(value);
