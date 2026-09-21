@@ -1,4 +1,5 @@
-"""Suite-wide safety net: tests must never write into the user's outputs/.
+"""Suite-wide safety net: a test must not write into the operator's outputs/,
+and must not read the operator's config/config.yaml.
 
 `api.jobs` mirrors every finished run to `outputs/jobs/`, and several tests
 drive real code paths that reach it — `generate` in the MCP wrapper and the
@@ -23,13 +24,71 @@ Redirecting the path is not enough on its own. A job's mirror is written by a
 worker thread, which can outlive the test that started it — so the fixture also
 DRAINS outstanding jobs before monkeypatch restores the real directory.
 Otherwise the write lands after the restore, in the operator's outputs/.
+
+`config/config.yaml` is isolated in the same spirit (`#63`), for the mirror-
+image reason: not to stop tests WRITING the operator's file, but to stop them
+READING it. `api.config_loader.resolve_setting` reads config FIRST and only
+falls through to the env var when the config value is missing, empty or the
+literal "env" — the documented indirection. So a literal value in the
+operator's config silently shadows `monkeypatch.setenv`, and a test that sets
+`IMAGE_CAP` or `DRAFT_WORKERS` measures that file instead of the behaviour it
+names. `config/*.yaml` is gitignored, so the suite's result depended on an
+untracked local file: green for two years of configs that happened not to set
+`images.cap`, red on the first correct configuration of the feature. Every
+test therefore gets an empty scratch config; a test that genuinely wants the
+operator's file asks for the `real_config` fixture by name.
+
+`_load_config` is memoised (`lru_cache(maxsize=1)`) for the life of the
+process, so repointing `_CONFIG_PATH` alone would be a no-op against a cache
+already filled from the real file. Both fixtures below call `reload_config()`
+on the way in AND on the way out — dropping the teardown would leak the
+scratch config into whatever runs next.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from api import assets, jobs
+from api import assets, config_loader, jobs
+
+# Captured at import, before any fixture redirects it: the operator's real
+# config/config.yaml, for the `real_config` opt-in below.
+_REAL_CONFIG_PATH = config_loader.config_path()
+
+
+@pytest.fixture(autouse=True)
+def isolated_config(tmp_path, monkeypatch):
+    """Point `api.config_loader` at an empty throwaway config for this test.
+
+    Yields the scratch path. It does not exist yet — `_load_config` treats a
+    missing file as an empty config (env-only), which is what most tests want.
+    A test that needs config content writes YAML to the yielded path and calls
+    `config_loader.reload_config()`.
+    """
+    # Not tmp_path/"config": tests/test_settings.py builds its own scratch repo
+    # at that exact path with a bare mkdir(), and a collision here would break
+    # it. This fixture owns a directory of its own.
+    config_dir = tmp_path / "isolated-config"
+    config_dir.mkdir(exist_ok=True)
+    scratch = config_dir / "config.yaml"
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", scratch)
+    config_loader.reload_config()
+    yield scratch
+    config_loader.reload_config()
+
+
+@pytest.fixture
+def real_config(monkeypatch):
+    """Opt back in to the operator's real `config/config.yaml`.
+
+    The deliberate escape hatch from `isolated_config`. Autouse fixtures are
+    set up before explicitly requested ones, so this wins for the test that
+    asks for it, and only for that test.
+    """
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", _REAL_CONFIG_PATH)
+    config_loader.reload_config()
+    yield _REAL_CONFIG_PATH
+    config_loader.reload_config()
 
 
 @pytest.fixture(autouse=True)

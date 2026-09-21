@@ -6,8 +6,11 @@ optional keys are reported as presence booleans only (never their values).
 
 from __future__ import annotations
 
+import pytest
+
 from api import config_loader
 from api.config_loader import ROLES, capabilities
+from tests import conftest
 
 
 def test_capabilities_reports_roles_as_booleans(monkeypatch):
@@ -45,3 +48,42 @@ def test_capabilities_optional_keys_are_presence_only(monkeypatch):
     }
     # the secret value never appears anywhere in the payload
     assert "secret-value" not in str(caps)
+
+
+# --- config isolation (#63) ---------------------------------------------------
+# `tests/conftest.isolated_config` is autouse, so these assert on the state
+# every other test in the suite runs under. The bug it guards against: a
+# literal value in the operator's gitignored config/config.yaml shadows
+# `monkeypatch.setenv` entirely, because `resolve_setting` reads config first.
+
+
+def test_tests_do_not_read_the_operators_config(isolated_config):
+    """The autouse fixture repoints the loader away from the real file."""
+    assert config_loader.config_path() == isolated_config
+    assert config_loader.config_path() != conftest._REAL_CONFIG_PATH
+    assert config_loader._load_config() == {}
+
+
+@pytest.mark.parametrize(
+    ("path", "env_var"),
+    [(("images", "cap"), "IMAGE_CAP"), (("pipeline", "draft_workers"), "DRAFT_WORKERS")],
+)
+def test_env_var_is_not_shadowed_by_the_operators_config(path, env_var, monkeypatch):
+    """Both shadowable settings: setenv decides, whatever the operator configured."""
+    monkeypatch.setenv(env_var, "7")
+    assert config_loader.resolve_setting(path, env_var, "3") == "7"
+
+
+def test_isolation_survives_the_load_cache(isolated_config, monkeypatch):
+    """`_load_config` is memoised, so a scratch write needs `reload_config`."""
+    monkeypatch.setenv("IMAGE_CAP", "7")
+    isolated_config.write_text("images:\n  cap: 11\n", encoding="utf-8")
+    config_loader.reload_config()
+
+    assert config_loader.resolve_setting(("images", "cap"), "IMAGE_CAP", "3") == "11"
+
+
+def test_real_config_is_available_to_a_test_that_asks_for_it(real_config):
+    """The deliberate opt-out: naming the fixture restores the operator's file."""
+    assert config_loader.config_path() == real_config
+    assert real_config == conftest._REAL_CONFIG_PATH
