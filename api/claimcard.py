@@ -41,6 +41,7 @@ from __future__ import annotations
 import io
 import re
 import struct
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -82,24 +83,51 @@ ELLIPSIS = "…"  # exactly one character; never "..."
 #      is LIFTED, never composed: it is matched as part of the token, so the
 #      result stays a contiguous substring of the claim (#25).
 #
-#      A `-` is a sign only when it is glued to the front of the numeral AND
-#      the character before IT is neither a digit nor an ASCII letter. That is
-#      what separates `shifted -3.2` (a signed number) from `12-18` (a range —
-#      the `-` follows the digit `2`) and from `COVID-19` (a name — it follows
-#      the letter `D`); a detached dash, `changed - 3.2`, is not glued to the
-#      numeral and so is not matched either. Turning a range separator into a
-#      minus would be the same class of failure in the other direction, so the
-#      guard is part of the rule, not a refinement of it.
+#      WHICH CHARACTERS COUNT AS A SIGN (`_SIGN_CHARS`): not a list picked by
+#      hand but a query answered by the Unicode database — every character
+#      whose NFKC form is `-` or `+` (so the ASCII pair and every compatibility
+#      variant of it: fullwidth `－＋`, small `﹣﹢`, super/subscript `⁺₊`,
+#      `﬩`), plus U+2212 MINUS SIGN, which has no compatibility decomposition
+#      because it is not a variant of anything: it IS the minus operator.
+#      The faithfulness suite re-derives this set from `unicodedata` and will
+#      fail if the two ever drift, so a new variant does not silently become
+#      invisible.
 #
-#      The lookbehind sits INSIDE the optional group on purpose: it must veto
-#      the sign only, never the numeral. `(?<![\dA-Za-z])` in front of the
-#      whole token would make `figure_of("B12 levels rose")` return `""`,
-#      changing a claim that has no sign at all.
+#      The fullwidth pair is not a curiosity here: it is what a CJK IME emits,
+#      and this tool's primary output language is Chinese, so leaving it out
+#      means the realistic Chinese form of this very bug — `变化：－3.2%`
+#      rendering `3.2` — stays unfixed. En and em dashes are deliberately NOT
+#      in the set (their NFKC form is themselves): they are the range
+#      separator in running prose (`12–18`), never a sign.
 #
-#      `\d` (not `\w`) in the lookbehind: `\w` matches CJK characters, which
-#      would make `了-3.2` — a perfectly ordinary Chinese claim — read as a
-#      range. ASCII `-`/`+` only: an en/em dash is punctuation in this
-#      codebase's prose, not a minus.
+#      WHEN A SIGN CHARACTER IS ACTUALLY A SIGN: `-` is called HYPHEN-MINUS
+#      because it does two jobs. The hyphen job is to JOIN, and a joiner needs
+#      something on its left to join to. So the rule is about what sits
+#      immediately before it: a sign character glued to the front of a numeral
+#      is a JOINER when the character before it is part of a word or a number,
+#      and a SIGN otherwise (start of text, space, bracket, `=`, `:`, and so
+#      on).
+#
+#      "Part of a word or a number" is the Unicode question, not an alphabet
+#      one: general category L* (letters, ANY script), N* (numeric characters
+#      of any form) or M* (combining marks, so a letter carrying a diacritic
+#      is still a letter). See `_is_word_character`. That is what makes
+#      `Aβ-42`, `ω-3`, `μ-1`, `新冠-19`, `グループ-2`, `IL-6`, `COVID-19`,
+#      `12-18` and `2024-05-03` all joiners, and `shifted -3.2`, `(-3.2)`,
+#      `β=-0.42` and `变化：－3.2%` all signs. An earlier attempt (#58, first
+#      pass) wrote this guard as "not a digit and not an ASCII letter", which
+#      fabricated a minus on every one of the non-ASCII cases above — a card
+#      stating a decline the claim never stated, which is the same failure as
+#      the reported bug with the direction reversed. The guard has to be
+#      script-independent or it is not the rule, it is a list of examples.
+#
+#      KNOWN LIMIT, deliberate: a sign glued directly to a word character is
+#      read as a joiner even when a human would read it as a minus —
+#      `变化了－3.2%` yields `3.2`, because at character level it is
+#      indistinguishable from `新冠－19`, where the same shape is a name. When
+#      the two readings cannot be told apart, this takes the one that cannot
+#      invent a direction of effect: dropping a sign leaves the claim line to
+#      carry it, inventing one puts a falsehood in 56px type.
 #
 #   2. THE NUMERAL: digits with at most one decimal point, exactly as before.
 #
@@ -110,12 +138,40 @@ ELLIPSIS = "…"  # exactly one character; never "..."
 #      module exists for cases where nothing faithful CAN be shown — here
 #      something faithful can, and it is already sitting in the claim. The
 #      exponent is consumed only when it is complete (`[eE]`, optional sign,
-#      at least one digit), so `5e-cigarette` still yields `5`.
-_FIGURE_RE = re.compile(
-    r"(?:(?<![\dA-Za-z])[-+])?"  # 1. the sign, where it cannot be a separator
-    r"\d+(?:\.\d+)?"             # 2. the numeral
-    r"(?:[eE][-+]?\d+)?"         # 3. a complete exponent, if there is one
+#      at least one digit), so `5e-cigarette` still yields `5`. Its internal
+#      sign is ASCII only: `1e−5` is not a form anything writes.
+# NFKC(ch) in {"-", "+"}, plus U+2212. Spelled out rather than computed at
+# import time: scanning the code space on every import to rediscover ten
+# characters is not a trade worth making, and the test re-derives it.
+_SIGN_CHARS = (
+    "-"         # U+002D HYPHEN-MINUS
+    "+"         # U+002B PLUS SIGN
+    "\u2212"    # MINUS SIGN
+    "\uff0d"    # FULLWIDTH HYPHEN-MINUS   ) what a CJK IME emits
+    "\uff0b"    # FULLWIDTH PLUS SIGN      )
+    "\ufe63"    # SMALL HYPHEN-MINUS
+    "\ufe62"    # SMALL PLUS SIGN
+    "\u207a"    # SUPERSCRIPT PLUS SIGN
+    "\u208a"    # SUBSCRIPT PLUS SIGN
+    "\ufb29"    # HEBREW LETTER ALTERNATIVE PLUS SIGN
 )
+
+_FIGURE_RE = re.compile(
+    rf"(?P<sign>[{re.escape(_SIGN_CHARS)}])?"  # 1. the sign, if there is one
+    r"\d+(?:\.\d+)?"                          # 2. the numeral
+    r"(?:[eE][-+]?\d+)?"                       # 3. a complete exponent
+)
+
+
+def _is_word_character(ch: str) -> bool:
+    """Whether `ch` is part of a word or a number, in any script.
+
+    Unicode general category L* (letter), N* (number) or M* (combining mark).
+    Written against the category rather than an alphabet on purpose: `β`, `冠`,
+    `プ`, `é` and `Ａ` are letters exactly as `D` is, and a guard that only
+    knew ASCII turned `Aβ-42` into `-42` (#58).
+    """
+    return unicodedata.category(ch)[0] in ("L", "N", "M")
 
 
 # --- the measure contract ----------------------------------------------------
@@ -178,12 +234,22 @@ def figure_of(text: str) -> str:
     The token is taken WHOLE, which is what `_FIGURE_RE` above is about: a
     sign the claim wrote against the numeral comes with it (`"-3.2"`, not
     `"3.2"` — #58), and so does an exponent (`"1e5"`, never `"1"`). A hyphen
-    that separates rather than signs stays out: `"12-18"` yields `"12"`.
+    that joins rather than signs stays out: `"12-18"`, `"Aβ-42"` and
+    `"新冠-19"` yield `"12"`, `"42"` and `"19"`.
     Everything returned is lifted, never composed — the result is always a
-    contiguous substring of `text` (#25).
+    contiguous substring of `text` (#25). That holds on the joiner branch
+    too: dropping the leading sign character leaves a SUFFIX of a substring,
+    which is still a substring, and still the first numeral in `text`.
     """
     match = _FIGURE_RE.search(text)
-    return match.group(0) if match else ""
+    if match is None:
+        return ""
+
+    token = match.group(0)
+    start = match.start()
+    if match.group("sign") and start > 0 and _is_word_character(text[start - 1]):
+        return token[1:]  # a joiner, not a sign: keep the numeral, drop the glue
+    return token
 
 
 # --- numeral runs: what elision may never cut in half (#55) ------------------
