@@ -57,13 +57,21 @@ function imageUrl(path) {
     : '';
 }
 
-/* One image slot: the run's cover (badge=true, model-generated decoration)
-   or a claim's explainer card (badge=false, deterministically rendered —
-   `ImageAsset.generated` is the faithfulness distinction this makes visible,
-   not just present in the JSON). A file missing on disk (404 from `/images`,
-   or no usable path at all) degrades to a placeholder in place via `onerror`
-   — it never throws, so it never aborts the rest of `renderBoard()`. */
-function imageFigure(asset, { badge } = {}) {
+/* One image slot: the run's cover, or a claim's explainer card.
+
+   The badge says "a model invented these pixels", so it is decided by
+   `ImageAsset.generated` (api/schema.py) — the field that carries that
+   faithfulness distinction — and NOT by which slot the asset sits in (#59).
+   Today a cover is generated and an explainer is a deterministically rendered
+   claim card, but that is api/visuals.py's business to decide; reading `kind`
+   here would relabel every asset the moment that stopped holding. A payload
+   with no such field is not claimed to be generated.
+
+   A file missing on disk (404 from `/images`, or no usable path at all)
+   degrades to a placeholder in place via `onerror` — it never throws, so it
+   never aborts the rest of `renderBoard()`. */
+function imageFigure(asset) {
+  const badge = asset.generated === true;
   const wrap = el('figure', 'run-image');
   const showMissing = () => {
     const existing = wrap.querySelector('img');
@@ -492,9 +500,9 @@ function renderBoard() {
       cover.innerHTML = paint(draft.cover_copy, pack, platform, 'cover_copy', confidence);
       wrap.append(cover);
     }
-    // Above the body, under the headline and cover copy it belongs to. Badged:
-    // the cover is the one MODEL-GENERATED asset in the run.
-    if (coverAsset) wrap.append(imageFigure(coverAsset, { badge: true }));
+    // Above the body, under the headline and cover copy it belongs to. Whether
+    // it is badged is the asset's own `generated` to say, not this slot's.
+    if (coverAsset) wrap.append(imageFigure(coverAsset));
     wrap.append(fieldLabel(t('board.body')));
     const prose = el('div', 'prose');
     prose.dataset.field = 'body';
@@ -1180,8 +1188,9 @@ function renderApparatus() {
     ledger.append(banner);
   }
   // Explainer cards, by the claim each one illustrates. Deterministically
-  // rendered from the Claim itself (`generated === false`), so they carry NO
-  // "generated" badge — that is the faithfulness distinction, made visible.
+  // rendered from the Claim itself, so `generated` is false on them and
+  // `imageFigure` leaves them unbadged — the faithfulness distinction, made
+  // visible. The slot does not decide it; the asset does.
   const explainers = (result.images || [])
     .filter((a) => a && a.kind === 'explainer');
   result.claim_ledger.forEach((claim) => {
@@ -1197,7 +1206,7 @@ function renderApparatus() {
     // picture and the claim it was rendered from as one unit, rather than in a
     // separate gallery that would have to be matched up by eye.
     const explainer = explainers.find((a) => a.claim_id === claim.id);
-    if (explainer) node.append(imageFigure(explainer, { badge: false }));
+    if (explainer) node.append(imageFigure(explainer));
     node.tabIndex = 0;
     bindClaim(node);
     ledger.append(node);

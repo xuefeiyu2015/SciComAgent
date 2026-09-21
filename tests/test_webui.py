@@ -9,6 +9,9 @@ pipeline failure into a 500.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -711,14 +714,193 @@ def test_a_missing_image_file_is_a_404_not_a_server_error(images_client):
 def test_the_board_guards_both_image_call_sites():
     """A result with no images must render exactly as it did before #34.
 
-    There is no JS test harness in this suite, so the guard is pinned at the
-    source: both call sites sit behind a truthiness check, so an absent cover
-    or explainer appends nothing at all.
+    The guard is pinned at the source: both call sites sit behind a truthiness
+    check, so an absent cover or explainer appends nothing at all. Neither
+    passes a badge any more — since #59 the badge is the asset's own
+    `generated` to decide, and the behaviour tests below exercise that.
     """
     source = _BOARD_JS.read_text(encoding="utf-8")
 
-    assert "if (coverAsset) wrap.append(imageFigure(coverAsset, { badge: true }));" in source
-    assert "if (explainer) node.append(imageFigure(explainer, { badge: false }));" in source
+    assert "if (coverAsset) wrap.append(imageFigure(coverAsset));" in source
+    assert "if (explainer) node.append(imageFigure(explainer));" in source
+
+
+# ── the "AI-generated" badge, exercised through board.js itself (#59) ────────
+#
+# The criteria this replaces were pinned by asserting two source lines appeared
+# in board.js, which is a string match: it goes green on code that renders the
+# wrong thing. So `imageFigure()` is run for real, in node, over a DOM only as
+# big as that function needs, and the assertions read the markup it produced.
+# The harness lives here as a string rather than as a third file because the
+# issue's constraints name board.js and this file only; it holds no logic of
+# its own — every decision under test is board.js's.
+
+_NODE = shutil.which("node")
+_NO_NODE = "node is not installed; the board.js render harness needs it"
+
+_BOARD_HARNESS_JS = r"""
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const opts = JSON.parse(process.env.BOARD_HARNESS);
+
+/* A DOM only as big as imageFigure needs: elements that can be built, styled,
+   nested, searched and serialised. */
+class Txt {
+  constructor(text) { this.text = String(text); }
+  get html() { return this.text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+}
+class Elem {
+  constructor(tag) {
+    this.tag = tag; this.className = ''; this.children = []; this.attrs = {};
+    this.style = { cssText: '' }; this.parent = null;
+  }
+  set textContent(v) { this.children = [new Txt(v)]; }
+  get textContent() { return this.children.map((c) => (c instanceof Txt ? c.text : c.textContent)).join(''); }
+  append(...nodes) { for (const n of nodes) { if (n instanceof Elem) n.parent = this; this.children.push(n); } }
+  prepend(...nodes) { for (const n of nodes.reverse()) { if (n instanceof Elem) n.parent = this; this.children.unshift(n); } }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); }
+  matches(sel) { return sel.startsWith('.') ? this.className.split(/\s+/).includes(sel.slice(1)) : this.tag === sel; }
+  querySelector(sel) {
+    for (const c of this.children) {
+      if (!(c instanceof Elem)) continue;
+      if (c.matches(sel)) return c;
+      const hit = c.querySelector(sel);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  get outerHTML() {
+    const bits = [this.tag];
+    if (this.className) bits.push('class="' + this.className + '"');
+    for (const [k, v] of Object.entries(this.attrs)) bits.push(k + '="' + String(v) + '"');
+    if (this.style.cssText) bits.push('style="' + this.style.cssText + '"');
+    const inner = this.children.map((c) => (c instanceof Txt ? c.html : c.outerHTML)).join('');
+    return '<' + bits.join(' ') + '>' + inner + '</' + this.tag + '>';
+  }
+}
+for (const name of ['src', 'alt', 'loading', 'hidden', 'tabIndex']) {
+  Object.defineProperty(Elem.prototype, name, {
+    get() { return this.attrs[name]; },
+    set(v) { this.attrs[name] = v; },
+  });
+}
+
+const stub = new Elem('div');
+stub.addEventListener = () => {};
+globalThis.document = {
+  createElement: (tag) => new Elem(tag),
+  createTextNode: (text) => new Txt(text),
+  querySelector: () => stub,
+  querySelectorAll: () => [],
+  addEventListener: () => {},
+  body: { classList: { add() {}, remove() {} } },
+};
+globalThis.window = globalThis;
+globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+globalThis.fetch = async () => { throw new Error('the harness serves no network'); };
+/* board.js ends in `init()`, which awaits a fetch that cannot succeed here.
+   That rejection is expected and says nothing about imageFigure. */
+process.on('unhandledRejection', () => {});
+
+const source = ['i18n.js', 'board.js']
+  .map((f) => fs.readFileSync(path.join(opts.static_dir, f), 'utf8'))
+  .join('\n');
+const epilogue = '\n'
+  + 'I18N.strings = ' + fs.readFileSync(opts.i18n_json, 'utf8') + ';\n'
+  + 'I18N.lang = ' + JSON.stringify(opts.locale) + ';\n'
+  + 'globalThis.__render = () => imageFigure(' + JSON.stringify(opts.asset) + ').outerHTML;\n';
+vm.runInThisContext(source + epilogue, { filename: 'board-harness.js' });
+process.stdout.write(globalThis.__render());
+"""
+
+
+def _render_image_figure(asset: ImageAsset, locale: str = "zh") -> str:
+    """The markup board.js's own `imageFigure()` produces for one asset."""
+    static_dir = Path(webui.__file__).resolve().parent / "static"
+    env = {
+        **os.environ,
+        "BOARD_HARNESS": json.dumps({
+            "static_dir": str(static_dir),
+            "i18n_json": str(static_dir.parent / "i18n.json"),
+            "locale": locale,
+            "asset": asset.model_dump(mode="json"),
+        }),
+    }
+    proc = subprocess.run(
+        [_NODE, "-e", _BOARD_HARNESS_JS],
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+    assert proc.returncode == 0, f"the board.js harness failed:\n{proc.stderr}"
+    return proc.stdout
+
+
+def _badge_text(locale: str) -> str:
+    strings = json.loads(
+        (Path(webui.__file__).resolve().parent / "i18n.json").read_text(encoding="utf-8")
+    )
+    return strings[locale]["board.images.generated"]
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+def test_the_harness_renders_the_slot_board_js_would_draw():
+    """Guard on the guard: the harness must really be running board.js.
+
+    Without this, a harness that silently rendered nothing would make both
+    badge tests below vacuously true in one direction.
+    """
+    markup = _render_image_figure(_COVER)
+
+    assert 'class="run-image"' in markup
+    assert 'src="/images/sess1/cover.png"' in markup   # imageUrl() ran
+    assert _COVER.alt in markup
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+@pytest.mark.parametrize("kind", [ImageKind.cover, ImageKind.explainer])
+def test_a_generated_asset_is_badged_whatever_kind_it_is(kind):
+    """`generated: true` is what the badge means, so it is what decides it."""
+    asset = _COVER.model_copy(update={
+        "kind": kind,
+        "claim_id": "c1" if kind is ImageKind.explainer else None,
+        "generated": True,
+    })
+
+    markup = _render_image_figure(asset)
+
+    assert 'class="run-image-badge"' in markup
+    assert _badge_text("zh") in markup
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+@pytest.mark.parametrize("kind", [ImageKind.cover, ImageKind.explainer])
+def test_an_ungenerated_asset_is_not_badged_whatever_kind_it_is(kind):
+    """A cover that no model drew must not claim a model drew it."""
+    asset = _EXPLAINER.model_copy(update={
+        "kind": kind,
+        "claim_id": "c1" if kind is ImageKind.explainer else None,
+        "generated": False,
+    })
+
+    markup = _render_image_figure(asset)
+
+    assert "run-image-badge" not in markup
+    assert _badge_text("zh") not in markup
+    assert _badge_text("en") not in markup
+    assert asset.alt in markup   # the caption is still drawn, just unbadged
+
+
+@pytest.mark.skipif(_NODE is None, reason=_NO_NODE)
+def test_the_badge_is_not_read_from_kind_anywhere_in_the_figure():
+    """The two assets the pipeline really emits keep today's labelling (#59).
+
+    `api/visuals.py` sets cover -> generated, explainer -> not; the display
+    must come out the same as before the field it reads changed.
+    """
+    assert _badge_text("zh") in _render_image_figure(_COVER)
+    assert _badge_text("zh") not in _render_image_figure(_EXPLAINER)
 
 
 def test_every_new_image_string_is_in_both_locales():
