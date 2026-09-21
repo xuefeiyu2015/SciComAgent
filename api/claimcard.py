@@ -67,12 +67,55 @@ FONT_SIZE_FIGURE = 56          # the big extracted numeral
 
 ELLIPSIS = "…"  # exactly one character; never "..."
 
-# First run of digits, with an optional single decimal point — the smallest
-# thing that can be called "a number" in a claim. No thousands separator, no
-# percent sign: `figure_of` extracts a numeral, not a formatted figure, and
-# the result must stand as a literal substring of the claim (rule: nothing
-# inferred, nothing reformatted).
-_FIGURE_RE = re.compile(r"\d+(?:\.\d+)?")
+# The first NUMERIC TOKEN in a claim — the smallest thing that can be called
+# "a number" — taken whole. No thousands separator, no percent sign:
+# `figure_of` extracts a numeral, not a formatted figure, and the result must
+# stand as a literal substring of the claim (rule: nothing inferred, nothing
+# reformatted).
+#
+# Three pieces, in order:
+#
+#   1. AN OPTIONAL SIGN (#58). The direction of an effect lives in the sign,
+#      and the figure slot is the card's largest element, so a card reading
+#      `3.2` for a claim that says `-3.2` states a rise where the claim states
+#      a fall — CLAUDE.md #1, in the most-read position on the image. The sign
+#      is LIFTED, never composed: it is matched as part of the token, so the
+#      result stays a contiguous substring of the claim (#25).
+#
+#      A `-` is a sign only when it is glued to the front of the numeral AND
+#      the character before IT is neither a digit nor an ASCII letter. That is
+#      what separates `shifted -3.2` (a signed number) from `12-18` (a range —
+#      the `-` follows the digit `2`) and from `COVID-19` (a name — it follows
+#      the letter `D`); a detached dash, `changed - 3.2`, is not glued to the
+#      numeral and so is not matched either. Turning a range separator into a
+#      minus would be the same class of failure in the other direction, so the
+#      guard is part of the rule, not a refinement of it.
+#
+#      The lookbehind sits INSIDE the optional group on purpose: it must veto
+#      the sign only, never the numeral. `(?<![\dA-Za-z])` in front of the
+#      whole token would make `figure_of("B12 levels rose")` return `""`,
+#      changing a claim that has no sign at all.
+#
+#      `\d` (not `\w`) in the lookbehind: `\w` matches CJK characters, which
+#      would make `了-3.2` — a perfectly ordinary Chinese claim — read as a
+#      range. ASCII `-`/`+` only: an en/em dash is punctuation in this
+#      codebase's prose, not a minus.
+#
+#   2. THE NUMERAL: digits with at most one decimal point, exactly as before.
+#
+#   3. AN OPTIONAL EXPONENT (#58). Emitted whole or not at all: `1e5` yields
+#      `1e5`, never `1`. A bare `1` in the figure slot understates the claim
+#      by a factor of 100000, which is the `48`-for-`4823` failure of #55 in
+#      a different costume, and the fit-or-refuse posture elsewhere in this
+#      module exists for cases where nothing faithful CAN be shown — here
+#      something faithful can, and it is already sitting in the claim. The
+#      exponent is consumed only when it is complete (`[eE]`, optional sign,
+#      at least one digit), so `5e-cigarette` still yields `5`.
+_FIGURE_RE = re.compile(
+    r"(?:(?<![\dA-Za-z])[-+])?"  # 1. the sign, where it cannot be a separator
+    r"\d+(?:\.\d+)?"             # 2. the numeral
+    r"(?:[eE][-+]?\d+)?"         # 3. a complete exponent, if there is one
+)
 
 
 # --- the measure contract ----------------------------------------------------
@@ -126,11 +169,18 @@ class CardLayout:
 # --- figure extraction --------------------------------------------------------
 
 def figure_of(text: str) -> str:
-    """The first numeral in `text`, as a literal substring, or `""`.
+    """The first numeric token in `text`, as a literal substring, or `""`.
 
     Never reformats: `"3.14"` stays `"3.14"`, `"23%"` yields `"23"` (the `%`
     is not part of the numeral). A `text` with no digits — including any
     ordinary CJK prose, which carries no Arabic digits at all — yields `""`.
+
+    The token is taken WHOLE, which is what `_FIGURE_RE` above is about: a
+    sign the claim wrote against the numeral comes with it (`"-3.2"`, not
+    `"3.2"` — #58), and so does an exponent (`"1e5"`, never `"1"`). A hyphen
+    that separates rather than signs stays out: `"12-18"` yields `"12"`.
+    Everything returned is lifted, never composed — the result is always a
+    contiguous substring of `text` (#25).
     """
     match = _FIGURE_RE.search(text)
     return match.group(0) if match else ""

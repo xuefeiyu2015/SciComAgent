@@ -857,3 +857,285 @@ def test_a_claim_that_needs_no_elision_is_untouched():
 
 def _by_name_elision() -> dict:
     return {f.name: f for f in ELISION_FIXTURES}
+
+
+# =============================================================================
+# --- #58: the figure keeps the SIGN the claim gave it ------------------------
+# =============================================================================
+#
+# The invariants above are about which characters may be drawn and which runs
+# may be shown whole. Neither can see #58: `"Scores shifted -3.2 points"` put
+# `3.2` in the figure slot — the card's largest element — so a reader saw a
+# rise where the claim states a fall. Every character drawn was in the source,
+# `"3.2"` is a complete numeral run of the source, and the string is a
+# contiguous substring of the claim. All of it passes, and the card still
+# states something the claim does not (CLAUDE.md #1).
+#
+# The invariant that closes the class is about what sits IMMEDIATELY BEFORE
+# the figure in the source: if the claim wrote a sign against that numeral,
+# the card may not drop it. Stated that way it fires on every card this file
+# builds, not just on the fixtures written for #58.
+#
+# Whether a leading `-` is a sign at all is the whole difficulty, and this
+# file decides it for itself rather than asking `api.claimcard` (see the
+# module docstring). The rule written here, from #58's description:
+#
+#   a `-` or `+` is a SIGN when it is glued to the front of the numeral AND
+#   the character before IT is not a digit or an ASCII letter.
+#
+# So `12-18` is a range (the `-` follows the digit `2`) and `COVID-19` is a
+# name (it follows the letter `D`), while `shifted -3.2` and `(-3.2)` are
+# signed numbers. A detached dash (`changed - 3.2`) is not glued to the
+# numeral and so is not a sign either.
+#
+# NOT part of this: which numeral in the claim gets featured. `COVID-19` below
+# puts `19` in the figure slot, as it does today; that is the separate
+# question of whether the FIRST numeral is the interesting one, and #58 is
+# only about not turning that `-` into a minus.
+
+_SIGN_CHARS = "+-"
+
+
+def _glued_sign_before(text: str, index: int) -> str:
+    """The sign the source attached to the numeral starting at `index`, or `""`.
+
+    Written from #58's description; never imported from `api.claimcard`.
+    """
+    if index <= 0 or text[index - 1] not in _SIGN_CHARS:
+        return ""
+    if index >= 2:
+        before = text[index - 2]
+        is_ascii_letter = before.isascii() and before.isalpha()
+        if is_ascii_letter or _DECIMAL_DIGIT_RE.fullmatch(before) is not None:
+            return ""  # "12-18" is a range, "COVID-19" is a name
+    return text[index - 1]
+
+
+@dataclass(frozen=True)
+class SignFixture:
+    """One claim and the exact figure its card must carry.
+
+    `expected_figure` is a hand-written literal, never computed from
+    `api.claimcard`.
+    """
+
+    name: str
+    claim: Claim
+    expected_figure: str
+
+
+SIGN_FIXTURES: tuple[SignFixture, ...] = (
+    SignFixture(
+        # #58's report, verbatim: the direction of the effect lives in the
+        # sign, and the figure slot is the most-read thing on the card.
+        name="leading_minus_is_part_of_the_figure",
+        claim=_claim(
+            id="c58",
+            claim="Scores shifted -3.2 points",
+            qualifier="mice only, preliminary",
+        ),
+        expected_figure="-3.2",
+    ),
+    SignFixture(
+        # A `+` written in the source is information too, and it is kept for
+        # the same reason: the card says what the claim says.
+        name="leading_plus_is_part_of_the_figure",
+        claim=_claim(
+            id="c59",
+            claim="Scores shifted +3.2 points",
+            qualifier="mice only, preliminary",
+        ),
+        expected_figure="+3.2",
+    ),
+    SignFixture(
+        # A range separator, NOT a sign. Reading it as one would render a
+        # card about "-18" for a claim about ages 12 to 18.
+        name="range_hyphen_is_not_a_sign",
+        claim=_claim(
+            id="c60",
+            claim="Participants aged 12-18 were enrolled",
+            qualifier="preliminary",
+        ),
+        expected_figure="12",
+    ),
+    SignFixture(
+        # Ordinary hyphenation: nothing here is a signed number.
+        name="punctuation_hyphen_is_not_a_sign",
+        claim=_claim(
+            id="c61",
+            claim="Long-term follow-up showed 12% improvement",
+            qualifier="preliminary",
+        ),
+        expected_figure="12",
+    ),
+    SignFixture(
+        # A dash with a space after it is not glued to the numeral, so it is
+        # punctuation, not a minus.
+        name="detached_dash_is_not_a_sign",
+        claim=_claim(
+            id="c62",
+            claim="Scores changed - 3.2 points on average",
+            qualifier="preliminary",
+        ),
+        expected_figure="3.2",
+    ),
+    SignFixture(
+        # A hyphen inside a name. `-19` here is not negative nineteen.
+        name="hyphen_after_a_letter_is_not_a_sign",
+        claim=_claim(
+            id="c63",
+            claim="COVID-19 admissions fell 23%",
+            qualifier="preliminary",
+        ),
+        expected_figure="19",
+    ),
+    SignFixture(
+        # CJK: the character before the sign is a CJK one, which is neither a
+        # digit nor an ASCII letter, so the `-` is a minus.
+        name="cjk_claim_with_a_leading_minus",
+        claim=_claim(
+            id="c64",
+            claim="肿瘤体积变化了-3.2%",
+            qualifier="小鼠模型，初步结果",
+        ),
+        expected_figure="-3.2",
+    ),
+    SignFixture(
+        # #58's open question, decided: the exponent token is emitted WHOLE.
+        # `1` alone is a fragment that misstates the magnitude by a factor of
+        # 100000, which is the same failure as showing `48` for `4823` (#55).
+        name="exponent_token_is_emitted_whole",
+        claim=_claim(
+            id="c65",
+            claim="Neurons numbered 1e5 per sample",
+            qualifier="preliminary",
+        ),
+        expected_figure="1e5",
+    ),
+    SignFixture(
+        # And a signed exponent, to pin that the two rules compose.
+        name="signed_exponent_token_is_emitted_whole",
+        claim=_claim(
+            id="c66",
+            claim="Drift measured -2.5e-3 per trial",
+            qualifier="preliminary",
+        ),
+        expected_figure="-2.5e-3",
+    ),
+)
+
+_SIGN_CARDS: tuple[tuple[str, Claim, tuple[int, int], object], ...] = tuple(
+    (f.name, f.claim, _ROOMY, _measure) for f in SIGN_FIXTURES
+)
+
+# Every card in this file, from all three fixture tables. The #36 and #55
+# fixtures prove the sign rule does not fire on cards that were already
+# faithful; the #58 fixtures prove it fires on the ones that were not.
+_CARDS_FOR_SIGN_CHECK = _ALL_CARDS + _SIGN_CARDS
+_SIGN_CHECK_IDS = [card[0] for card in _CARDS_FOR_SIGN_CHECK]
+
+
+@pytest.mark.parametrize(
+    "name,claim,size,measure", _CARDS_FOR_SIGN_CHECK, ids=_SIGN_CHECK_IDS
+)
+def test_figure_keeps_the_sign_the_source_attached_to_it(
+    name: str, claim: Claim, size: tuple[int, int], measure
+):
+    """A figure may not drop a sign the claim glued to its numeral (#58).
+
+    The card's largest element carrying `3.2` for a claim that says `-3.2`
+    states the opposite direction of effect, in the most-read position on the
+    image — a CLAUDE.md #1 failure that every character-level and run-level
+    invariant above passes.
+    """
+    layout = compute_card_layout(claim, size, measure)
+    assert layout is not None, f"[{name}] expected a layout, got None"
+
+    if layout.figure is None:
+        return  # no figure slot: nothing to lose a sign from
+
+    figure = layout.figure.text
+    index = claim.claim.find(figure)
+    assert index >= 0, (
+        f"[{name}] figure {figure!r} is not a substring of claim.claim "
+        f"{claim.claim!r}"
+    )
+
+    dropped = _glued_sign_before(claim.claim, index)
+    assert dropped == "", (
+        f"[{name}] the figure slot reads {figure!r}, but claim.claim "
+        f"{claim.claim!r} writes {dropped + figure!r} — the card drops the "
+        f"{dropped!r} and states the opposite direction of the effect in its "
+        f"largest element. The sign belongs to the number (CLAUDE.md #1)"
+    )
+
+
+@pytest.mark.parametrize(
+    "fixture", SIGN_FIXTURES, ids=[f.name for f in SIGN_FIXTURES]
+)
+def test_sign_fixture_figure_is_exactly_what_the_fixture_declares(
+    fixture: SignFixture,
+):
+    """The exact figure each #58 fixture must render — hand-written literals."""
+    layout = compute_card_layout(fixture.claim, _ROOMY, _measure)
+    assert layout is not None, (
+        f"[{fixture.name}] expected a card whose figure is "
+        f"{fixture.expected_figure!r}, got None"
+    )
+    assert layout.figure is not None, (
+        f"[{fixture.name}] expected the figure {fixture.expected_figure!r}, "
+        f"got no figure slot"
+    )
+    assert layout.figure.text == fixture.expected_figure, (
+        f"[{fixture.name}] figure is {layout.figure.text!r}, expected "
+        f"{fixture.expected_figure!r} for claim {fixture.claim.claim!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "fixture", SIGN_FIXTURES, ids=[f.name for f in SIGN_FIXTURES]
+)
+def test_sign_fixture_figure_is_lifted_not_composed(fixture: SignFixture):
+    """The #25 rule, re-asserted on the new fixtures: the figure — sign and
+    all — is a contiguous substring of the claim, and every numeral run it
+    shows is a complete run of the source (#55)."""
+    layout = compute_card_layout(fixture.claim, _ROOMY, _measure)
+    assert layout is not None and layout.figure is not None
+
+    figure = layout.figure.text
+    assert figure in fixture.claim.claim, (
+        f"[{fixture.name}] figure {figure!r} is not a contiguous substring of "
+        f"claim.claim {fixture.claim.claim!r} — a sign may be LIFTED from the "
+        f"source, never composed onto a numeral (#25)"
+    )
+
+    source_runs = set(_numeral_runs(fixture.claim.claim)) | set(
+        _numeral_runs(fixture.claim.qualifier)
+    )
+    for run in _numeral_runs(figure):
+        assert run in source_runs, (
+            f"[{fixture.name}] figure {figure!r} shows the numeral run "
+            f"{run!r}, which is not a complete run of {fixture.claim.claim!r} "
+            f"(complete runs: {sorted(source_runs)!r})"
+        )
+
+
+def test_the_sign_fixtures_cover_both_signs_and_both_non_signs():
+    """Guards the #58 table: if it rots into sign-only cases it stops pinning
+    the hard half of the rule, which is the hyphens that are NOT signs."""
+    expected = {f.name: f.expected_figure for f in SIGN_FIXTURES}
+
+    assert any(v.startswith("-") for v in expected.values()), "no minus fixture"
+    assert any(v.startswith("+") for v in expected.values()), "no plus fixture"
+    assert any(
+        not v.startswith(("+", "-")) for v in expected.values()
+    ), "no fixture where a hyphen must NOT become a sign"
+
+    for name in (
+        "range_hyphen_is_not_a_sign",
+        "punctuation_hyphen_is_not_a_sign",
+        "hyphen_after_a_letter_is_not_a_sign",
+    ):
+        assert "-" in dict((f.name, f.claim.claim) for f in SIGN_FIXTURES)[name], (
+            f"[{name}] no longer contains a hyphen; it pins nothing"
+        )
