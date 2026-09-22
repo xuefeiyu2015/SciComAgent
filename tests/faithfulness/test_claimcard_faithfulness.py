@@ -133,7 +133,8 @@ FIXTURES: tuple[Fixture, ...] = (
             qualifier="小鼠模型，初步结果",
         ),
         size=_ROOMY,
-        expected_figure="23",
+        # `23%`, not `23`: the mark multiplies the digits (#68).
+        expected_figure="23%",
     ),
     Fixture(
         # Long enough that the claim text itself must be elided (no figure, so
@@ -175,7 +176,9 @@ FIXTURES: tuple[Fixture, ...] = (
             qualifier="self-reported, unblinded",
         ),
         size=_ROOMY,
-        expected_figure="48",
+        # `48%`, not `48`: #57 ruled the cut between `48` and `%` misstates
+        # the magnitude 100x, and #68 closed the same gap in this slot.
+        expected_figure="48%",
     ),
     Fixture(
         # No numeral at all: no figure slot, but still a qualifier to keep.
@@ -200,7 +203,7 @@ FIXTURES: tuple[Fixture, ...] = (
             qualifier="",
         ),
         size=_ROOMY,
-        expected_figure="23",
+        expected_figure="23%",  # the scale mark joins (#68)
     ),
 )
 
@@ -1236,7 +1239,8 @@ SIGN_FIXTURES: tuple[SignFixture, ...] = (
     SignFixture(
         name="fullwidth_plus",
         claim=_sign_claim("c66", "＋12% change overall"),
-        expected_figure="＋12",
+        # The sign still survives; the scale mark now comes too (#68).
+        expected_figure="＋12%",
     ),
     SignFixture(
         # The realistic Chinese negative claim: fullwidth sign, introduced by
@@ -1249,7 +1253,8 @@ SIGN_FIXTURES: tuple[SignFixture, ...] = (
             claim="肿瘤体积变化：－3.2%",
             qualifier="小鼠模型，初步结果",
         ),
-        expected_figure="－3.2",
+        # Sign kept, and the scale mark with it (#68).
+        expected_figure="－3.2%",
     ),
     # --- the hyphen JOINS and must not be shown as a sign ------------------
     SignFixture(
@@ -1265,7 +1270,8 @@ SIGN_FIXTURES: tuple[SignFixture, ...] = (
     SignFixture(
         name="punctuation_hyphen",
         claim=_sign_claim("c70", "Long-term follow-up showed 12% gains"),
-        expected_figure="12",
+        # Still no fabricated sign; the `%` joins its number (#68).
+        expected_figure="12%",
     ),
     SignFixture(
         name="iso_date",
@@ -1373,7 +1379,8 @@ SIGN_FIXTURES: tuple[SignFixture, ...] = (
             claim="肿瘤体积变化了－3.2%",
             qualifier="小鼠模型，初步结果",
         ),
-        expected_figure="3.2",
+        # The glued sign is still dropped; the scale mark still joins (#68).
+        expected_figure="3.2%",
     ),
     # --- exponents ---------------------------------------------------------
     SignFixture(
@@ -1965,4 +1972,373 @@ def test_the_57_fixture_tables_still_pin_every_reported_string():
     assert len(SCALE_MARKS) >= 5, (
         f"the scale-mark alphabet derived from unicodedata collapsed to "
         f"{SCALE_MARKS!r}; the spacing property is running on almost nothing"
+    )
+
+
+# --- #68: a scale suffix is PART of the number ------------------------------
+# =============================================================================
+#
+# #57 ruled that a cut between `48` and `%` misstates the magnitude by 100, so
+# `_numeral_runs` binds the `%`. The figure slot — the card's LARGEST element,
+# and the one that is never elided, so it carries no `…` to warn a reader that
+# anything was removed — still rendered `48`. The operator hit the severe form
+# of that on a real run: a card reading `1.3` at 56px for a claim about a
+# `1.3B`-parameter model, wrong by a factor of 10^9 (#68).
+#
+# THE RULE, which is #55's and #57's stated at the level that decides the case:
+#
+#     A suffix is part of the number when it MULTIPLIES it, and not when it
+#     merely names its dimension. Read the displayed digits alone as a number;
+#     if that equals the quantity the claim states, the suffix is a unit and
+#     may be dropped. If it does not, dropping it misstates the claim.
+#
+# So `12 points`, `2.5x`, `4823 人` and `3倍` stay out — the digits shown are
+# the complete value — and `48%`, `1.3B`, `1.3 billion` and `1.3亿` come in.
+# The #55 and #57 fixtures for the units above are NOT touched by this
+# section: if one of them moves, the suffix set has eaten a unit.
+#
+# THIS FILE'S OWN SCALE SET. Written out by hand below, from the rule, and
+# deliberately NOT imported from `api.claimcard` — not `figure_of`, not
+# `_FIGURE_RE`, not `_NUMERAL_SCALES`, not whatever production calls its scale
+# list. A detector that asks the code under test which suffixes are scales
+# shares its blind spot, which is how #57 and #58 were each reopened.
+
+# Suffixes that MULTIPLY the digits. Each one, dropped, moves the magnitude.
+_SCALE_SUFFIXES: tuple[str, ...] = (
+    # scale marks (a hand-typed sample here on purpose; `SCALE_MARKS` above
+    # already sweeps the whole Unicode family for the cut-position rule)
+    "%", "‰", "％",
+    # ASCII scale words, both cases, the abbreviations and the words
+    "K", "k", "M", "m", "B", "b", "T", "t", "bn", "mn",
+    "thousand", "million", "billion", "trillion", "Billion",
+    # CJK scale characters after Arabic digits
+    "万", "亿", "兆", "千", "百",
+)
+
+# Suffixes that NAME A DIMENSION. Each one, dropped, costs the reader the unit
+# and not the value — #55's accepted limit, which this section may not undo.
+_UNIT_SUFFIXES: tuple[str, ...] = (
+    "points", "x", "倍", "人", "mm", "Kg", "kg", "billionaires", "metres",
+    "bits", "trials", "mice", "%-free",
+)
+
+_SCALE_TEMPLATE = "Model size reached 1.3{gap}{suffix} in the final training run"
+
+
+@dataclass(frozen=True)
+class ScaleFixture:
+    """One claim and the exact figure its card must carry.
+
+    `expected_figure` is a hand-written literal, read off the claim by a
+    human against the multiplies-vs-names rule. Nothing is computed from
+    `api.claimcard`.
+    """
+
+    name: str
+    claim: Claim
+    expected_figure: str
+
+
+SCALE_FIXTURES: tuple[ScaleFixture, ...] = (
+    ScaleFixture(
+        # THE OPERATOR'S CLAIM, verbatim from the run that opened #68. The
+        # card read `1.3` at 56px for a 1.3-BILLION-parameter model.
+        name="operator_instructgpt_1_3B",
+        claim=_claim(
+            id="c68",
+            claim=(
+                "在人工评估的提示分布中，1.3B 参数的 InstructGPT 模型的输出优于 "
+                "175B GPT-3"
+            ),
+            qualifier="初步结果",
+        ),
+        expected_figure="1.3B",
+    ),
+    ScaleFixture(
+        # The 100x gap #57 identified for the claim line and left open here.
+        name="percent_sign_joins_the_figure",
+        claim=_sign_claim("c69", "48% of participants responded"),
+        expected_figure="48%",
+    ),
+    ScaleFixture(
+        # #57's spacing rule, in this slot: typography, not meaning.
+        name="percent_sign_one_space_away_joins_the_figure",
+        claim=_sign_claim("c70", "48 % of participants responded"),
+        expected_figure="48 %",
+    ),
+    ScaleFixture(
+        name="cjk_scale_yi",
+        claim=_claim(id="c71", claim="样本量约1.3亿人", qualifier="初步结果"),
+        expected_figure="1.3亿",
+    ),
+    ScaleFixture(
+        name="cjk_scale_wan",
+        claim=_claim(id="c72", claim="5万人参与", qualifier="初步结果"),
+        expected_figure="5万",
+    ),
+    ScaleFixture(
+        name="ascii_scale_word",
+        claim=_sign_claim("c73", "1.3 billion parameters were trained"),
+        expected_figure="1.3 billion",
+    ),
+    ScaleFixture(
+        name="ascii_scale_letter",
+        claim=_sign_claim("c74", "1.3B parameters were trained"),
+        expected_figure="1.3B",
+    ),
+    ScaleFixture(
+        name="ascii_scale_letter_lowercase",
+        claim=_sign_claim("c75", "1.3b parameters were trained"),
+        expected_figure="1.3b",
+    ),
+    # --- units: the digits shown are the complete value, so they stay out ---
+    ScaleFixture(
+        # #55's fixture string. If this one moves, the rule ate a unit.
+        name="unit_points_stays_out",
+        claim=_sign_claim("c76", "Response rate rose 12 points"),
+        expected_figure="12",
+    ),
+    ScaleFixture(
+        name="unit_x_stays_out",
+        claim=_sign_claim("c77", "2.5x improvement was observed"),
+        expected_figure="2.5",
+    ),
+    ScaleFixture(
+        name="unit_cjk_ren_stays_out",
+        claim=_claim(id="c78", claim="4823 人完成了随访", qualifier="初步结果"),
+        expected_figure="4823",
+    ),
+    ScaleFixture(
+        name="unit_cjk_bei_stays_out",
+        claim=_claim(id="c79", claim="提升3倍", qualifier="初步结果"),
+        expected_figure="3",
+    ),
+    # --- the boundary clause: a scale word ending inside a longer word ------
+    ScaleFixture(
+        name="boundary_mm_is_not_m",
+        claim=_sign_claim("c80", "Electrodes spanned 50 mm of cortex"),
+        expected_figure="50",
+    ),
+    ScaleFixture(
+        name="boundary_kg_is_not_k",
+        claim=_sign_claim("c81", "Each animal gained 1 Kg over the trial"),
+        expected_figure="1",
+    ),
+    ScaleFixture(
+        name="boundary_billionaires_is_not_billion",
+        claim=_sign_claim("c82", "The list named 1.3 billionaires in total"),
+        expected_figure="1.3",
+    ),
+    # --- #58 composes: the sign survives, joiners stay joiners --------------
+    ScaleFixture(
+        name="signed_scale_keeps_both",
+        claim=_sign_claim("c83", "Scores shifted -3.2% overall"),
+        expected_figure="-3.2%",
+    ),
+    ScaleFixture(
+        name="signed_scale_word_keeps_both",
+        claim=_sign_claim("c84", "Capacity changed -3.2B parameters"),
+        expected_figure="-3.2B",
+    ),
+    ScaleFixture(
+        name="joiner_is_still_not_a_sign",
+        claim=_sign_claim("c85", "Aβ-42 levels rose in treated mice"),
+        expected_figure="42",
+    ),
+    ScaleFixture(
+        name="range_is_still_a_range",
+        claim=_sign_claim("c86", "Participants aged 12-18 were enrolled"),
+        expected_figure="12",
+    ),
+    # --- the exponent still wins where it applies ---------------------------
+    ScaleFixture(
+        name="exponent_token_is_still_whole",
+        claim=_sign_claim("c87", "Neurons numbered 1e5 per sample"),
+        expected_figure="1e5",
+    ),
+    ScaleFixture(
+        # A plain unsuffixed numeral is byte-for-byte what it was.
+        name="plain_numeral_is_unchanged",
+        claim=_sign_claim("c88", "Only 4823 of the participants responded"),
+        expected_figure="4823",
+    ),
+)
+
+_SCALE_FIXTURE_IDS = [f.name for f in SCALE_FIXTURES]
+
+
+@pytest.mark.parametrize("fixture", SCALE_FIXTURES, ids=_SCALE_FIXTURE_IDS)
+def test_scale_fixture_figure_is_exactly_what_the_fixture_declares(
+    fixture: ScaleFixture,
+):
+    """The exact figure each #68 fixture must render — hand-written literals."""
+    layout = compute_card_layout(fixture.claim, _ROOMY, _measure)
+    assert layout is not None, (
+        f"[{fixture.name}] expected a card whose figure is "
+        f"{fixture.expected_figure!r}, got None"
+    )
+    assert layout.figure is not None, (
+        f"[{fixture.name}] expected a figure slot reading "
+        f"{fixture.expected_figure!r}, got no figure slot at all"
+    )
+    assert layout.figure.text == fixture.expected_figure, (
+        f"[{fixture.name}] the card's largest element reads "
+        f"{layout.figure.text!r} for a claim that says "
+        f"{fixture.claim.claim!r}. Expected {fixture.expected_figure!r}: a "
+        f"suffix that MULTIPLIES the digits is part of the number, and "
+        f"dropping it states a magnitude the claim never made (#68)"
+    )
+
+
+@pytest.mark.parametrize("fixture", SCALE_FIXTURES, ids=_SCALE_FIXTURE_IDS)
+def test_scale_fixture_figure_is_lifted_not_composed(fixture: ScaleFixture):
+    """#25 on the new fixtures: the figure is a contiguous substring.
+
+    Widening the figure may not start CONSTRUCTING it — a scale suffix is
+    taken because it is already there, next to the digits, in the claim.
+    """
+    figure = fixture.expected_figure
+    assert figure in fixture.claim.claim, (
+        f"[{fixture.name}] {figure!r} is not a contiguous substring of "
+        f"{fixture.claim.claim!r} — the fixture itself asks for a composed "
+        f"figure, which #25 forbids"
+    )
+    layout = compute_card_layout(fixture.claim, _ROOMY, _measure)
+    assert layout is not None and layout.figure is not None
+    assert layout.figure.text in fixture.claim.claim, (
+        f"[{fixture.name}] the card's figure {layout.figure.text!r} is not a "
+        f"contiguous substring of {fixture.claim.claim!r}: it was composed, "
+        f"not lifted (#25)"
+    )
+
+
+@pytest.mark.parametrize("suffix", _SCALE_SUFFIXES, ids=_SCALE_SUFFIXES)
+@pytest.mark.parametrize("gap", ("", " "), ids=("tight", "one_space"))
+def test_every_scale_suffix_joins_the_figure(suffix: str, gap: str):
+    """A suffix that multiplies the digits is shown with them, however spaced.
+
+    Swept over this file's own scale set so the answer cannot be "the two
+    suffixes somebody wrote a fixture for". `48%` and `48 %` are the same
+    claim; so are `1.3B` and `1.3 B` (#57's spacing ruling, this slot).
+    """
+    claim_text = _SCALE_TEMPLATE.format(gap=gap, suffix=suffix)
+    expected = f"1.3{gap}{suffix}"
+    figure = _figure_on_card(claim_text)
+    assert figure == expected, (
+        f"[{suffix!r}, gap {gap!r}] the card's largest element reads "
+        f"{figure!r} for a claim that says {expected!r}. The suffix "
+        f"MULTIPLIES the digits: 1.3 is not the quantity, and the figure "
+        f"slot carries no ellipsis to say anything was dropped (#68)"
+    )
+
+
+@pytest.mark.parametrize("suffix", _UNIT_SUFFIXES, ids=_UNIT_SUFFIXES)
+@pytest.mark.parametrize("gap", ("", " "), ids=("tight", "one_space"))
+def test_no_unit_suffix_joins_the_figure(suffix: str, gap: str):
+    """A suffix that only NAMES a dimension stays out (#55's accepted limit).
+
+    The failure this guards is the rule widening into a shape test and
+    swallowing `12 points`: the digits shown are already the complete value,
+    so taking the word in buys no faithfulness and costs width, which under
+    #43 refuses cards.
+    """
+    claim_text = _SCALE_TEMPLATE.format(gap=gap, suffix=suffix)
+    figure = _figure_on_card(claim_text)
+    assert figure == "1.3", (
+        f"[{suffix!r}, gap {gap!r}] the figure reads {figure!r}; expected "
+        f"'1.3'. {suffix!r} names a dimension, it does not multiply the "
+        f"digits — 1.3 IS the quantity the claim states, so the suffix is a "
+        f"unit and the rule has eaten one (#55)"
+    )
+
+
+# --- the same definition on the cut side ------------------------------------
+# #57's root cause was two places that each decided where a number ends. The
+# fix for this defect is one definition consumed by both, so the claim line
+# may not elide `1.3B` to `1.3…` either — an ellipsis says the SENTENCE was
+# cut, not the NUMBER (#55 already rejected that defence).
+
+_SCALE_QUANTITY_FIXTURES: tuple[QuantityFixture, ...] = (
+    QuantityFixture(
+        name="ascii_scale_letter",
+        claim_text="Model size reached 1.3B parameters in the final training run",
+        quantity="1.3B",
+    ),
+    QuantityFixture(
+        name="ascii_scale_word",
+        claim_text="Model size reached 1.3 billion parameters in the final run",
+        quantity="1.3 billion",
+    ),
+    QuantityFixture(
+        name="ascii_scale_abbreviation",
+        claim_text="Model size reached 1.3bn parameters in the final training run",
+        quantity="1.3bn",
+    ),
+)
+
+_SCALE_QUANTITY_IDS = [f.name for f in _SCALE_QUANTITY_FIXTURES]
+
+
+@pytest.mark.parametrize(
+    "fixture", _SCALE_QUANTITY_FIXTURES, ids=_SCALE_QUANTITY_IDS
+)
+def test_a_scale_suffix_is_never_cut_off_its_number(fixture: QuantityFixture):
+    """The claim line may not end between the digits and their scale suffix.
+
+    Same sweep and same shape as #57's declared-quantity test: if the two
+    paths share one definition, widening the figure widens this too.
+    """
+    start = fixture.claim_text.index(fixture.quantity)
+    end = start + len(fixture.quantity)
+
+    cuts = []
+    for width in _SWEEP_WIDTHS:
+        outcome = _cut_outcome(fixture.claim_text, width)
+        if not isinstance(outcome, int):
+            continue
+        cuts.append(outcome)
+        assert not (start < outcome < end), (
+            f"[{fixture.name}] at width {width} the card reads "
+            f"{fixture.claim_text[:outcome] + ELLIPSIS!r}, cut at index "
+            f"{outcome}, inside the quantity {fixture.quantity!r}. The line "
+            f"shows {fixture.claim_text[start:outcome]!r} where the claim "
+            f"says {fixture.quantity!r} — the scale suffix multiplies the "
+            f"digits, so the card states a magnitude the claim never made "
+            f"(CLAUDE.md #1, issue #68)"
+        )
+
+    assert cuts and min(cuts) < start and max(cuts) > end, (
+        f"[{fixture.name}] the width sweep never straddled the quantity "
+        f"(cuts seen: {sorted(set(cuts))!r}, quantity at {start}..{end}); the "
+        f"assertion above passed vacuously"
+    )
+
+
+def test_the_68_fixture_table_still_pins_the_reported_strings():
+    """Guards the table: the strings the defect named must still be in it.
+
+    The units are pinned here too — this section is as much about what may
+    NOT join the figure as about what must.
+    """
+    figures = {f.expected_figure for f in SCALE_FIXTURES}
+    for string in ("1.3B", "48%", "48 %", "1.3亿", "5万", "1.3 billion", "-3.2B"):
+        assert string in figures, (
+            f"{string!r} is no longer pinned by a ScaleFixture; the case #68 "
+            f"reported would go unnoticed"
+        )
+    for name, expected in (
+        ("unit_points_stays_out", "12"),
+        ("unit_x_stays_out", "2.5"),
+        ("unit_cjk_ren_stays_out", "4823"),
+        ("unit_cjk_bei_stays_out", "3"),
+    ):
+        fixture = {f.name: f for f in SCALE_FIXTURES}[name]
+        assert fixture.expected_figure == expected, (
+            f"[{name}] now expects {fixture.expected_figure!r}, not "
+            f"{expected!r}: a unit has been let into the figure, which is the "
+            f"signal #68 says to stop on rather than edit away"
+        )
+    assert any("初步结果" == f.claim.qualifier for f in SCALE_FIXTURES), (
+        "the CJK fixtures are gone; the CJK scale characters are exactly "
+        "where the 10^8 version of this defect lives"
     )

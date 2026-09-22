@@ -55,7 +55,10 @@ def _claim(**overrides) -> Claim:
 # --- figure_of ----------------------------------------------------------
 
 def test_figure_of_extracts_the_first_integer():
-    assert figure_of("肿瘤体积缩小了23%") == "23"
+    # The `%` comes WITH the number (#68): it multiplies the digits, so a card
+    # reading `23` for a claim that says `23%` is off by a factor of 100. This
+    # assertion said `"23"` until #68 ruled that reading a defect.
+    assert figure_of("肿瘤体积缩小了23%") == "23%"
 
 
 def test_figure_of_extracts_a_decimal():
@@ -149,7 +152,7 @@ def test_exact_positions_with_a_figure_present():
     assert headline_top + headline_h <= qualifier_y - CARD_GAP
 
     assert layout.figure is not None
-    assert layout.figure.text == "42"
+    assert layout.figure.text == "42%"  # the scale mark is part of the number (#68)
     # the figure is left-aligned ON the claim: one headline block, not a
     # centred numeral floating over a left-aligned sentence (#65).
     assert layout.figure.x == CARD_MARGIN
@@ -300,7 +303,7 @@ def test_figure_that_fits_is_never_elided_or_shrunk():
 
     assert layout is not None
     assert layout.figure is not None
-    assert layout.figure.text == "42"
+    assert layout.figure.text == "42%"  # scale mark included (#68)
     assert layout.figure.font_size == FONT_SIZE_FIGURE
 
 

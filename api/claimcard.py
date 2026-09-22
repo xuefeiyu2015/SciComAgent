@@ -216,6 +216,157 @@ def _is_word_character(ch: str) -> bool:
     return unicodedata.category(ch)[0] in ("L", "N", "M")
 
 
+# --- the scale suffix: what MULTIPLIES a numeral (#68) -----------------------
+# ONE definition, consumed by BOTH `figure_of` (what the figure slot shows)
+# and `_numeral_runs` (where the claim line may be cut). It is shared for the
+# reason `_EXPONENT_RE` is shared: two copies are free to drift, and #68 is
+# exactly that drift — `_numeral_runs` bound `48%` while `figure_of` still
+# emitted `48`, in a MORE prominent slot and with no ellipsis to warn anyone.
+#
+# THE RULE, which is #55's and #57's stated at the level that decides the
+# case: **a suffix is part of the number when it MULTIPLIES it, and not when
+# it merely names its dimension.** Read the displayed digits alone as a
+# number; if that equals the quantity the claim states, the suffix is a unit
+# and may be dropped; if it does not, dropping it misstates the claim.
+#
+#   `12 points` -> 12 = 12          unit, stays out (#55)
+#   `2.5x`      -> 2.5 = 2.5        unit, stays out (#55)
+#   `4823 人`    -> 4823 = 4823      unit, stays out (#55)
+#   `3倍`        -> 3 = 3            unit, stays out (threefold IS 3)
+#   `48%`       -> 48 vs 0.48       SCALE, joins (#57 already said so)
+#   `1.3亿`      -> 1.3 vs 1.3e8     SCALE, joins
+#   `1.3B`      -> 1.3 vs 1.3e9     SCALE, joins (the reported card)
+#
+# WHY ERRING INCLUSIVE IS SAFE HERE. Taking a suffix in only ever returns a
+# LONGER substring of the same claim, so #25's lift-not-compute rule is
+# untouched: `figure_of(text) in text` still holds, and a card showing `5 m`
+# for `5 metres` has the source's own words. Dropping a suffix can be wrong by
+# any power of ten. The cost of over-inclusion is width — under #43 a figure
+# that does not fit refuses the card — which is a cost, not a falsehood.
+#
+# THREE FAMILIES, because they are recognisable in three different ways:
+#
+#   1. SCALE MARKS — `_NUMERAL_SCALES`, read out of `unicodedata` by NAME
+#      (every PERCENT / PER MILLE / PER TEN THOUSAND sign), never typed from
+#      memory. A shape rule works here: these characters are nothing but a
+#      scale.
+#
+#   2. CJK SCALE CHARACTERS after Arabic digits — `万 亿 兆 千 百 十`. Already
+#      in `_CJK_NUMERALS` and already bound by `_numeral_runs`; this is the
+#      figure path catching up, not a new set. `倍` is NOT here: `3倍` is
+#      threefold, the digits alone are the quantity, so it is a dimension in
+#      the sense `2.5x` is.
+#
+#   3. ASCII SCALE WORDS — a CLOSED, SPELLED-OUT ALLOWLIST. **Keep it a list.**
+#      Unlike `%`, these cannot be recognised by shape: `1.3 billion` and
+#      `12 points` are both `[digits][space][word]`, and only the word itself
+#      says which is a scale and which is a unit. Any "simplification" of this
+#      into a shape rule — "a short word after a number", "a letter glued to
+#      the digits" — swallows `12 points`, `2.5x`, `50 mm` and `1 Kg`, which
+#      is the failure #55 ruled against. `m`/`b` are genuinely ambiguous
+#      (million/metres, billion/bytes) and are IN on the asymmetry above: `5 m`
+#      for `5 metres` costs width, `5` for `5 million` costs six orders of
+#      magnitude.
+#
+# WHITESPACE between the digits and the suffix is stepped over and taken in,
+# for all three: whether the writer typed `48%` or `48 %` is typography, not
+# meaning (#57), and the same goes for `1.3 B`.
+#
+# THE WORD BOUNDARY, which is what keeps the list from eating units. A suffix
+# only counts when it ENDS its word:
+#   - an ASCII scale word must not be followed by another letter, so `50 mm`,
+#     `1 Kg` and `1.3 billionaires` keep their bare figures (`50`, `1`, `1.3`);
+#   - no suffix counts when a dash glues it to what follows, because a dash
+#     between two word characters JOINS them (the same reading #58 uses to
+#     call the `-` in `Aβ-42` a joiner rather than a minus). That is what
+#     makes `1.3%-free` a compound word carrying `1.3`, and what keeps
+#     `50%-60%` reading `50` — a range, not a scaled figure.
+# Case is not meaning: `1.3b` and `1.3B` are the same claim.
+
+# Every character whose Unicode NAME says PERCENT, PER MILLE or PER TEN
+# THOUSAND, less the invisible TAG PERCENT SIGN (category Cf, not text). Read
+# off `unicodedata` rather than typed from memory — a hand-typed set of three
+# is exactly how the fullwidth sign came to be missing in #58 — and then
+# spelled out here rather than rediscovered by walking the code space on every
+# import, the same trade `_SIGN_CHARS` makes above. The test re-derives it
+# from the database and fails if this set ever drifts from it.
+_NUMERAL_SCALES = frozenset(
+    "%"         # U+0025 PERCENT SIGN
+    "؉"    # ARABIC-INDIC PER MILLE SIGN
+    "؊"    # ARABIC-INDIC PER TEN THOUSAND SIGN
+    "٪"    # ARABIC PERCENT SIGN
+    "‰"    # PER MILLE SIGN
+    "‱"    # PER TEN THOUSAND SIGN
+    "﹪"    # SMALL PERCENT SIGN
+    "％"    # FULLWIDTH PERCENT SIGN
+)
+
+# The CJK myriad scales, as they appear AFTER Arabic digits (`1.3亿`, `5万`,
+# `3千`). A figure written entirely in CJK characters (`三倍`, `一千人`) is a
+# different problem and is #54's, not this one's.
+_CJK_SCALES = frozenset("万亿兆千百十")
+
+# The closed allowlist (family 3 above). Order matters: the regex alternation
+# is tried left to right, so the spelled-out words and the two-letter
+# abbreviations come before the single letters they start with, and
+# `billionaires` fails on `billion` AND on `b` rather than matching either.
+_ASCII_SCALE_WORDS = (
+    "thousand", "million", "billion", "trillion",  # spelled out
+    "bn", "mn",                                     # the abbreviations
+    "k", "m", "b", "t",                             # the single letters
+)
+
+# `(?![^\W\d_])` is "not followed by a letter": the word-boundary clause that
+# keeps `mm`, `Kg` and `billionaires` out. It sits INSIDE the alternation so
+# the engine backtracks through the shorter alternatives instead of stopping
+# at the first one that matched.
+_ASCII_SCALE_WORD_RE = re.compile(
+    rf"(?:{'|'.join(_ASCII_SCALE_WORDS)})(?![^\W\d_])",
+    re.IGNORECASE,
+)
+
+
+def _joins_a_following_word(text: str, i: int) -> bool:
+    """Whether a dash at `text[i]` glues what precedes it onto a word.
+
+    Unicode category Pd (dash punctuation, so the en dash too) with a word
+    character after it. `1.3%-free` is one compound word carrying the quantity
+    1.3, and `50%-60%` is a range whose lower bound is `50`; in neither is the
+    `%` a scale suffix closing a figure. Same reading as #58's joiner rule,
+    one clause over.
+    """
+    if i + 1 >= len(text) or unicodedata.category(text[i]) != "Pd":
+        return False
+    return _is_word_character(text[i + 1])
+
+
+def _scale_suffix_end(text: str, i: int) -> int:
+    """Index just past the scale suffix at `text[i:]`, else `i` unmoved.
+
+    `text[i]` is the first character after a numeral's digits. Whitespace
+    between the two is stepped over and taken into the span, so `48 %` and
+    `1.3 B` answer exactly as `48%` and `1.3B` do (#57).
+
+    THE ONE definition of "this suffix multiplies the number", used by
+    `figure_of` to decide what to show and by `_numeral_runs` to decide where
+    a cut may fall. Those two answered differently before #68.
+    """
+    n = len(text)
+    j = i
+    while j < n and text[j].isspace():
+        j += 1
+    if j >= n:
+        return i
+    if text[j] in _NUMERAL_SCALES or text[j] in _CJK_SCALES:
+        end = j + 1
+    else:
+        word = _ASCII_SCALE_WORD_RE.match(text, j)
+        if word is None:
+            return i
+        end = word.end()
+    return i if _joins_a_following_word(text, end) else end
+
+
 # --- the measure contract ----------------------------------------------------
 
 # `measure(text, font_size) -> (width_px, height_px)`: the single source of
@@ -269,9 +420,19 @@ class CardLayout:
 def figure_of(text: str) -> str:
     """The first numeric token in `text`, as a literal substring, or `""`.
 
-    Never reformats: `"3.14"` stays `"3.14"`, `"23%"` yields `"23"` (the `%`
-    is not part of the numeral). A `text` with no digits — including any
-    ordinary CJK prose, which carries no Arabic digits at all — yields `""`.
+    Never reformats: `"3.14"` stays `"3.14"`. A `text` with no digits —
+    including any ordinary CJK prose, which carries no Arabic digits at all —
+    yields `""`.
+
+    A SCALE SUFFIX COMES WITH THE TOKEN (#68): `"23%"` yields `"23%"`,
+    `"1.3B"` yields `"1.3B"`, `"1.3亿"` yields `"1.3亿"` and `"1.3 billion"`
+    yields `"1.3 billion"`, because each of those suffixes MULTIPLIES the
+    digits and a card showing the digits alone states a magnitude the claim
+    never made. A suffix that merely names a dimension stays out, so
+    `"12 points"`, `"2.5x"`, `"4823 人"`, `"3倍"`, `"50 mm"` and
+    `"1.3 billionaires"` yield `"12"`, `"2.5"`, `"4823"`, `"3"`, `"50"` and
+    `"1.3"` — see `_scale_suffix_end`, which is the same definition
+    `_numeral_runs` cuts by.
 
     The token is taken WHOLE, which is what `_FIGURE_RE` above is about: a
     sign the claim wrote against the numeral comes with it (`"-3.2"`, not
@@ -287,11 +448,11 @@ def figure_of(text: str) -> str:
     if match is None:
         return ""
 
-    token = match.group(0)
     start = match.start()
     if match.group("sign") and start > 0 and _is_word_character(text[start - 1]):
-        return token[1:]  # a joiner, not a sign: keep the numeral, drop the glue
-    return token
+        start += 1  # a joiner, not a sign: keep the numeral, drop the glue
+    end = _scale_suffix_end(text, match.end())
+    return text[start:end]
 
 
 # --- numeral runs: what elision may never cut in half (#55) ------------------
@@ -329,13 +490,19 @@ def figure_of(text: str) -> str:
 #      readability nit. Same for `1` shown for `1/3` or `1e5`, and `12` for
 #      `12:30`.
 #
-#   3. A TRAILING SCALE MARK (`%`, `‰`, and their Unicode kin —
-#      `_NUMERAL_SCALES`), across any whitespace in between. A scale mark is
-#      not a unit that follows the number, it MULTIPLIES it: dropping it moves
-#      the magnitude by 100 or 1000, the hazard #55 exists to prevent. Whether
-#      the writer typed `48%` or `48 %` is typography — `48 %` is the standard
-#      form in French and in several style guides — so a rule that keyed on
-#      adjacency would be measuring the space bar, not the meaning (#57).
+#   3. A TRAILING SCALE SUFFIX — `_scale_suffix_end`, the definition shared
+#      with `figure_of` (#68): a scale mark (`%`, `‰` and their Unicode kin),
+#      a CJK scale character after Arabic digits (`1.3亿`), or one of the
+#      closed list of ASCII scale words (`1.3B`, `1.3 billion`), across any
+#      whitespace in between. A scale suffix is not a unit that follows the
+#      number, it MULTIPLIES it: dropping it moves the magnitude by 100, 1000
+#      or 10^9, the hazard #55 exists to prevent. Whether the writer typed
+#      `48%` or `48 %` is typography — `48 %` is the standard form in French
+#      and in several style guides — so a rule that keyed on adjacency would
+#      be measuring the space bar, not the meaning (#57). This clause and the
+#      figure slot run off the SAME function on purpose: when they were two
+#      readings, `_numeral_runs` bound `48%` while `figure_of` showed `48`,
+#      which is the defect #68 reported.
 #
 # WHY CATEGORIES AND NOT LISTS. Every clause above names a Unicode property or
 # a named pattern, never an enumeration of the characters somebody thought of.
@@ -370,24 +537,6 @@ def figure_of(text: str) -> str:
 # share it precisely so they cannot disagree about it.
 _DECIMAL_DIGIT_RE = re.compile(r"\d")  # Unicode decimal digits: 0-9 and ０-９
 _CJK_NUMERALS = frozenset("〇一二三四五六七八九十百千万亿兆两半倍分之")
-
-# Every character whose Unicode NAME says PERCENT, PER MILLE or PER TEN
-# THOUSAND, less the invisible TAG PERCENT SIGN (category Cf, not text). Read
-# off `unicodedata` rather than typed from memory — a hand-typed set of three
-# is exactly how the fullwidth sign came to be missing in #58 — and then
-# spelled out here rather than rediscovered by walking the code space on every
-# import, the same trade `_SIGN_CHARS` makes above. The test re-derives it
-# from the database and fails if this set ever drifts from it.
-_NUMERAL_SCALES = frozenset(
-    "%"         # U+0025 PERCENT SIGN
-    "\u0609"    # ARABIC-INDIC PER MILLE SIGN
-    "\u060a"    # ARABIC-INDIC PER TEN THOUSAND SIGN
-    "\u066a"    # ARABIC PERCENT SIGN
-    "\u2030"    # PER MILLE SIGN
-    "\u2031"    # PER TEN THOUSAND SIGN
-    "\ufe6a"    # SMALL PERCENT SIGN
-    "\uff05"    # FULLWIDTH PERCENT SIGN
-)
 
 
 def _is_decimal_digit(ch: str) -> bool:
@@ -431,22 +580,6 @@ def _binder_end(text: str, i: int) -> int | None:
     return None
 
 
-def _scale_end(text: str, i: int) -> int:
-    """Index just past a trailing scale mark at `text[i:]`, else `i` unmoved.
-
-    Whitespace between the numeral and the mark is stepped over and taken
-    into the run: `48 %` is one quantity, and a cut after the `48` renders a
-    card that is wrong by a factor of 100 (#57).
-    """
-    n = len(text)
-    j = i
-    while j < n and text[j].isspace():
-        j += 1
-    if j < n and text[j] in _NUMERAL_SCALES:
-        return j + 1
-    return i
-
-
 def _numeral_runs(text: str) -> list[tuple[int, int]]:
     """Half-open `(start, end)` spans of every maximal numeral run in `text`."""
     runs: list[tuple[int, int]] = []
@@ -464,7 +597,7 @@ def _numeral_runs(text: str) -> list[tuple[int, int]]:
             if binder is None:
                 break
             j = binder
-        j = _scale_end(text, j)
+        j = _scale_suffix_end(text, j)
         runs.append((i, j))
         i = j
     return runs
