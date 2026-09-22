@@ -639,6 +639,20 @@ def test_compute_card_layout_source_contains_no_pillow_reference():
     # exercises it end-to-end with nothing but the fixed-width `_measure`
     # fake above (which proves the function ACCEPTS a plain callable, not
     # that its body stays Pillow-free — a different guarantee).
-    source = inspect.getsource(compute_card_layout)
-    for forbidden in ("PIL", "Pillow", "Image", "ImageFont", "ImageDraw"):
-        assert forbidden not in source, f"compute_card_layout source mentions {forbidden!r}"
+    # #69 put the wrapper on the pure path too, so the same guarantee has to
+    # cover it: a line-breaking library imported to do the wrapping would be a
+    # font library on the pure side of the #26 marker.
+    from api.claimcard import _break_opportunities, _last_resort_break, _wrap_claim
+
+    functions = (
+        compute_card_layout,
+        _wrap_claim,
+        _break_opportunities,
+        _last_resort_break,
+    )
+    for function in functions:
+        source = inspect.getsource(function)
+        for forbidden in ("PIL", "Pillow", "Image", "ImageFont", "ImageDraw", "open("):
+            assert forbidden not in source, (
+                f"{function.__name__} source mentions {forbidden!r}"
+            )
