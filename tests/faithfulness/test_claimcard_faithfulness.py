@@ -82,6 +82,97 @@ def _numerals(text: str) -> list[str]:
     ]
 
 
+# --- reading a card whose claim now has LINES (#69) --------------------------
+# The claim line became `claim_lines`, a tuple of one to `CLAIM_LINE_CAP`
+# `TextElement`s. Everything this file asserted about the single line has to
+# hold across the tuple, and #69's D3 adds clauses that only exist once there
+# is more than one line. These helpers read a card; they never ask
+# `api.claimcard` where the lines came from — the wrapper is the code under
+# test, and a checker built out of it would agree with it by construction.
+
+
+def _lines(layout) -> list[str]:
+    """The claim as the card draws it, line by line, in source order."""
+    return [element.text for element in layout.claim_lines]
+
+
+def _drawn(layout) -> list:
+    """Every `TextElement` on the card, the figure included when there is one."""
+    elements = [*layout.claim_lines, layout.qualifier, layout.id_tag]
+    if layout.figure is not None:
+        elements.append(layout.figure)
+    return elements
+
+
+def _claim_spans(source: str, lines: list[str]) -> list[tuple[int, int]]:
+    """Each claim line's half-open `(start, end)` span in `source`.
+
+    Asserts #69's D3 as it goes, which is the whole reason it reconstructs the
+    spans rather than trusting them:
+
+      - every line is a CONTIGUOUS SUBSTRING of `source` (the last may carry
+        one trailing `ELLIPSIS`);
+      - the spans are in SOURCE ORDER, non-overlapping and strictly
+        increasing — no reordering, no line shown twice;
+      - only WHITESPACE is consumed between two lines, so nothing is inserted
+        and nothing but whitespace is dropped;
+      - concatenating the spans together with that consumed whitespace
+        reproduces a PREFIX of `source` exactly, character for character.
+    """
+    spans: list[tuple[int, int]] = []
+    rebuilt = ""
+    position = 0
+    for index, line in enumerate(lines):
+        body = line
+        if index == len(lines) - 1 and line.endswith(ELLIPSIS):
+            body = line[: -len(ELLIPSIS)]
+        start = position
+        while start < len(source) and source[start].isspace():
+            start += 1
+        assert source.startswith(body, start), (
+            f"claim line {index} {line!r} is not a contiguous substring of "
+            f"{source!r} starting at {start} (the card must copy the claim, "
+            f"never rewrite it, and a break may only consume whitespace)"
+        )
+        gap = source[position:start]
+        assert not gap.strip(), (
+            f"the break before claim line {index} dropped {gap!r}, which is "
+            f"not whitespace: only whitespace may be consumed at a break"
+        )
+        assert start >= position, "claim line spans must strictly increase"
+        rebuilt += gap + body
+        spans.append((start, start + len(body)))
+        position = start + len(body)
+
+    assert rebuilt == source[: spans[-1][1]], (
+        f"the claim lines {lines!r}, rejoined with the whitespace consumed at "
+        f"each break, give {rebuilt!r}, which is not the prefix "
+        f"{source[: spans[-1][1]]!r} of the claim. Nothing may be inserted "
+        f"and nothing but whitespace removed (#69 D3)"
+    )
+    return spans
+
+
+def _boundaries(source: str, lines: list[str]) -> list[int]:
+    """Every index in `source` where the card ended or began a claim line.
+
+    A break is a new way to split something, so each of these positions is
+    held to the same rule the elision cut is: it may not fall strictly inside
+    a numeral run (#55, #57, #68 — and #69's B1, which forbids it outright).
+    """
+    spans = _claim_spans(source, lines)
+    positions = [end for _start, end in spans[:-1]]
+    positions += [start for start, _end in spans[1:]]
+    if lines[-1].endswith(ELLIPSIS):
+        positions.append(spans[-1][1])  # the elision cut, on the last line
+    return sorted(set(positions))
+
+
+def _ellipsis_count(layout) -> int:
+    """How many `ELLIPSIS` characters the WHOLE card carries."""
+    return sum(element.text.count(ELLIPSIS) for element in _drawn(layout))
+
+
 # --- fixtures ----------------------------------------------------------------
 
 
@@ -148,7 +239,13 @@ FIXTURES: tuple[Fixture, ...] = (
             ),
             qualifier="preliminary, mice",
         ),
-        size=_ROOMY,
+        # Re-canvassed by #69 from `_ROOMY` (1600) to 1200: the claim is 117
+        # characters and at 1600 (available 1536, so 32 characters a line at
+        # 48px) four wrapped lines hold all of it, so the fixture stopped
+        # eliding — green, and pinning nothing. At 1200 available is 1136,
+        # i.e. 23 characters a line, so four lines hold ~92 of the 117 and the
+        # last is elided. The canvas moved, the claim did not.
+        size=(1200, 1200),
         expected_figure=None,
         elided=True,
     ),
@@ -244,10 +341,14 @@ def test_numerals_on_the_card_come_from_the_claim(fixture: Fixture):
     layout = _layout_of(fixture)
     source = fixture.claim.claim + fixture.claim.qualifier
 
-    for element_name in ("figure", "claim", "qualifier"):
-        element = getattr(layout, element_name)
-        if element is None:  # only `figure` can be absent
-            continue
+    elements = [("qualifier", layout.qualifier)]
+    if layout.figure is not None:
+        elements.append(("figure", layout.figure))
+    elements += [
+        (f"claim_lines[{index}]", element)
+        for index, element in enumerate(layout.claim_lines)
+    ]
+    for element_name, element in elements:
         for ch in _numerals(element.text):
             assert ch in source, (
                 f"[{fixture.name}] layout.{element_name}.text contains the "
@@ -431,31 +532,35 @@ def test_every_string_on_the_card_is_copied_from_the_claim(fixture: Fixture):
         f"substring of claim.id {fixture.claim.id!r}"
     )
 
-    claim_text = layout.claim.text
-    if claim_text.endswith(ELLIPSIS):
-        stem = claim_text[: -len(ELLIPSIS)]
-        assert fixture.claim.claim.startswith(stem), (
-            f"[{fixture.name}] elided claim {claim_text!r} does not keep a "
-            f"PREFIX of claim.claim {fixture.claim.claim!r}: the stem "
-            f"{stem!r} is not how the claim starts. A claim is shortened "
-            f"from the end, never cut from the middle"
-        )
-        assert claim_text.count(ELLIPSIS) == 1, (
-            f"[{fixture.name}] elided claim {claim_text!r} carries "
-            f"{claim_text.count(ELLIPSIS)} ellipsis characters, expected "
-            f"exactly one, at the end"
-        )
-    else:
-        assert claim_text in fixture.claim.claim, (
-            f"[{fixture.name}] claim text {claim_text!r} is not a contiguous "
-            f"substring of claim.claim {fixture.claim.claim!r} "
-            f"(and does not end in {ELLIPSIS!r}, so it is not an elision)"
+    lines = _lines(layout)
+    # #69's D3, every clause of it: contiguous substrings, source order,
+    # non-overlapping and increasing spans, and a rejoin that reproduces a
+    # prefix of the claim exactly. `_claim_spans` asserts all four.
+    spans = _claim_spans(fixture.claim.claim, lines)
+    assert spans[0][0] == 0, (
+        f"[{fixture.name}] the first claim line starts at {spans[0][0]}, not "
+        f"at the start of {fixture.claim.claim!r}: a claim is shortened from "
+        f"the END, never cut from the middle"
+    )
+
+    # At most ONE ellipsis on the whole card, and only ever on the LAST claim
+    # line — an ellipsis anywhere else would say the sentence stops there when
+    # it does not (#69).
+    assert _ellipsis_count(layout) <= 1, (
+        f"[{fixture.name}] the card carries {_ellipsis_count(layout)} "
+        f"ellipsis characters across {[e.text for e in _drawn(layout)]!r}; a "
+        f"card may carry at most one, on the last claim line"
+    )
+    for index, line in enumerate(lines[:-1]):
+        assert ELLIPSIS not in line, (
+            f"[{fixture.name}] claim line {index} {line!r} is elided, but "
+            f"only the LAST line may be: an ellipsis mid-block says the "
+            f"sentence ends where it does not"
         )
 
     foreign = {
         ch
-        for element in (layout.figure, layout.claim, layout.qualifier, layout.id_tag)
-        if element is not None
+        for element in _drawn(layout)
         for ch in element.text
         if not any(ch in source for source in sources.values())
     }
@@ -472,11 +577,11 @@ def test_the_elision_fixture_really_elides():
     fixture = _fixture("claim_elided")
     layout = _layout_of(fixture)
 
-    assert layout.claim.text.endswith(ELLIPSIS), (
-        f"[{fixture.name}] claim text {layout.claim.text!r} is not elided; "
-        f"lengthen the fixture or narrow its canvas"
+    assert _lines(layout)[-1].endswith(ELLIPSIS), (
+        f"[{fixture.name}] claim text {_lines(layout)!r} is not elided; "
+        f"narrow its canvas"
     )
-    assert layout.claim.text != fixture.claim.claim
+    assert "".join(_lines(layout)) != fixture.claim.claim
 
 
 # =============================================================================
@@ -686,7 +791,18 @@ class ElisionFixture:
 
     `role` is what the fixture EXISTS to exercise, and it is an invariant
     (#66). `size` is only the instrument that puts the width-chosen cut in the
-    place the role needs:
+    place the role needs — BOTH of its numbers, since #69: the width decides
+    where the cut falls, and the HEIGHT decides how many lines the claim may
+    wrap onto. Every canvas here is `(W, 300)` — `(W, 240)` for the two
+    figureless CJK fixtures — because that band holds exactly ONE claim line,
+    which is where #69's wrap-then-elide degrades to precisely the behaviour
+    these sixteen strings were derived against: `_elide` on the whole claim,
+    at the same width, with the same backup. Every `W` and every expected
+    string is therefore UNCHANGED by #69; only the height moved. Wrapping
+    itself is exercised by `WRAP_FIXTURES` further down, which is a separate
+    table because a wrapped fixture needs a different derivation.
+
+    The roles:
 
       - `inside-run`    the cut falls strictly inside a numeral run, so the
                         backup must fire and move it to the run's start
@@ -696,6 +812,12 @@ class ElisionFixture:
                         the card therefore shows intact
       - `refuses`       backing up reaches the front of the claim, so there is
                         no faithful prefix and the layout refuses
+
+    Since #69 a fixture can die a second way: it can stop eliding ALTOGETHER,
+    because its claim now fits the lines it is given. It would be green and
+    testing nothing, exactly as a drifted cut is. The role test below fails
+    with the same loud DEAD FIXTURE message in that case; the cure is the same
+    one — narrow the canvas, never lengthen the claim.
 
     When a type-scale change moves the cut out of that place, the CANVAS moves
     to restore it — never the role, and never an assertion. An expected string
@@ -742,7 +864,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Only 4823 of the participants responded to the follow-up survey",
             qualifier="preliminary",
         ),
-        size=(208, 900),
+        size=(208, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Only…",
@@ -763,7 +885,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Response rate rose 12 points among the 4823 enrolled participants",
             qualifier="preliminary",
         ),
-        size=(484, 900),
+        size=(484, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Response rate rose…",
@@ -788,7 +910,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Response rate rose 12 points among the 4823 enrolled participants",
             qualifier="preliminary",
         ),
-        size=(196, 900),
+        size=(196, 300),
         role="inside-word",
         claim_font_size=40,
         expected_claim_text="Respo…",
@@ -811,7 +933,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Only 4823 of the participants responded to the follow-up survey",
             qualifier="preliminary",
         ),
-        size=(264, 900),
+        size=(264, 300),
         role="after-numeral",
         claim_font_size=40,
         expected_claim_text="Only 4823…",
@@ -832,7 +954,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="试验共纳入四千八百二十三名参与者",
             qualifier="初步结果",
         ),
-        size=(232, 900),
+        size=(232, 240),
         role="inside-run",
         claim_font_size=48,
         expected_claim_text="试验共纳入…",
@@ -853,7 +975,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="四千八百二十三名参与者完成了随访",
             qualifier="初步结果",
         ),
-        size=(180, 900),
+        size=(180, 240),
         role="refuses",
         claim_font_size=48,
         expected_claim_text=None,
@@ -872,7 +994,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Reaction times improved 2.5x in the treated group",
             qualifier="mice only, preliminary",
         ),
-        size=(584, 900),
+        size=(584, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Reaction times improved…",
@@ -892,7 +1014,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Overall 3 sites enrolled 12,500 participants nationwide",
             qualifier="preliminary",
         ),
-        size=(604, 900),
+        size=(604, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Overall 3 sites enrolled…",
@@ -911,7 +1033,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Vaccine efficacy reached 48% in the trial",
             qualifier="preliminary",
         ),
-        size=(604, 900),
+        size=(604, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Vaccine efficacy reached…",
@@ -934,7 +1056,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Vaccine efficacy reached 48 % in the trial overall",
             qualifier="preliminary",
         ),
-        size=(604, 900),
+        size=(604, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Vaccine efficacy reached…",
@@ -951,7 +1073,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Participants aged 12-18 were enrolled in the trial",
             qualifier="preliminary",
         ),
-        size=(464, 900),
+        size=(464, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Participants aged…",
@@ -969,7 +1091,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Participants aged 12–18 were enrolled in the trial",
             qualifier="preliminary",
         ),
-        size=(464, 900),
+        size=(464, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Participants aged…",
@@ -988,7 +1110,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Neurons numbered 1e5 per sample in the cortex",
             qualifier="preliminary",
         ),
-        size=(444, 900),
+        size=(444, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Neurons numbered…",
@@ -1005,7 +1127,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="About 1/3 of the participants completed the follow-up",
             qualifier="preliminary",
         ),
-        size=(224, 900),
+        size=(224, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="About…",
@@ -1022,7 +1144,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="The treated to control ratio was 3:1 in the study",
             qualifier="preliminary",
         ),
-        size=(764, 900),
+        size=(764, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="The treated to control ratio was…",
@@ -1038,7 +1160,7 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             claim="Sessions began at 12:30 on the second day of testing",
             qualifier="preliminary",
         ),
-        size=(464, 900),
+        size=(464, 300),
         role="inside-run",
         claim_font_size=40,
         expected_claim_text="Sessions began at…",
@@ -1082,10 +1204,14 @@ def test_every_numeral_run_on_the_card_is_a_complete_run_in_the_source(
 
     source_runs = set(_numeral_runs(claim.claim)) | set(_numeral_runs(claim.qualifier))
 
-    for element_name in ("figure", "claim", "qualifier"):
-        element = getattr(layout, element_name)
-        if element is None:  # only `figure` can be absent
-            continue
+    elements = [("qualifier", layout.qualifier)]
+    if layout.figure is not None:
+        elements.append(("figure", layout.figure))
+    elements += [
+        (f"claim_lines[{index}]", element)
+        for index, element in enumerate(layout.claim_lines)
+    ]
+    for element_name, element in elements:
         for run in _numeral_runs(element.text):
             assert run in source_runs, (
                 f"[{name}] layout.{element_name}.text shows the numeral run "
@@ -1102,35 +1228,36 @@ def test_every_numeral_run_on_the_card_is_a_complete_run_in_the_source(
 def test_elision_never_cuts_inside_a_numeral_run(
     name: str, claim: Claim, size: tuple[int, int], measure
 ):
-    """The same invariant stated positionally: where may the cut fall?
+    """The same invariant stated positionally: where may the claim be split?
 
     Unlike the run comparison above, this one sees a `%` sheared off its
     number — `"48"` is a complete run of `"48%"` once the sign is set aside,
     but a card reading "…reached 48…" for a claim that says "48%" is off by a
     factor of 100.
+
+    Since #69 there are two ways to split the claim and both are checked
+    here: the elision cut on the last line, and every LINE BREAK above it. A
+    break is the more dangerous of the two — `4823` wrapped as `48` / `23`
+    carries no ellipsis to warn anyone — which is why #69's B1 forbids a break
+    inside a run outright, with no last-resort override.
     """
     layout = compute_card_layout(claim, size, measure)
     assert layout is not None, f"[{name}] expected a layout, got None"
 
-    text = layout.claim.text
-    if not text.endswith(ELLIPSIS):
-        return  # nothing was cut; there is no cut position to check
+    positions = _boundaries(claim.claim, _lines(layout))
+    if not positions:
+        return  # one whole line: nothing was cut and nothing was broken
 
-    stem = text[: -len(ELLIPSIS)]
-    assert claim.claim.startswith(stem), (
-        f"[{name}] elided claim {text!r} is not a prefix of "
-        f"{claim.claim!r}"
-    )
-    cut = len(stem)
-
-    for start, end in _run_spans(claim.claim, with_suffix=True, with_binders=True):
-        assert not (start < cut < end), (
-            f"[{name}] the claim was cut at index {cut}, strictly inside the "
-            f"numeral run {claim.claim[start:end]!r} (indices {start}..{end}) "
-            f"of {claim.claim!r}. The card therefore shows "
-            f"{claim.claim[start:cut]!r} where the claim says "
-            f"{claim.claim[start:end]!r}. Full claim line: {text!r}"
-        )
+    for cut in positions:
+        for start, end in _run_spans(claim.claim, with_suffix=True, with_binders=True):
+            assert not (start < cut < end), (
+                f"[{name}] the claim was split at index {cut}, strictly "
+                f"inside the numeral run {claim.claim[start:end]!r} (indices "
+                f"{start}..{end}) of {claim.claim!r}. The card therefore "
+                f"shows {claim.claim[start:cut]!r} where the claim says "
+                f"{claim.claim[start:end]!r}. Full claim lines: "
+                f"{_lines(layout)!r}"
+            )
 
 
 @pytest.mark.parametrize("fixture", ELISION_FIXTURES, ids=_elision_ids(ELISION_FIXTURES))
@@ -1148,7 +1275,7 @@ def test_elided_claim_text_is_exactly_what_the_fixture_declares(
             f"[{fixture.name}] expected refusal (None): backing the cut up to "
             f"the start of the numeral run leaves nothing but an ellipsis, and "
             f"a card whose claim line is an ellipsis alone is not a card. Got "
-            f"a layout reading {layout.claim.text!r}"
+            f"a layout reading {_lines(layout)!r}"
         )
         return
 
@@ -1156,9 +1283,9 @@ def test_elided_claim_text_is_exactly_what_the_fixture_declares(
         f"[{fixture.name}] expected a card reading "
         f"{fixture.expected_claim_text!r}, got None"
     )
-    assert layout.claim.text == fixture.expected_claim_text, (
-        f"[{fixture.name}] claim line is {layout.claim.text!r}, expected "
-        f"{fixture.expected_claim_text!r} for claim {fixture.claim.claim!r} "
+    assert _lines(layout) == [fixture.expected_claim_text], (
+        f"[{fixture.name}] claim line is {_lines(layout)!r}, expected "
+        f"[{fixture.expected_claim_text!r}] for claim {fixture.claim.claim!r} "
         f"on a {fixture.size[0]}x{fixture.size[1]} canvas"
     )
 
@@ -1177,7 +1304,7 @@ def test_the_elision_fixtures_really_elide():
         )
         layout = compute_card_layout(fixture.claim, fixture.size, _qa_measure)
         assert layout is not None, f"[{fixture.name}] expected a layout, got None"
-        assert layout.claim.text != fixture.claim.claim, (
+        assert "".join(_lines(layout)) != fixture.claim.claim, (
             f"[{fixture.name}] claim {fixture.claim.claim!r} was not elided on "
             f"a {fixture.size[0]}x{fixture.size[1]} canvas"
         )
@@ -1252,24 +1379,48 @@ def test_every_elision_fixture_still_exercises_its_declared_role(
         )
         assert layout is None, (
             f"[{fixture.name}] expected refusal, got "
-            f"{layout.claim.text!r}"
+            f"{_lines(layout)!r}"
         )
         return
 
     assert layout is not None, f"[{fixture.name}] expected a layout, got None"
-    assert layout.claim.font_size == fixture.claim_font_size, (
+    lines = _lines(layout)
+    assert layout.claim_lines[-1].font_size == fixture.claim_font_size, (
         f"[{fixture.name}] the claim line was laid out at "
-        f"{layout.claim.font_size}px, but this fixture's expected string and "
-        f"canvas were derived by hand at {fixture.claim_font_size}px. The type "
-        f"scale moved under the fixtures: re-derive the cut, do not edit the "
-        f"declared size"
+        f"{layout.claim_lines[-1].font_size}px, but this fixture's expected "
+        f"string and canvas were derived by hand at "
+        f"{fixture.claim_font_size}px. The type scale moved under the "
+        f"fixtures: re-derive the cut, do not edit the declared size"
+    )
+    assert len(lines) == 1, (
+        f"[{fixture.name}] DEAD FIXTURE: the claim now wraps onto "
+        f"{len(lines)} lines ({lines!r}). Every derivation in this table —"
+        f" `available`, `n`, the raw cut, the expected string — is the "
+        f"single-line arithmetic `_width_chosen_cut` below reproduces, and it "
+        f"describes nothing once the claim wraps. This fixture's canvas is "
+        f"sized so the band holds exactly ONE claim line: move its HEIGHT "
+        f"back until it does, do not accept the strings wrapping now produces"
     )
 
-    text = layout.claim.text
+    text = lines[-1]
     assert text.endswith(ELLIPSIS), (
-        f"[{fixture.name}] claim line {text!r} was not elided at all"
+        f"[{fixture.name}] DEAD FIXTURE: the claim line {text!r} is not "
+        f"elided at all, so this fixture pins no cut and exercises no backup "
+        f"— it is green and testing nothing. Narrow its canvas until the "
+        f"claim is cut again; do not lengthen the claim"
     )
-    final_cut = len(text) - len(ELLIPSIS)
+    # The ellipsis is on the LAST claim line and on no other, and there is
+    # exactly one on the whole card (#69).
+    assert _ellipsis_count(layout) == 1, (
+        f"[{fixture.name}] the card carries {_ellipsis_count(layout)} "
+        f"ellipsis characters across {[e.text for e in _drawn(layout)]!r}, "
+        f"expected exactly one, on the last claim line"
+    )
+    assert all(ELLIPSIS not in line for line in lines[:-1]), (
+        f"[{fixture.name}] an ellipsis appears on a line that is not the "
+        f"last: {lines!r}"
+    )
+    final_cut = _claim_spans(claim_text, lines)[-1][1]
 
     if fixture.role == "inside-run":
         assert inside, (
@@ -1332,10 +1483,10 @@ def test_a_claim_that_needs_no_elision_is_untouched():
     layout = compute_card_layout(fixture.claim, (2000, 2000), _qa_measure)
 
     assert layout is not None
-    assert layout.claim.text == fixture.claim.claim, (
-        f"a claim that fits must be unchanged, got {layout.claim.text!r}"
+    assert _lines(layout) == [fixture.claim.claim], (
+        f"a claim that fits must be unchanged, got {_lines(layout)!r}"
     )
-    assert ELLIPSIS not in layout.claim.text
+    assert _ellipsis_count(layout) == 0
 
 
 def _by_name_elision() -> dict:
@@ -2014,21 +2165,33 @@ _SWEEP_WIDTHS = tuple(range(140, 1084, 4))
 def _cut_outcome(claim_text: str, width: int) -> object:
     """What the card does with `claim_text` at `width`: a cut index, or why not.
 
-    `"refused"` for `None`, `"whole"` for an unelided line, otherwise the
-    index in `claim_text` the claim line was cut at.
+    `"refused"` for `None`, `"whole"` for a claim shown to its end, otherwise
+    the index in `claim_text` the claim was cut at — which since #69 is the
+    cut on the LAST line, the only line an ellipsis may appear on.
     """
     claim = _claim(id="c57", claim=claim_text, qualifier="preliminary")
     layout = compute_card_layout(claim, (width, 900), _qa_measure)
     if layout is None:
         return "refused"
-    text = layout.claim.text
-    if not text.endswith(ELLIPSIS):
+    lines = _lines(layout)
+    if not lines[-1].endswith(ELLIPSIS):
         return "whole"
-    stem = text[: -len(ELLIPSIS)]
-    assert claim_text.startswith(stem), (
-        f"elided claim {text!r} is not a prefix of {claim_text!r}"
-    )
-    return len(stem)
+    return _claim_spans(claim_text, lines)[-1][1]
+
+
+def _split_positions(claim_text: str, width: int) -> list[int]:
+    """Every index the card split `claim_text` at: each break, and the cut.
+
+    The sweeps below were written when there was one cut per card. There are
+    now up to four places a quantity can be torn apart, and a BREAK is the
+    worse of the two — it carries no ellipsis to warn the reader — so the
+    sweeps walk all of them (#69).
+    """
+    claim = _claim(id="c57", claim=claim_text, qualifier="preliminary")
+    layout = compute_card_layout(claim, (width, 900), _qa_measure)
+    if layout is None:
+        return []
+    return _boundaries(claim_text, _lines(layout))
 
 
 # --- 1. the declared quantity ------------------------------------------------
@@ -2099,7 +2262,17 @@ def test_a_declared_quantity_is_shown_whole_or_not_at_all(fixture: QuantityFixtu
     end = start + len(fixture.quantity)
 
     cuts = []
+    splits = []
     for width in _SWEEP_WIDTHS:
+        for position in _split_positions(fixture.claim_text, width):
+            splits.append(position)
+            assert not (start < position < end), (
+                f"[{fixture.name}] at width {width} the card SPLIT the claim "
+                f"at index {position}, strictly inside the quantity "
+                f"{fixture.quantity!r} ({start}..{end}) — a line break inside "
+                f"a quantity shows a fragment with no ellipsis to warn anyone "
+                f"(#69 B1)"
+            )
         outcome = _cut_outcome(fixture.claim_text, width)
         if not isinstance(outcome, int):
             continue
@@ -2114,10 +2287,20 @@ def test_a_declared_quantity_is_shown_whole_or_not_at_all(fixture: QuantityFixtu
             f"claim states (CLAUDE.md #1, issue #57)"
         )
 
-    assert cuts and min(cuts) < start and max(cuts) > end, (
+    # The anti-vacuity guard, widened with the instrument (#69): the sweep now
+    # walks up to four split positions per card, not one cut, so it is the
+    # SPLITS that have to straddle the quantity. Narrowing this back to `cuts`
+    # would make it fire on a sweep that does exercise both sides.
+    # The elision cut is ONE of the split positions (it is the split on the
+    # last line), so a sweep whose splits straddle the quantity exercises both
+    # assertions above. A claim may legitimately never elide at any width the
+    # sweep can reach — four lines hold a lot — and demanding a cut as well
+    # would fire on a sweep that is doing its job.
+    assert splits and min(splits) < start and max(splits) > end, (
         f"[{fixture.name}] the width sweep never straddled the quantity "
-        f"(cuts seen: {sorted(set(cuts))!r}, quantity at {start}..{end}); the "
-        f"assertion above passed vacuously"
+        f"(splits seen: {sorted(set(splits))!r}, cuts seen: "
+        f"{sorted(set(cuts))!r}, quantity at {start}..{end}); the assertions "
+        f"above passed vacuously"
     )
 
 
@@ -2140,6 +2323,16 @@ def test_a_scale_mark_stays_with_its_number_however_it_is_spaced(
 
     straddled = [False, False]
     for width in _SWEEP_WIDTHS:
+        for position in _split_positions(claim_text, width):
+            straddled[0] |= position < start
+            straddled[1] |= position > end
+            assert not (start < position < end), (
+                f"[U+{ord(mark):04X}, spacing {spacing!r}] at width {width} "
+                f"the card SPLIT the claim at index {position}, inside "
+                f"{quantity!r}: a line break between the digits and their "
+                f"scale mark states a magnitude the claim never made, and "
+                f"carries no ellipsis to warn anyone (#69 B1)"
+            )
         outcome = _cut_outcome(claim_text, width)
         if not isinstance(outcome, int):
             continue
@@ -2154,7 +2347,8 @@ def test_a_scale_mark_stays_with_its_number_however_it_is_spaced(
 
     assert all(straddled), (
         f"[U+{ord(mark):04X}, spacing {spacing!r}] the sweep never straddled "
-        f"{quantity!r}; the assertion above passed vacuously"
+        f"{quantity!r} — on either side, with a cut or with a break; the "
+        f"assertions above passed vacuously"
     )
 
 
@@ -2207,10 +2401,16 @@ def test_a_binder_is_cut_exactly_like_a_digit(
     bound = _BINDER_TEMPLATE.format(quantity=binder_form)
     control = _BINDER_TEMPLATE.format(quantity=digit_form)
 
+    def outcome(text: str, width: int) -> tuple:
+        # Every place the card split the text, plus what it did with the end:
+        # since #69 two claims can be cut alike and still WRAP differently,
+        # and a break inside a quantity is the worse of the two failures.
+        return (_cut_outcome(text, width), tuple(_split_positions(text, width)))
+
     disagreements = [
-        (width, _cut_outcome(bound, width), _cut_outcome(control, width))
+        (width, outcome(bound, width), outcome(control, width))
         for width in _SWEEP_WIDTHS
-        if _cut_outcome(bound, width) != _cut_outcome(control, width)
+        if outcome(bound, width) != outcome(control, width)
     ]
     assert not disagreements, (
         f"[{name}] {bound!r} is not cut where {control!r} is. First "
@@ -2588,7 +2788,17 @@ def test_a_scale_suffix_is_never_cut_off_its_number(fixture: QuantityFixture):
     end = start + len(fixture.quantity)
 
     cuts = []
+    splits = []
     for width in _SWEEP_WIDTHS:
+        for position in _split_positions(fixture.claim_text, width):
+            splits.append(position)
+            assert not (start < position < end), (
+                f"[{fixture.name}] at width {width} the card SPLIT the claim "
+                f"at index {position}, inside the quantity "
+                f"{fixture.quantity!r} ({start}..{end}): `1.3B` may not wrap "
+                f"as `1.3` / `B` any more than it may elide to `1.3…` "
+                f"(#68, #69 B1)"
+            )
         outcome = _cut_outcome(fixture.claim_text, width)
         if not isinstance(outcome, int):
             continue
@@ -2603,10 +2813,16 @@ def test_a_scale_suffix_is_never_cut_off_its_number(fixture: QuantityFixture):
             f"(CLAUDE.md #1, issue #68)"
         )
 
-    assert cuts and min(cuts) < start and max(cuts) > end, (
+    # The elision cut is ONE of the split positions (it is the split on the
+    # last line), so a sweep whose splits straddle the quantity exercises both
+    # assertions above. A claim may legitimately never elide at any width the
+    # sweep can reach — four lines hold a lot — and demanding a cut as well
+    # would fire on a sweep that is doing its job.
+    assert splits and min(splits) < start and max(splits) > end, (
         f"[{fixture.name}] the width sweep never straddled the quantity "
-        f"(cuts seen: {sorted(set(cuts))!r}, quantity at {start}..{end}); the "
-        f"assertion above passed vacuously"
+        f"(splits seen: {sorted(set(splits))!r}, cuts seen: "
+        f"{sorted(set(cuts))!r}, quantity at {start}..{end}); the assertions "
+        f"above passed vacuously"
     )
 
 

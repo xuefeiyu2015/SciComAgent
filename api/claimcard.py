@@ -57,11 +57,21 @@ Two rules from CLAUDE.md #1-2 shape every decision here:
   - A number/magnitude may be written, but only as a verbatim substring of the
     claim — `figure_of` extracts, it never reformats.
   - The qualifier is never dropped and never the thing elided. When the claim
-    is too long, IT shrinks (from the end, with one ellipsis). When even that
-    is not enough to fit both blocks on the canvas, the function refuses by
-    returning `None` rather than silently drop the qualifier or overflow the
-    card — the same "refuse rather than fabricate" posture #26 takes with a
-    font that cannot render CJK.
+    is too long it WRAPS first (up to `CLAIM_LINE_CAP` lines, #69) and only
+    then shrinks, from the end of the last line, with one ellipsis. When even
+    that is not enough to fit both blocks on the canvas, the function refuses
+    by returning `None` rather than silently drop the qualifier or overflow
+    the card — the same "refuse rather than fabricate" posture #26 takes with
+    a font that cannot render CJK.
+
+WRAPPING IS A SECOND CUTTING INSTRUMENT (#69), and the reason it needed
+deciding before it was written: a card that states one side of a comparison
+and drops the other is verbatim, honest, and useless — the operator's real
+card read `1.3B` over a claim line that cut before `175B GPT-3`. The fix is
+MORE OF THE SENTENCE, never a summary of it, so the claim line wraps and only
+its last line may be elided. Every break obeys the same invariants a cut does
+— see `_break_opportunities` for the rule and for what is deliberately left
+to #71.
 """
 
 from __future__ import annotations
@@ -87,6 +97,24 @@ from api.schema import Claim
 
 CARD_MARGIN = 32   # px, all four sides
 CARD_GAP = 16      # px, vertical gap between stacked elements
+
+# Leading BETWEEN the wrapped claim lines (#69). The rule, so a later reader
+# can extend it rather than guess: **leading inside a block is half the gap
+# between blocks**, so a wrapped claim reads as one block and not as several
+# stacked elements. Hence exactly `CARD_GAP // 2`, written as its own constant
+# because the layout reads it in a different place and a derived expression
+# would invite "simplifying" it back into `CARD_GAP`.
+CARD_LINE_GAP = 8  # px, vertical gap between the claim's own lines
+
+# The most lines the claim may wrap onto (#69). A cap is needed because height
+# alone permits ~17 lines on a 1080 card (a ~938px band at a ~48px advance),
+# and a card that fills it is a paragraph, which destroys #65's composition:
+# the headline block is centred on the upper-third line precisely so it reads
+# as a headline with deliberate slack beneath it. Four 40px lines plus the
+# figure block is ~300px, about 27% of a 1080 canvas, which keeps that anchor
+# and its slack band intact — and at 1016px of width four lines hold ~200
+# Latin or ~100 CJK characters, more than a one-sentence ledger claim needs.
+CLAIM_LINE_CAP = 4
 
 # The line the headline block (figure + claim) is centred on: `height //
 # HEADLINE_ANCHOR_DIVISOR`, i.e. the card's upper-third line. An integer
@@ -418,16 +446,30 @@ class CardLayout:
     `figure` is `None` when `claim.claim` carries no numeral — there is
     nothing to extract, so there is no figure slot, and the claim text is
     drawn larger instead (`FONT_SIZE_CLAIM_NO_FIGURE` vs.
-    `FONT_SIZE_CLAIM_WITH_FIGURE`). `claim` and `qualifier` are always
+    `FONT_SIZE_CLAIM_WITH_FIGURE`). `claim_lines` and `qualifier` are always
     present; `qualifier.text` may be `""` when `claim.qualifier` itself is
     empty, but the field is never omitted — CLAUDE.md #2 says a qualifier is
     never dropped, and an empty source string is not a qualifier to drop.
+
+    `claim_lines` is the claim text wrapped onto one to `CLAIM_LINE_CAP` lines
+    (#69), in source order, non-empty. Each line is its own `TextElement`
+    with `x = CARD_MARGIN`, its own `y` and the shared `font_size`, because
+    `draw_claim_card` (#26) and #43's fit checks both want ONE ELEMENT = ONE
+    DRAW CALL AT ONE POSITION: keeping `TextElement` atomic is what lets the
+    renderer stay "hand the fields to Pillow, compute nothing".
+
+    This field was `claim: TextElement` until #69. It was RENAMED rather than
+    changed in place on purpose: ~25 readers across four files would have
+    stayed syntactically valid and semantically wrong (a tuple where a
+    `TextElement` was expected fails much later, at a confusing depth), and
+    renaming makes every one of them fail at the attribute, so each is visited
+    deliberately.
     """
 
     width: int
     height: int
     figure: TextElement | None
-    claim: TextElement
+    claim_lines: tuple[TextElement, ...]
     qualifier: TextElement
     id_tag: TextElement
 
@@ -684,6 +726,264 @@ def _fits(text: str, font_size: int, available_width: int, measure: Measure) -> 
     return width <= available_width
 
 
+# --- line breaking: where the claim may WRAP (#69) ---------------------------
+#
+# A LINE BREAK IS A NEW WAY TO SPLIT SOMETHING. Everything above this point is
+# about where the claim line may be CUT; wrapping adds a second cutting
+# instrument to the same module, and the three invariants a cut already
+# respects apply to a break unchanged:
+#
+#   - the line is a verbatim contiguous substring (#36);
+#   - a numeral run is never split (#55, #57);
+#   - a scale suffix stays with its number (#68).
+#
+# Chinese wraps anywhere by default, and that is the hazard: without a rule,
+# `4823` renders as `48` / `23` on consecutive lines — #55's harm wearing a new
+# hat, and worse than the elision it replaces, because there is not even an
+# ellipsis to warn the reader.
+#
+# THE RULE (#69's D1), minimal and closed. A position is a legal break iff:
+#
+#   B1  it does not fall strictly inside a numeral run. OUTRIGHT — no
+#       exception, no last-resort override. This clause runs through
+#       `_cut_clear_of_numerals`, the SAME function the elision cut backs up
+#       with, so there is exactly ONE definition of "inside a run" in this
+#       module. Do not write a second scanner: #57 is what two definitions
+#       drifting apart looks like. Because `_numeral_runs` already swallows
+#       the scale suffix (#68) and the interior binders (#55/#57), this single
+#       clause is also the ruling on number-versus-suffix — `1.3B`, `1.3亿`,
+#       `12,500`, `12-18`, `1e5`, `48%` and `48 %` are each ONE run, so every
+#       interior position is already illegal and no second list is needed.
+#
+#   B2  it is a real opportunity: just after a run of whitespace (which is
+#       consumed), between two East Asian Wide/Fullwidth characters (this is
+#       what makes CJK wrap at all, and B1 is what keeps it honest), or at a
+#       punctuation boundary.
+#
+#   B3  the kinsoku minimum: a line may not BEGIN with a closing or
+#       terminating mark, nor END with an opening one. The smallest clause
+#       that stops the two visibly broken cases; the full classes are #71's.
+#
+#   B4  mid-word in a Latin word is not an opportunity. Such a word breaks
+#       only as a LAST RESORT, when that one unbreakable token is itself wider
+#       than a whole line, and the hard break INSERTS NOTHING — no hyphen, no
+#       soft hyphen: that character is not in `claim.claim`, and writing it
+#       would break #36 to make the type look nicer. B1 still binds the last
+#       resort; if backing it clear of a run reaches the start of the token,
+#       there is no faithful break and the card refuses (#43).
+#
+# DELIBERATELY NOT HERE, all of it #71's: a break between a numeral run and a
+# unit it does not bind (`4823` / `名`, `12` / `points`) is PERMITTED — the
+# number is whole on one line and the unit whole on the next, in source order,
+# nothing added or removed, so the harm is typographic and not faithfulness.
+# Also #71's: Latin marks beyond `Pe`/`Pf` that should not start a line, the
+# no-break space, the word joiner, hyphenation points, hanging punctuation and
+# UAX #14's break classes generally.
+
+# The kinsoku minimum's "may not begin a line" set: Unicode categories Pe
+# (closing) and Pf (final quote), plus the CJK terminators and the scale marks
+# below, which are not Pe but read as the tail of what precedes them.
+_NO_LINE_START = "，。、；：？！%‰…·"
+
+# ... and "may not end a line": Ps (opening) and Pi (initial quote).
+_NO_LINE_END_CATEGORIES = ("Ps", "Pi")
+_NO_LINE_START_CATEGORIES = ("Pe", "Pf")
+
+
+def _is_wide(ch: str) -> bool:
+    """Whether `ch` is an East Asian Wide/Fullwidth character.
+
+    The property, not a codepoint range: it is what decides whether a script
+    wraps between any two characters, and asking `unicodedata` keeps this from
+    becoming another hand-typed alphabet (#58).
+    """
+    return unicodedata.east_asian_width(ch) in ("W", "F")
+
+
+def _break_opportunities(text: str, runs: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    """Every legal `(line_end, next_line_start)` break in `text`, in order.
+
+    `line_end` is the exclusive end of the line being closed and
+    `next_line_start` the inclusive start of the next one; they differ only
+    where whitespace is consumed at the break. Nothing is ever inserted, so
+    the two indices are the whole story about what a break does to the text.
+
+    `runs` is `_numeral_runs(text)`, passed in rather than recomputed so the
+    caller can share it with `_elide`'s own backup — one scan, one definition.
+    """
+    n = len(text)
+    candidates: list[tuple[int, int]] = []
+
+    # B2, first form: a run of whitespace. The line ends where the whitespace
+    # starts and the next line begins after it, so the space itself is
+    # consumed — the same "nothing is inserted, only less is kept" rule
+    # `_cut_clear_of_numerals` states for the elision cut.
+    i = 0
+    while i < n:
+        if not text[i].isspace():
+            i += 1
+            continue
+        start = i
+        while i < n and text[i].isspace():
+            i += 1
+        if start > 0 and i < n:
+            candidates.append((start, i))
+
+    # B2, second and third forms: between two wide characters (CJK), or at a
+    # punctuation boundary. Positions adjacent to whitespace are skipped —
+    # the whitespace clause above already owns them, and owning them twice
+    # would offer a break that keeps the space at the end of a line.
+    for i in range(1, n):
+        before, after = text[i - 1], text[i]
+        if before.isspace() or after.isspace():
+            continue
+        if (
+            (_is_wide(before) and _is_wide(after))
+            or unicodedata.category(before).startswith("P")
+            or unicodedata.category(after).startswith("P")
+        ):
+            candidates.append((i, i))
+
+    legal = []
+    for end, nxt in sorted(set(candidates)):
+        # B1, through the one definition of "inside a numeral run" this module
+        # has. A cut that `_cut_clear_of_numerals` moves is a cut that falls
+        # strictly inside a run; a break there is forbidden outright rather
+        # than backed up, because the next break to the left is tried anyway.
+        if _cut_clear_of_numerals(text, end, runs) != end:
+            continue
+        if _cut_clear_of_numerals(text, nxt, runs) != nxt:
+            continue
+        # B3, the kinsoku minimum.
+        if (
+            unicodedata.category(text[nxt]) in _NO_LINE_START_CATEGORIES
+            or text[nxt] in _NO_LINE_START
+        ):
+            continue
+        if unicodedata.category(text[end - 1]) in _NO_LINE_END_CATEGORIES:
+            continue
+        legal.append((end, nxt))
+    return tuple(legal)
+
+
+def _last_resort_break(
+    text: str,
+    start: int,
+    runs: list[tuple[int, int]],
+    font_size: int,
+    available_width: int,
+    measure: Measure,
+) -> tuple[int, int] | None:
+    """B4: break a single unbreakable token wider than a whole line, or `None`.
+
+    The widest prefix of `text[start:]` that fits, moved clear of any numeral
+    run it would split (B1 binds here too, which is why there is no override).
+    `None` when backing up reaches `start` — the token is a numeral run wider
+    than the line, and there is no faithful place to break it.
+
+    NOTHING IS INSERTED. No hyphen, no soft hyphen: neither character is in
+    `claim.claim`, and writing one would break #36 to make the type look
+    nicer.
+    """
+    n = len(text)
+    cut = start
+    for end in range(start + 1, n + 1):
+        if _fits(text[start:end], font_size, available_width, measure):
+            cut = end
+        else:
+            break
+    if cut <= start:
+        return None
+    safe = _cut_clear_of_numerals(text, cut, runs)
+    if safe <= start:
+        return None
+    nxt = safe
+    while nxt < n and text[nxt].isspace():
+        nxt += 1  # whitespace the backup stepped over is consumed, not shown
+    return safe, nxt
+
+
+def _wrap_claim(
+    text: str,
+    font_size: int,
+    available_width: int,
+    max_lines: int,
+    measure: Measure,
+) -> tuple[str, ...] | None:
+    """`text` wrapped greedily onto at most `max_lines` lines, or `None`.
+
+    WRAPPING PRECEDES ELISION, AND ELISION APPLIES TO THE LAST LINE ONLY
+    (#69's D2). Lines 1..N-1 are verbatim contiguous substrings chosen by
+    `_break_opportunities`; line N is whatever is LEFT, handed to the existing
+    `_elide`. So:
+
+      - a claim that fits within `max_lines` lines carries NO ellipsis
+        anywhere — this is the win, and it is the observable one;
+      - a claim that does not is wrapped to exactly `max_lines` lines with
+        only the last one elided, which leaves at most ONE `ELLIPSIS` on the
+        whole card, on the last line;
+      - `max_lines == 1` degrades to exactly the pre-#69 behaviour:
+        `_elide(text)` and nothing else. The cap does not degrade to a
+        paragraph, a dropped middle line, or a smaller font.
+
+    `None` only where `_elide` itself refuses (#43's fit-or-refuse): backing
+    the last line's cut clear of a numeral run left nothing to show.
+
+    THE ONE PLACE A LINE CANNOT BE STARTED AT ALL is a numeral run wider than
+    a whole line: B1 forbids breaking it and B4 may not override that. The
+    claim then ENDS ON THE PREVIOUS LINE, elided there — never broken inside
+    the run, and never a refusal where the unwrapped card would have rendered,
+    because the fallback walks back to `_elide(text)` itself.
+    """
+    runs = _numeral_runs(text)
+    breaks = _break_opportunities(text, runs)
+
+    lines: list[str] = []
+    starts: list[int] = []
+    start = 0
+    n = len(text)
+
+    while True:
+        if start >= n:
+            return tuple(lines)
+
+        remaining = text[start:]
+        if len(lines) == max_lines - 1:
+            last = _elide(remaining, font_size, available_width, measure)
+            return None if last is None else tuple([*lines, last])
+        if _fits(remaining, font_size, available_width, measure):
+            return tuple([*lines, remaining])
+
+        chosen: tuple[int, int] | None = None
+        for end, nxt in breaks:
+            if end <= start:
+                continue
+            if _fits(text[start:end], font_size, available_width, measure):
+                chosen = (end, nxt)
+        if chosen is None:
+            chosen = _last_resort_break(
+                text, start, runs, font_size, available_width, measure
+            )
+        if chosen is None:
+            # Nothing can be placed on this line. Give the previous line back
+            # its remainder and elide it there; repeat until a line can carry
+            # the ellipsis, the last candidate being line 1, i.e. `_elide` on
+            # the whole claim — the pre-#69 answer, so this fallback cannot
+            # refuse a card the unwrapped layout would have rendered.
+            while lines:
+                lines.pop()
+                start = starts.pop()
+                last = _elide(text[start:], font_size, available_width, measure)
+                if last is not None:
+                    return tuple([*lines, last])
+            return None
+
+        end, nxt = chosen
+        lines.append(text[start:end])
+        starts.append(start)
+        start = nxt
+
+
 # --- the layout ---------------------------------------------------------------
 
 def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -> CardLayout | None:
@@ -700,7 +1000,8 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
       line (`height // HEADLINE_ANCHOR_DIVISOR`), clamped so it never leaves
       the band between the top margin and the footer:
         1. the figure (if `claim.claim` carries a numeral)
-        2. the claim text, elided from the end if it does not fit
+        2. the claim text, WRAPPED onto up to `N` lines and elided only on
+           the last one (#69)
 
       FOOTER, measured up from the bottom margin:
         3. the qualifier, verbatim, never elided, one `CARD_GAP` above
@@ -708,15 +1009,26 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
            for the same provenance reason `api.markers` puts `(c17)` next to
            a sentence: the card should be traceable back to its ledger entry.
 
+    THE LINE BUDGET (#69), in the order it falls out: the footer is placed
+    first, from a MEASURED footer height rather than an assumed single
+    qualifier line — so when #72 makes the qualifier wrap, a taller footer
+    automatically lowers `region_bottom` and shrinks `N` with no edit here.
+    What is left of the band, less the figure block, is what holds claim
+    lines: `N = min(CLAIM_LINE_CAP, N_fit)`, and `N < 1` refuses. The line
+    advance is uniform — `measure(claim.claim, claim_font_size)[1] +
+    CARD_LINE_GAP`, measured ONCE on the whole claim — because a per-line
+    measured height would make the advance vary with ascenders and descenders
+    and every position a function of its own line's string.
+
     Returns `None` when there is nothing to render (`claim.claim == ""`), when
     the qualifier alone does not fit `size` (it is never elided, so nothing
     can be done), when the claim does not fit even fully elided, when the
     figure (a verbatim extracted numeral, never elided) does not fit, when
     the `id_tag` (a verbatim ledger id, never elided) does not fit the card's
     width, or when the headline and the footer do not both fit the card's
-    height with a `CARD_GAP` between them, even after eliding the claim —
-    refusing beats overflowing, dropping the qualifier, or truncating the
-    figure/id.
+    height with a `CARD_GAP` between them, even after wrapping and eliding
+    the claim — refusing beats overflowing, dropping the qualifier, or
+    truncating the figure/id.
     """
     if not claim.claim:
         return None
@@ -732,9 +1044,8 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
     if not _fits(claim.qualifier, FONT_SIZE_QUALIFIER, available_width, measure):
         return None  # the qualifier itself does not fit, and is never elided
 
-    claim_text = _elide(claim.claim, claim_font_size, available_width, measure)
-    if claim_text is None:
-        return None  # does not fit even fully elided
+    if _elide(claim.claim, claim_font_size, available_width, measure) is None:
+        return None  # not one faithful line fits the width, wrapped or not
 
     if not _fits(figure_text, FONT_SIZE_FIGURE, available_width, measure):
         return None  # the figure is a verbatim numeral; it is never elided
@@ -756,8 +1067,7 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
     figure_h = 0
     if figure_text:
         _figure_w, figure_h = measure(figure_text, FONT_SIZE_FIGURE)
-    _claim_w, claim_h = measure(claim_text, claim_font_size)
-    headline_h = claim_h + (figure_h + CARD_GAP if figure_text else 0)
+    figure_block_h = figure_h + CARD_GAP if figure_text else 0
 
     # The band the headline may occupy: top margin down to one CARD_GAP above
     # the qualifier. Refusing here is the same fit-or-refuse posture the old
@@ -765,6 +1075,31 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
     # are two blocks now, and two blocks that touch are one block.
     region_top = CARD_MARGIN
     region_bottom = qualifier_y - CARD_GAP
+
+    # The line budget. `line_h` is measured once on the whole claim so the
+    # advance is uniform and a test can recompute every `y` by hand (#69).
+    line_h = measure(claim.claim, claim_font_size)[1]
+    line_advance = line_h + CARD_LINE_GAP
+    band_for_lines = region_bottom - region_top - figure_block_h
+    # n lines occupy `n * line_advance - CARD_LINE_GAP` (there is no leading
+    # under the last one), so this is the largest n that fits the band.
+    lines_fit = (band_for_lines + CARD_LINE_GAP) // line_advance
+    if lines_fit < 1:
+        return None  # not even one claim line fits beside the footer
+
+    claim_texts = _wrap_claim(
+        claim.claim,
+        claim_font_size,
+        available_width,
+        min(CLAIM_LINE_CAP, lines_fit),
+        measure,
+    )
+    if claim_texts is None:
+        return None  # the last line cannot be cut clear of a numeral run
+
+    headline_h = (
+        figure_block_h + len(claim_texts) * line_advance - CARD_LINE_GAP
+    )
     if region_bottom - region_top < headline_h:
         return None  # headline + footer + margins do not fit the card height
 
@@ -786,8 +1121,18 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
             text=figure_text, x=CARD_MARGIN, y=headline_top, font_size=FONT_SIZE_FIGURE
         )
 
-    claim_y = headline_top + (figure_h + CARD_GAP if figure_text else 0)
-    claim_el = TextElement(text=claim_text, x=CARD_MARGIN, y=claim_y, font_size=claim_font_size)
+    # One TextElement per line, each on the same left margin, one uniform
+    # `line_advance` below the one above it.
+    claim_top = headline_top + figure_block_h
+    claim_els = tuple(
+        TextElement(
+            text=line,
+            x=CARD_MARGIN,
+            y=claim_top + index * line_advance,
+            font_size=claim_font_size,
+        )
+        for index, line in enumerate(claim_texts)
+    )
 
     qualifier_el = TextElement(
         text=claim.qualifier, x=CARD_MARGIN, y=qualifier_y, font_size=FONT_SIZE_QUALIFIER
@@ -798,7 +1143,7 @@ def compute_card_layout(claim: Claim, size: tuple[int, int], measure: Measure) -
         width=width,
         height=height,
         figure=figure_el,
-        claim=claim_el,
+        claim_lines=claim_els,
         qualifier=qualifier_el,
         id_tag=id_el,
     )
@@ -1079,8 +1424,9 @@ def draw_claim_card(layout: CardLayout, fonts: dict[int, ImageFont.FreeTypeFont]
     Pillow font objects per size (a `{font_size: ImageFont.FreeTypeFont}`
     mapping) — nothing outside this module depends on that shape.
 
-    Draws every element `layout` carries — `claim`, `qualifier`, `id_tag`,
-    and `figure` when it is not `None` — using exactly each `TextElement`'s
+    Draws every element `layout` carries — every one of `claim_lines`,
+    `qualifier`, `id_tag`, and `figure` when it is not `None` — using each
+    `TextElement`'s
     `text`, `x`, `y` and `font_size`. It computes no position of its own and
     re-checks no fit: `compute_card_layout` (plus #43) already guarantees
     every element lands on-canvas, and this function relies on that rather
@@ -1089,7 +1435,7 @@ def draw_claim_card(layout: CardLayout, fonts: dict[int, ImageFont.FreeTypeFont]
     image = Image.new("RGB", (layout.width, layout.height), color="white")
     draw = ImageDraw.Draw(image)
 
-    elements = [layout.claim, layout.qualifier, layout.id_tag]
+    elements = [*layout.claim_lines, layout.qualifier, layout.id_tag]
     if layout.figure is not None:
         elements.append(layout.figure)
 
@@ -1148,8 +1494,10 @@ def render_claim_card(claim: Claim) -> bytes:
 
 __all__ = [
     "CARD_GAP",
+    "CARD_LINE_GAP",
     "CARD_MARGIN",
     "CARD_SIZE",
+    "CLAIM_LINE_CAP",
     "ELLIPSIS",
     "FONT_SIZE_CLAIM_NO_FIGURE",
     "FONT_SIZE_CLAIM_WITH_FIGURE",

@@ -100,11 +100,23 @@ def _layout_within_canvas(font_sizes: dict[str, int]) -> CardLayout:
         width=CARD_SIZE[0],
         height=CARD_SIZE[1],
         figure=TextElement(text="23", x=100, y=40, font_size=font_sizes["figure"]),
-        claim=TextElement(
-            text="Tumor volume shrank",
-            x=40,
-            y=150,
-            font_size=font_sizes["claim"],
+        # Two claim lines (#69): `draw_claim_card` draws every element of
+        # `claim_lines`, at each one's own `y`, and computes no position of
+        # its own — so a hand-built two-line layout is the sharpest test that
+        # the renderer stayed a pure consumer of the layout.
+        claim_lines=(
+            TextElement(
+                text="Tumor volume shrank",
+                x=40,
+                y=150,
+                font_size=font_sizes["claim"],
+            ),
+            TextElement(
+                text="by almost a quarter",
+                x=40,
+                y=200,
+                font_size=font_sizes["claim"],
+            ),
         ),
         qualifier=TextElement(
             text="mouse model, preliminary",
@@ -143,7 +155,7 @@ def test_draw_claim_card_returns_bytes_that_decode_as_a_valid_png():
 
 
 @pytest.mark.skipif(_ANY_FONT_PATH is None, reason=_NO_FONT_AT_ALL)
-def test_draw_claim_card_draws_all_four_elements_with_their_own_fields(monkeypatch):
+def test_draw_claim_card_draws_every_element_with_its_own_fields(monkeypatch):
     fonts = claimcard._load_fonts(_ANY_FONT_PATH, claimcard._FONT_SIZES)
     layout = _layout_within_canvas(
         {
@@ -168,7 +180,10 @@ def test_draw_claim_card_draws_all_four_elements_with_their_own_fields(monkeypat
     drawn = {call for call in calls}
     expected = {
         ((layout.figure.x, layout.figure.y), layout.figure.text, layout.figure.font_size),
-        ((layout.claim.x, layout.claim.y), layout.claim.text, layout.claim.font_size),
+        *(
+            ((element.x, element.y), element.text, element.font_size)
+            for element in layout.claim_lines
+        ),
         (
             (layout.qualifier.x, layout.qualifier.y),
             layout.qualifier.text,
@@ -180,7 +195,7 @@ def test_draw_claim_card_draws_all_four_elements_with_their_own_fields(monkeypat
 
 
 @pytest.mark.skipif(_ANY_FONT_PATH is None, reason=_NO_FONT_AT_ALL)
-def test_draw_claim_card_draws_only_three_elements_when_figure_is_none(monkeypatch):
+def test_draw_claim_card_draws_no_figure_element_when_figure_is_none(monkeypatch):
     fonts = claimcard._load_fonts(_ANY_FONT_PATH, claimcard._FONT_SIZES)
     layout = _layout_within_canvas(
         {
@@ -194,7 +209,7 @@ def test_draw_claim_card_draws_only_three_elements_when_figure_is_none(monkeypat
         width=layout.width,
         height=layout.height,
         figure=None,
-        claim=layout.claim,
+        claim_lines=layout.claim_lines,
         qualifier=layout.qualifier,
         id_tag=layout.id_tag,
     )
@@ -208,7 +223,11 @@ def test_draw_claim_card_draws_only_three_elements_when_figure_is_none(monkeypat
 
     draw_claim_card(layout, fonts)
 
-    assert set(calls) == {layout.claim.text, layout.qualifier.text, layout.id_tag.text}
+    assert set(calls) == {
+        *(element.text for element in layout.claim_lines),
+        layout.qualifier.text,
+        layout.id_tag.text,
+    }
 
 
 # --- determinism -------------------------------------------------------------

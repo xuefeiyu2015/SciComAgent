@@ -85,8 +85,8 @@ def test_claim_with_no_numeral_has_no_figure_slot_and_larger_claim_text():
     layout = compute_card_layout(claim, (2000, 2000), _measure)
 
     assert layout.figure is None
-    assert layout.claim.font_size == FONT_SIZE_CLAIM_NO_FIGURE
-    assert layout.claim.font_size > FONT_SIZE_CLAIM_WITH_FIGURE
+    assert layout.claim_lines[0].font_size == FONT_SIZE_CLAIM_NO_FIGURE
+    assert layout.claim_lines[0].font_size > FONT_SIZE_CLAIM_WITH_FIGURE
 
 
 # --- decimal figure --------------------------------------------------------
@@ -108,7 +108,7 @@ def test_cjk_claim_with_no_numeral_lays_out_cleanly():
 
     assert layout is not None
     assert layout.figure is None
-    assert layout.claim.text == claim.claim
+    assert [el.text for el in layout.claim_lines] == [claim.claim]
     assert layout.qualifier.text == claim.qualifier
 
 
@@ -160,17 +160,20 @@ def test_exact_positions_with_a_figure_present():
     assert layout.figure.font_size == FONT_SIZE_FIGURE
 
     claim_y = headline_top + FONT_SIZE_FIGURE + CARD_GAP
-    assert layout.claim.text == claim.claim
-    assert layout.claim.x == CARD_MARGIN
-    assert layout.claim.y == claim_y
-    assert layout.claim.font_size == FONT_SIZE_CLAIM_WITH_FIGURE
+    # one line: this claim fits the 936px available width whole, so wrapping
+    # (#69) leaves the single-line composition #65 pinned exactly as it was.
+    assert len(layout.claim_lines) == 1
+    assert layout.claim_lines[0].text == claim.claim
+    assert layout.claim_lines[0].x == CARD_MARGIN
+    assert layout.claim_lines[0].y == claim_y
+    assert layout.claim_lines[0].font_size == FONT_SIZE_CLAIM_WITH_FIGURE
 
     # the arithmetic above, spelled out once as literals, so a change to the
     # composition has to be written down twice before it can pass quietly.
     # #66 raised the type scale (figure 56 -> 72, claim 28 -> 40), so the
     # headline block is 128px tall instead of 100 and sits 14px higher on the
     # same upper-third line: 1000 // 3 - 128 // 2 = 269, claim at 269 + 72 + 16.
-    assert (layout.figure.y, layout.claim.y) == (269, 357)
+    assert (layout.figure.y, layout.claim_lines[0].y) == (269, 357)
     # #66 also raised the qualifier 20 -> 24, so the footer line starts 4px
     # higher: 954 - 16 - 24 = 914. The id_tag is unchanged at 14px.
     assert (layout.qualifier.y, layout.id_tag.y) == (914, 954)
@@ -187,9 +190,10 @@ def test_exact_positions_without_a_figure():
     assert layout.figure is None
 
     headline_top = size[1] // HEADLINE_ANCHOR_DIVISOR - FONT_SIZE_CLAIM_NO_FIGURE // 2
-    assert layout.claim.x == CARD_MARGIN
-    assert layout.claim.y == headline_top
-    assert layout.claim.font_size == FONT_SIZE_CLAIM_NO_FIGURE
+    assert len(layout.claim_lines) == 1
+    assert layout.claim_lines[0].x == CARD_MARGIN
+    assert layout.claim_lines[0].y == headline_top
+    assert layout.claim_lines[0].font_size == FONT_SIZE_CLAIM_NO_FIGURE
 
     id_y = size[1] - CARD_MARGIN - FONT_SIZE_ID
     assert layout.qualifier.y == id_y - CARD_GAP - FONT_SIZE_QUALIFIER
@@ -197,7 +201,7 @@ def test_exact_positions_without_a_figure():
 
     # #66: claim 40 -> 48 and qualifier 20 -> 24, so 1000 // 3 - 48 // 2 = 309
     # and the footer line sits 4px higher above the unchanged id_tag.
-    assert (layout.claim.y, layout.qualifier.y, layout.id_tag.y) == (309, 914, 954)
+    assert (layout.claim_lines[0].y, layout.qualifier.y, layout.id_tag.y) == (309, 914, 954)
 
 
 def test_the_card_uses_the_canvas_rather_than_its_top_sixth():
@@ -227,23 +231,35 @@ def test_claim_needing_elision_is_truncated_from_the_end_with_one_ellipsis():
     claim = _claim(claim=long_claim, qualifier="小样本，初步结果")
     # Narrow enough that the full claim does not fit at its font size, but
     # wide enough that the (short) qualifier fits comfortably.
-    size = (400, 2000)
+    #
+    # Re-canvassed 400 -> 304 by #69: the claim is 28 characters and at 400px
+    # (available 336, so 7 characters a line at 48px) it now fits four wrapped
+    # lines exactly and stops eliding — green, and pinning nothing. At 304px
+    # available is 240, i.e. 5 characters a line, so four lines hold 20 of the
+    # 28 characters and the last one is elided. The canvas moved; the
+    # assertions did not.
+    size = (304, 2000)
 
     layout = compute_card_layout(claim, size, _measure)
 
     assert layout is not None
-    assert layout.claim.text != long_claim
-    assert layout.claim.text.endswith(ELLIPSIS)
-    assert layout.claim.text.count(ELLIPSIS) == 1
-    # elision truncates from the end: what remains (minus the ellipsis) is a
-    # PREFIX of the source claim.
-    stem = layout.claim.text[: -len(ELLIPSIS)]
+    # the claim wraps first and only the LAST line is elided (#69), so the
+    # ellipsis is on the last line and on no other, and there is exactly one
+    # on the whole card.
+    texts = [el.text for el in layout.claim_lines]
+    assert texts[-1].endswith(ELLIPSIS)
+    assert sum(t.count(ELLIPSIS) for t in texts) == 1
+    assert "".join(texts) != long_claim
+    # elision truncates from the end: the lines, joined, are a PREFIX of the
+    # source claim (this claim is pure CJK, so no whitespace is consumed).
+    stem = "".join(texts)[: -len(ELLIPSIS)]
     assert long_claim.startswith(stem)
     assert stem != long_claim
-    # the elided text actually fits.
+    # every line actually fits.
     available_width = size[0] - 2 * CARD_MARGIN
-    width, _ = _measure(layout.claim.text, layout.claim.font_size)
-    assert width <= available_width
+    for element in layout.claim_lines:
+        width, _ = _measure(element.text, element.font_size)
+        assert width <= available_width
     # the qualifier was never touched.
     assert layout.qualifier.text == claim.qualifier
 
@@ -257,7 +273,7 @@ def test_qualifier_is_never_the_thing_elided():
     assert layout is not None
     assert layout.qualifier.text == claim.qualifier
     assert not layout.qualifier.text.endswith(ELLIPSIS)
-    assert layout.claim.text == claim.claim
+    assert [el.text for el in layout.claim_lines] == [claim.claim]
 
 
 # --- cannot fit -> None ---------------------------------------------------
@@ -375,7 +391,7 @@ def test_empty_qualifier_still_lays_out_the_claim():
 
     assert layout is not None
     assert layout.qualifier.text == ""
-    assert layout.claim.text == claim.claim
+    assert [el.text for el in layout.claim_lines] == [claim.claim]
 
 
 def test_claim_that_is_only_a_numeral():
@@ -386,7 +402,7 @@ def test_claim_that_is_only_a_numeral():
     assert figure_of(claim.claim) == "42"
     assert layout.figure is not None
     assert layout.figure.text == "42"
-    assert layout.claim.text == "42"
+    assert [el.text for el in layout.claim_lines] == ["42"]
 
 
 # --- provenance: every string traces back to the Claim ---------------------
@@ -399,10 +415,13 @@ def test_every_string_is_a_substring_of_the_claims_own_fields():
     if layout.figure is not None:
         assert layout.figure.text in claim.claim
 
-    claim_stem = layout.claim.text[: -len(ELLIPSIS)] if layout.claim.text.endswith(
-        ELLIPSIS
-    ) else layout.claim.text
-    assert claim_stem in claim.claim
+    for element in layout.claim_lines:
+        stem = (
+            element.text[: -len(ELLIPSIS)]
+            if element.text.endswith(ELLIPSIS)
+            else element.text
+        )
+        assert stem in claim.claim
 
     assert layout.qualifier.text in claim.qualifier or layout.qualifier.text == ""
     assert layout.id_tag.text in claim.id or layout.id_tag.text == ""
