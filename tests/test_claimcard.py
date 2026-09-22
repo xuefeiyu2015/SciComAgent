@@ -485,6 +485,29 @@ def test_a_band_with_room_for_no_claim_line_refuses():
     assert compute_card_layout(claim, (_WRAP_SIZE[0], 170), _measure) is None
 
 
+def test_the_line_budget_shrinks_when_the_footer_measures_taller():
+    """The #72 seam: the band is computed from a MEASURED footer height.
+
+    #72 makes the qualifier wrap, and a taller footer must lower
+    `region_bottom` and shrink the claim's line budget with no edit to this
+    issue's code. A `measure` that simply reports a taller qualifier line
+    stands in for that, and nothing else about the layout changes.
+    """
+
+    def tall_qualifier(text: str, font_size: int) -> tuple[int, int]:
+        # four qualifier lines' worth of height, one line's worth of width
+        height = font_size * 4 if font_size == FONT_SIZE_QUALIFIER else font_size
+        return len(text) * font_size, height
+
+    claim = _claim(claim=_WRAP_CLAIM, qualifier="")
+    size = (_WRAP_SIZE[0], 260)
+
+    assert len(compute_card_layout(claim, size, _measure).claim_lines) == 2
+    # id_y = 214, qualifier_y = 214 - 16 - 96 = 102, region_bottom = 86, so the
+    # band is 86 - 32 = 54 and holds one 48px line, not two.
+    assert len(compute_card_layout(claim, size, tall_qualifier).claim_lines) == 1
+
+
 def test_every_wrapped_lines_position_is_recomputed_by_hand():
     layout = _wrapped()
 
