@@ -21,8 +21,10 @@ import inspect
 
 from api.claimcard import (
     CARD_GAP,
+    CARD_LINE_GAP,
     CARD_MARGIN,
     CARD_SIZE,
+    CLAIM_LINE_CAP,
     ELLIPSIS,
     FONT_SIZE_CLAIM_NO_FIGURE,
     FONT_SIZE_CLAIM_WITH_FIGURE,
@@ -403,6 +405,193 @@ def test_claim_that_is_only_a_numeral():
     assert layout.figure is not None
     assert layout.figure.text == "42"
     assert [el.text for el in layout.claim_lines] == ["42"]
+
+
+# --- wrapping (#69) ---------------------------------------------------------
+#
+# The claim line wraps onto up to `CLAIM_LINE_CAP` lines and only the LAST one
+# is ever elided. The card that motivated this rendered `1.3B` over a claim
+# line that cut before `175B GPT-3`: verbatim, honest, and stating one side of
+# a comparison while dropping the other. Everything here is computed by hand
+# from the module's own constants against the fixed-width `_measure` above —
+# 3 characters a line at 48px on a 208px canvas, and nothing rounded.
+
+_WRAP_CLAIM = "研究团队发现了一种新的神经环路"  # 15 wide chars, no numeral
+_WRAP_SIZE = (3 * FONT_SIZE_CLAIM_NO_FIGURE + 2 * CARD_MARGIN, 1000)  # 208x1000
+
+
+def _wrapped(**overrides):
+    claim = _claim(id="c1", claim=_WRAP_CLAIM, qualifier="", **overrides)
+    return compute_card_layout(claim, _WRAP_SIZE, _measure)
+
+
+def test_a_claim_that_fits_its_lines_carries_no_ellipsis_anywhere():
+    # THE WIN, and the observable one: the same claim that had to be elided on
+    # one line is shown whole on three.
+    claim = _claim(claim="研究团队发现了神经环路", qualifier="")  # 11 chars: 3+3+3+2
+    layout = compute_card_layout(claim, _WRAP_SIZE, _measure)
+
+    assert layout is not None
+    lines = [element.text for element in layout.claim_lines]
+    assert lines == ["研究团", "队发现", "了神经", "环路"]
+    assert "".join(lines) == claim.claim
+    for element in (*layout.claim_lines, layout.qualifier, layout.id_tag):
+        assert ELLIPSIS not in element.text
+
+
+def test_the_claim_wraps_to_at_most_the_line_cap_and_elides_only_the_last_line():
+    layout = _wrapped()
+
+    assert layout is not None
+    lines = [element.text for element in layout.claim_lines]
+    # 15 characters at 3 a line would want 5 lines; the cap is 4, so the
+    # fourth carries what is left, elided.
+    assert len(lines) == CLAIM_LINE_CAP == 4
+    assert lines == ["研究团", "队发现", "了一种", "新的…"]
+    assert sum(line.count(ELLIPSIS) for line in lines) == 1
+    assert all(ELLIPSIS not in line for line in lines[:-1])
+    # and the ellipsis is the only thing on the card that is not in the claim
+    assert "".join(lines)[: -len(ELLIPSIS)] == _WRAP_CLAIM[:11]
+
+
+def test_the_line_cap_holds_however_tall_the_canvas_is():
+    # The band on a 4000px canvas holds ~70 lines. Nothing but the cap stops
+    # the headline becoming a paragraph and destroying #65's composition.
+    claim = _claim(claim=_WRAP_CLAIM, qualifier="")
+    layout = compute_card_layout(claim, (_WRAP_SIZE[0], 4000), _measure)
+
+    assert layout is not None
+    assert len(layout.claim_lines) == CLAIM_LINE_CAP
+
+
+def test_the_band_may_allow_fewer_lines_than_the_cap():
+    # N = min(CLAIM_LINE_CAP, N_fit). By hand at height 260 with an empty
+    # qualifier: id_y = 260 - 32 - 14 = 214, qualifier_y = 214 - 16 - 24 = 174,
+    # region_bottom = 158, band = 158 - 32 = 126, advance = 48 + 8 = 56, so
+    # N_fit = (126 + 8) // 56 = 2.
+    claim = _claim(claim=_WRAP_CLAIM, qualifier="")
+    layout = compute_card_layout(claim, (_WRAP_SIZE[0], 260), _measure)
+
+    assert layout is not None
+    assert len(layout.claim_lines) == 2
+    assert layout.claim_lines[-1].text.endswith(ELLIPSIS)
+
+
+def test_a_band_with_room_for_no_claim_line_refuses():
+    # Same arithmetic at height 170: band = 68 - 32 = 36, less than one 48px
+    # line, so N < 1 and the card refuses rather than overflow the footer.
+    claim = _claim(claim=_WRAP_CLAIM, qualifier="")
+
+    assert compute_card_layout(claim, (_WRAP_SIZE[0], 170), _measure) is None
+
+
+def test_every_wrapped_lines_position_is_recomputed_by_hand():
+    layout = _wrapped()
+
+    # The advance is uniform and measured ONCE on the whole claim, so it does
+    # not vary with which glyphs a given line happens to carry.
+    advance = _measure(_WRAP_CLAIM, FONT_SIZE_CLAIM_NO_FIGURE)[1] + CARD_LINE_GAP
+    assert advance == FONT_SIZE_CLAIM_NO_FIGURE + CARD_LINE_GAP == 56
+
+    # #65 survives: the headline block is centred on the upper-third line
+    # using the WRAPPED height, and clamped into the band.
+    headline_h = CLAIM_LINE_CAP * advance - CARD_LINE_GAP
+    assert headline_h == 216
+    id_y = _WRAP_SIZE[1] - CARD_MARGIN - FONT_SIZE_ID
+    qualifier_y = id_y - CARD_GAP - FONT_SIZE_QUALIFIER
+    region_bottom = qualifier_y - CARD_GAP
+    anchor = _WRAP_SIZE[1] // HEADLINE_ANCHOR_DIVISOR
+    headline_top = max(CARD_MARGIN, min(anchor - headline_h // 2, region_bottom - headline_h))
+    assert (id_y, qualifier_y, headline_top) == (954, 914, 225)
+
+    for index, element in enumerate(layout.claim_lines):
+        assert element.x == CARD_MARGIN
+        assert element.font_size == FONT_SIZE_CLAIM_NO_FIGURE
+        assert element.y == headline_top + index * advance
+    assert [element.y for element in layout.claim_lines] == [225, 281, 337, 393]
+    # the footer is still anchored to the bottom margin, and the slack band
+    # between the two blocks is still there.
+    assert layout.id_tag.y == id_y
+    assert layout.qualifier.y == qualifier_y
+    assert layout.claim_lines[-1].y + FONT_SIZE_CLAIM_NO_FIGURE < qualifier_y - CARD_GAP
+
+
+def test_every_claim_line_lands_on_the_canvas():
+    # #43's fit check, now that there is more than one line to check.
+    layout = _wrapped()
+
+    for element in layout.claim_lines:
+        width, _height = _measure(element.text, element.font_size)
+        assert element.x >= CARD_MARGIN
+        assert element.x + width <= layout.width - CARD_MARGIN
+        assert element.y >= CARD_MARGIN
+        assert element.y + element.font_size <= layout.height - CARD_MARGIN
+
+
+def test_a_break_never_falls_inside_a_numeral_run():
+    # B1, outright: `4823` may no more wrap as `48` / `23` than it may elide
+    # to `48…` — and a break carries no ellipsis to warn the reader, which
+    # makes it the worse of the two. Swept over every canvas width the claim
+    # can render on, not pinned to the one that happened to reproduce it.
+    claim = _claim(id="c9", claim="Only 4823 of the participants responded", qualifier="")
+
+    seen = 0
+    for width in range(2 * CARD_MARGIN, 900, 4):
+        layout = compute_card_layout(claim, (width, 1000), _measure)
+        if layout is None:
+            continue
+        for element in layout.claim_lines:
+            if any(ch.isdigit() for ch in element.text):
+                seen += 1
+                assert "4823" in element.text, (
+                    f"at width {width} a line reads {element.text!r}: the "
+                    f"number was split across lines"
+                )
+    assert seen, "the sweep never put a digit on a card; it proved nothing"
+
+
+def test_a_latin_word_breaks_only_when_it_alone_is_wider_than_a_line():
+    # B4: the last resort, and it inserts NOTHING — no hyphen, no soft hyphen.
+    # Neither character is in claim.claim, and writing one to make the type
+    # look nicer is exactly the trade #36 forbids.
+    long_word = "Pneumonoultramicroscopicsilicovolcanoconiosis"
+    claim = _claim(id="c2", claim=f"{long_word} was diagnosed", qualifier="")
+    size = (10 * FONT_SIZE_CLAIM_NO_FIGURE + 2 * CARD_MARGIN, 1000)
+
+    layout = compute_card_layout(claim, size, _measure)
+
+    lines = [element.text for element in layout.claim_lines]
+    assert lines[0] == long_word[:10]
+    assert lines[1] == long_word[10:20]
+    for line in lines:
+        assert "-" not in line and "\u00ad" not in line
+    assert claim.claim.startswith("".join(lines)[: -len(ELLIPSIS)])
+
+    # and a word that fits a line is never broken mid-word.
+    prose = _claim(id="c3", claim="alpha beta gamma delta epsilon", qualifier="")
+    words = [element.text for element in compute_card_layout(prose, size, _measure).claim_lines]
+    for line in words:
+        for word in line.split(" "):
+            assert word.strip(ELLIPSIS) in prose.claim.split(" ")
+
+
+def test_a_line_never_begins_with_a_closing_mark_or_ends_with_an_opening_one():
+    # B3, the kinsoku minimum. The full classes are #71's; these two are the
+    # cases that are visibly broken without them.
+    claim = _claim(id="c4", claim="研究发现（初步）新的神经环路，结果稳定", qualifier="")
+
+    seen = 0
+    for chars in range(2, 12):
+        size = (chars * FONT_SIZE_CLAIM_NO_FIGURE + 2 * CARD_MARGIN, 1000)
+        layout = compute_card_layout(claim, size, _measure)
+        if layout is None:
+            continue
+        lines = [element.text for element in layout.claim_lines]
+        seen += len(lines) > 1
+        for line in lines:
+            assert line[0] not in "，）", f"line {line!r} begins with a closing mark"
+            assert line[-1] not in "（", f"line {line!r} ends with an opening mark"
+    assert seen, "the sweep never wrapped this claim; it proved nothing"
 
 
 # --- provenance: every string traces back to the Claim ---------------------

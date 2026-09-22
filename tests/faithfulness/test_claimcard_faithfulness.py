@@ -1176,7 +1176,109 @@ def _elision_ids(fixtures: tuple[ElisionFixture, ...]) -> list[str]:
     return [f.name for f in fixtures]
 
 
-# Every card this file produces, from both fixture tables, each with the
+
+# =============================================================================
+# --- #69: the claim WRAPS, and only its last line is elided -----------------
+# =============================================================================
+#
+# The sixteen fixtures above pin where a CUT may fall, on a canvas sized to
+# hold one line. This table pins the second cutting instrument: where a BREAK
+# may fall. It is a separate table on purpose — a wrapped fixture is derived
+# differently from a cut one (the wrap walks the whole claim; the cut is one
+# width-chosen index), and a table that mixed them would mean neither thing.
+#
+# `expected_lines` is hand-written, line by line, by walking the greedy wrap
+# with a pencil: at `_qa_measure` a character is `fs // 2` wide, so a canvas of
+# `W` holds `(W - 64) // (fs // 2)` characters a line. Nothing here is computed
+# from `api.claimcard`.
+
+
+@dataclass(frozen=True)
+class WrapFixture:
+    """One claim, a canvas that makes it wrap, and the exact lines it must show.
+
+    `must_show` is the point of the fixture in the operator's own terms: the
+    substrings a reader has to be able to READ on the card. #69 exists because
+    a card rendered `1.3B` and then cut before `175B GPT-3` — verbatim, honest,
+    and stating one side of a comparison while dropping the other.
+    """
+
+    name: str
+    claim: Claim
+    size: tuple[int, int]
+    claim_font_size: int
+    expected_lines: tuple[str, ...]
+    must_show: tuple[str, ...]
+
+
+WRAP_FIXTURES: tuple[WrapFixture, ...] = (
+    WrapFixture(
+        # Both sides of a comparison, which is the card #69 was filed over.
+        # W = 224 -> available 160 -> 8 characters a line at 40px.
+        #   line 1: the widest legal break at or before 8 characters is 8
+        #           (between two wide characters, inside no run) -> "1.3B 模型优"
+        #   line 2: from 8, the widest is 16 -> "于 175B 模"; the break at 14
+        #           sits at the END of the run (10, 14), not inside it
+        #   line 3: "型" is what is left, and it fits
+        # Neither `1.3B` nor `175B` is broken, and nothing is elided.
+        name="both_sides_of_the_comparison",
+        claim=_claim(
+            id="c17",
+            claim="1.3B 模型优于 175B 模型",
+            qualifier="初步结果",
+        ),
+        size=(224, 900),
+        claim_font_size=40,
+        expected_lines=("1.3B 模型优", "于 175B 模", "型"),
+        must_show=("1.3B", "175B"),
+    ),
+    WrapFixture(
+        # #55's CJK claim, which used to elide to "试验共纳入…" and now shows
+        # the whole number. W = 232 -> available 168 -> 7 characters a line at
+        # 48px (no figure: the claim carries no Arabic digit).
+        #   line 1: 6 and 7 both fall strictly inside the run (5, 12) of
+        #           四千八百二十三, so B1 forbids them outright and the break
+        #           backs off to 5 -> "试验共纳入"
+        #   line 2: from 5 the only legal break is 12, the end of that run, and
+        #           7 characters is exactly 168 -> "四千八百二十三"
+        #   line 3: "名参与者" fits
+        name="cjk_wraps_with_no_spaces_to_break_on",
+        claim=_claim(
+            id="c40",
+            claim="试验共纳入四千八百二十三名参与者",
+            qualifier="初步结果",
+        ),
+        size=(232, 900),
+        claim_font_size=48,
+        expected_lines=("试验共纳入", "四千八百二十三", "名参与者"),
+        must_show=("四千八百二十三",),
+    ),
+    WrapFixture(
+        # Four lines, the last one elided, and a Latin word broken mid-word
+        # because it alone is wider than a line (B4's last resort, which
+        # inserts NO hyphen). W = 264 -> available 200 -> 10 characters a line.
+        #   line 1: break at 9, the end of the run (5, 9) -> "Only 4823"
+        #   line 2: the next whitespace break that fits is 16 -> "of the"
+        #   line 3: "participants" is 12 characters and no break inside it is
+        #           an opportunity, so the hard break takes 10 -> "participan"
+        #   line 4: the cap, so what is left is elided -> "ts respon…"
+        name="four_lines_with_the_last_elided",
+        claim=_claim(
+            id="c9",
+            claim="Only 4823 of the participants responded to the follow-up survey",
+            qualifier="preliminary",
+        ),
+        size=(264, 900),
+        claim_font_size=40,
+        expected_lines=("Only 4823", "of the", "participan", "ts respon…"),
+        must_show=("4823",),
+    ),
+)
+
+_WRAP_IDS = [f.name for f in WRAP_FIXTURES]
+
+
+# Every card this file produces, from all three fixture tables, each with the
 # `measure` fake it was written against. The run-level invariants below run
 # over all of them: the #36 fixtures prove the new rule does not fire on cards
 # that were already faithful, the #55 fixtures prove it fires on the ones that
@@ -1184,6 +1286,7 @@ def _elision_ids(fixtures: tuple[ElisionFixture, ...]) -> list[str]:
 _ALL_CARDS: tuple[tuple[str, Claim, tuple[int, int], object], ...] = tuple(
     [(f.name, f.claim, f.size, _measure) for f in _LAID_OUT]
     + [(f.name, f.claim, f.size, _qa_measure) for f in _ELISION_LAID_OUT]
+    + [(f.name, f.claim, f.size, _qa_measure) for f in WRAP_FIXTURES]
 )
 _ALL_CARD_IDS = [card[0] for card in _ALL_CARDS]
 
@@ -1491,6 +1594,136 @@ def test_a_claim_that_needs_no_elision_is_untouched():
 
 def _by_name_elision() -> dict:
     return {f.name: f for f in ELISION_FIXTURES}
+
+
+# --- #69's own assertions, over the wrap table -------------------------------
+
+
+@pytest.mark.parametrize("fixture", WRAP_FIXTURES, ids=_WRAP_IDS)
+def test_wrapped_claim_lines_are_exactly_what_the_fixture_declares(
+    fixture: WrapFixture,
+):
+    """The exact lines each wrap fixture must render. Hand-written literals."""
+    layout = compute_card_layout(fixture.claim, fixture.size, _qa_measure)
+
+    assert layout is not None, (
+        f"[{fixture.name}] expected a card reading "
+        f"{list(fixture.expected_lines)!r}, got None"
+    )
+    assert _lines(layout) == list(fixture.expected_lines), (
+        f"[{fixture.name}] the card wrapped to {_lines(layout)!r}, expected "
+        f"{list(fixture.expected_lines)!r} for claim {fixture.claim.claim!r} "
+        f"on a {fixture.size[0]}x{fixture.size[1]} canvas"
+    )
+    assert layout.claim_lines[-1].font_size == fixture.claim_font_size, (
+        f"[{fixture.name}] the claim was laid out at "
+        f"{layout.claim_lines[-1].font_size}px, but these lines were derived "
+        f"by hand at {fixture.claim_font_size}px"
+    )
+
+
+@pytest.mark.parametrize("fixture", WRAP_FIXTURES, ids=_WRAP_IDS)
+def test_a_wrapped_card_shows_every_quantity_a_reader_must_read(
+    fixture: WrapFixture,
+):
+    """#69 in the operator's terms: both sides of the comparison are ON the card.
+
+    Not "the text is faithful" — the elided card was faithful — but "the
+    reader can read the thing the claim is about". Each declared substring
+    must appear WHOLE on one line: split across two it is not readable as one
+    quantity, and it is not on the card at all if the cut fell before it.
+    """
+    layout = compute_card_layout(fixture.claim, fixture.size, _qa_measure)
+    assert layout is not None, f"[{fixture.name}] expected a card, got None"
+
+    lines = _lines(layout)
+    for wanted in fixture.must_show:
+        assert any(wanted in line for line in lines), (
+            f"[{fixture.name}] {wanted!r} is on no line of {lines!r}. The "
+            f"card states part of what the claim states and drops the rest — "
+            f"faithful, and useless to the reader (#69)"
+        )
+
+
+@pytest.mark.parametrize("fixture", WRAP_FIXTURES, ids=_WRAP_IDS)
+def test_a_wrapped_card_elides_only_its_last_line(fixture: WrapFixture):
+    """At most one ELLIPSIS on the whole card, and only on the last line."""
+    layout = compute_card_layout(fixture.claim, fixture.size, _qa_measure)
+    assert layout is not None
+
+    lines = _lines(layout)
+    assert _ellipsis_count(layout) <= 1, (
+        f"[{fixture.name}] the card carries {_ellipsis_count(layout)} "
+        f"ellipsis characters across {[e.text for e in _drawn(layout)]!r}"
+    )
+    for index, line in enumerate(lines[:-1]):
+        assert ELLIPSIS not in line, (
+            f"[{fixture.name}] claim line {index} {line!r} is elided, but "
+            f"only the LAST line may be"
+        )
+
+
+@pytest.mark.parametrize("fixture", WRAP_FIXTURES, ids=_WRAP_IDS)
+def test_a_wrapped_card_keeps_every_clause_of_the_verbatim_rule(
+    fixture: WrapFixture,
+):
+    """#69's D3, asserted clause by clause by `_claim_spans`.
+
+    Contiguous substrings, source order, spans non-overlapping and strictly
+    increasing, only whitespace consumed at a break, nothing inserted, and the
+    rejoin reproduces a prefix of `claim.claim` exactly.
+    """
+    layout = compute_card_layout(fixture.claim, fixture.size, _qa_measure)
+    assert layout is not None
+
+    spans = _claim_spans(fixture.claim.claim, _lines(layout))
+    assert spans[0][0] == 0, f"[{fixture.name}] the card does not start at the start"
+    for (_start, end), (next_start, _next_end) in zip(spans, spans[1:]):
+        assert next_start >= end, (
+            f"[{fixture.name}] claim line spans overlap or go backwards: "
+            f"{spans!r}"
+        )
+
+
+def test_every_wrap_fixture_really_wraps():
+    """Guards the table: a wrap fixture that stops wrapping pins nothing.
+
+    The same failure `test_every_elision_fixture_still_exercises_its_declared_role`
+    exists for: green, and exercising none of the code it was written for.
+    """
+    for fixture in WRAP_FIXTURES:
+        assert len(fixture.expected_lines) > 1, (
+            f"[{fixture.name}] declares a single line; it tests no break"
+        )
+        layout = compute_card_layout(fixture.claim, fixture.size, _qa_measure)
+        assert layout is not None, f"[{fixture.name}] expected a card, got None"
+        assert len(layout.claim_lines) > 1, (
+            f"[{fixture.name}] DEAD FIXTURE: the claim now fits "
+            f"{len(layout.claim_lines)} line(s) on this canvas and no break is "
+            f"exercised. Narrow its canvas; do not lengthen the claim"
+        )
+    assert any(f.expected_lines[-1].endswith(ELLIPSIS) for f in WRAP_FIXTURES), (
+        "no wrap fixture reaches the line cap and elides, so the wrap-then-"
+        "elide path is untested"
+    )
+    assert any(
+        not f.expected_lines[-1].endswith(ELLIPSIS) for f in WRAP_FIXTURES
+    ), "no wrap fixture fits its lines, so the no-ellipsis win is untested"
+
+
+def test_the_line_cap_is_what_stops_the_headline_becoming_a_paragraph():
+    """Four lines, whatever the band would otherwise allow.
+
+    The cap is a composition decision (#65's anchor and its slack band), not a
+    height one, so it has to hold on a canvas with room to spare.
+    """
+    fixture = {f.name: f for f in WRAP_FIXTURES}["four_lines_with_the_last_elided"]
+    layout = compute_card_layout(fixture.claim, (fixture.size[0], 4000), _qa_measure)
+
+    assert layout is not None
+    assert len(layout.claim_lines) == 4
+    assert _lines(layout)[-1].endswith(ELLIPSIS)
+
 
 
 # =============================================================================
