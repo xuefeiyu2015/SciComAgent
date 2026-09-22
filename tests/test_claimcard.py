@@ -167,8 +167,13 @@ def test_exact_positions_with_a_figure_present():
 
     # the arithmetic above, spelled out once as literals, so a change to the
     # composition has to be written down twice before it can pass quietly.
-    assert (layout.figure.y, layout.claim.y) == (283, 355)
-    assert (layout.qualifier.y, layout.id_tag.y) == (918, 954)
+    # #66 raised the type scale (figure 56 -> 72, claim 28 -> 40), so the
+    # headline block is 128px tall instead of 100 and sits 14px higher on the
+    # same upper-third line: 1000 // 3 - 128 // 2 = 269, claim at 269 + 72 + 16.
+    assert (layout.figure.y, layout.claim.y) == (269, 357)
+    # #66 also raised the qualifier 20 -> 24, so the footer line starts 4px
+    # higher: 954 - 16 - 24 = 914. The id_tag is unchanged at 14px.
+    assert (layout.qualifier.y, layout.id_tag.y) == (914, 954)
 
 
 def test_exact_positions_without_a_figure():
@@ -190,7 +195,9 @@ def test_exact_positions_without_a_figure():
     assert layout.qualifier.y == id_y - CARD_GAP - FONT_SIZE_QUALIFIER
     assert layout.id_tag.y == id_y
 
-    assert (layout.claim.y, layout.qualifier.y, layout.id_tag.y) == (313, 918, 954)
+    # #66: claim 40 -> 48 and qualifier 20 -> 24, so 1000 // 3 - 48 // 2 = 309
+    # and the footer line sits 4px higher above the unchanged id_tag.
+    assert (layout.claim.y, layout.qualifier.y, layout.id_tag.y) == (309, 914, 954)
 
 
 def test_the_card_uses_the_canvas_rather_than_its_top_sixth():
@@ -282,7 +289,7 @@ def test_qualifier_that_does_not_fit_and_cannot_be_elided_returns_none():
 # --- figure fit-or-refuse (#43) ----------------------------------------------
 
 def test_figure_too_wide_to_fit_returns_none():
-    # 13-digit numeral: figure_w = 13 * FONT_SIZE_FIGURE = 728px, which does
+    # 13-digit numeral: figure_w = 13 * FONT_SIZE_FIGURE = 936px, which does
     # not fit a 400px-wide card's available width. QA's live repro on #25
     # found this instead returned a layout with the figure off-canvas.
     claim = _claim(claim="数值为1234567890123的实验结果", qualifier="")

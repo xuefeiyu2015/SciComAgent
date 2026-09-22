@@ -94,11 +94,28 @@ CARD_GAP = 16      # px, vertical gap between stacked elements
 # arithmetic and a test can recompute every position by hand (#65).
 HEADLINE_ANCHOR_DIVISOR = 3
 
+# THE TYPE SCALE (#66). Fixed px, never derived from the canvas: there is
+# exactly one production canvas (1080x1080), `measure` is the only source of
+# text metrics, and a canvas-derived size would make every hand-derived
+# elision fixture a function of two variables instead of one. Revisit only if
+# a second production canvas ships.
+#
+# The RULE, so a later reader can extend it rather than guess: the figure
+# leads at ~1.8x the claim line; the qualifier is a footer at ~0.6x it; the
+# no-figure claim line sits between the two claim sizes. Ratios first, then
+# rounded to whole px (72/40 = 1.8, 24/40 = 0.6, 40 < 48 < 72).
+#
+# These were sized for a much smaller canvas (28/56/40/20) and left a 1080px
+# card reading blank even once #65 composed it correctly. Raising them is not
+# free: it makes more claims ELIDE at 1080 (the accepted cost, see #69) and it
+# moves where each elision fixture's cut falls, which is why every fixture
+# canvas in tests/faithfulness/test_claimcard_faithfulness.py is part of this
+# scale and may not be changed without re-deriving the cut by hand.
 FONT_SIZE_ID = 14              # corner provenance tag (claim.id, e.g. "c17")
-FONT_SIZE_QUALIFIER = 20       # footer qualifier line
-FONT_SIZE_CLAIM_WITH_FIGURE = 28   # claim text when a figure slot is drawn above it
-FONT_SIZE_CLAIM_NO_FIGURE = 40     # claim text alone carries more visual weight
-FONT_SIZE_FIGURE = 56          # the big extracted numeral
+FONT_SIZE_QUALIFIER = 24       # footer qualifier line (~0.6x the claim line)
+FONT_SIZE_CLAIM_WITH_FIGURE = 40   # claim text when a figure slot is drawn above it
+FONT_SIZE_CLAIM_NO_FIGURE = 48     # claim text alone carries more visual weight
+FONT_SIZE_FIGURE = 72          # the big extracted numeral (~1.8x the claim line)
 
 ELLIPSIS = "…"  # exactly one character; never "..."
 

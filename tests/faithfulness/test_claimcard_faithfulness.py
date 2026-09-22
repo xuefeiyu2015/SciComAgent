@@ -55,7 +55,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from api.claimcard import ELLIPSIS, compute_card_layout
+from api.claimcard import CARD_MARGIN, ELLIPSIS, compute_card_layout
 from api.schema import Claim
 
 
@@ -683,84 +683,170 @@ class ElisionFixture:
     `expected_claim_text` is a hand-written literal — the exact string the card
     must carry — or `None` when the only faithful answer is refusal. It is
     never computed from `api.claimcard`.
+
+    `role` is what the fixture EXISTS to exercise, and it is an invariant
+    (#66). `size` is only the instrument that puts the width-chosen cut in the
+    place the role needs:
+
+      - `inside-run`    the cut falls strictly inside a numeral run, so the
+                        backup must fire and move it to the run's start
+      - `inside-word`   a control: the cut is already safe, the backup must
+                        NOT fire
+      - `after-numeral` a control: the cut falls clear of a whole numeral that
+                        the card therefore shows intact
+      - `refuses`       backing up reaches the front of the claim, so there is
+                        no faithful prefix and the layout refuses
+
+    When a type-scale change moves the cut out of that place, the CANVAS moves
+    to restore it — never the role, and never an assertion. An expected string
+    may be re-derived by hand when it genuinely changes, but a fixture whose
+    string is still green while its role has quietly died is the more
+    dangerous failure, which is what
+    `test_every_elision_fixture_still_exercises_its_declared_role` below makes
+    mechanical.
+
+    `claim_font_size` is a hand-written literal too: the size the claim line
+    is laid out at on this fixture's canvas. It is the second variable every
+    expected string above was derived from, so it is declared rather than
+    imported — if production's type scale moves under the fixtures again, the
+    role test below fails instead of the derivations going quietly stale.
     """
 
     name: str
     claim: Claim
     size: tuple[int, int]
+    role: str
+    claim_font_size: int
     expected_claim_text: str | None
 
 
 ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
     ElisionFixture(
         # QA's reproduction on #55, exactly as reported: this claim, this
-        # qualifier, this canvas, `_qa_measure`. Renders "Only 48…" on the
-        # unfixed code — a card that says 48 for a claim that says 4823.
+        # qualifier, `_qa_measure`. Renders "Only 48…" on the unfixed code —
+        # a card that says 48 for a claim that says 4823.
+        #
+        # ROLE: inside-run. The canvas is an INSTRUMENT for putting the
+        # width-chosen cut inside `4823`; the claim and the expected string
+        # are the evidence. #66 raised the claim line 28 -> 40px, which at the
+        # old 180px canvas moved the raw cut from 7 (inside `4823`) to 4
+        # (after `Only`) and this fixture would have gone on passing while
+        # testing nothing. Re-canvassed 180 -> 208 to restore the role:
+        # available = 208 - 64 = 144, 7 * 40 // 2 = 140 <= 144 < 160 = 8 * 20,
+        # so n = 7 chars including the ellipsis and the raw cut is 6 — strictly
+        # inside the run (5, 9) — which backs up to 4 and rstrips to "Only".
+        # The expected string is therefore UNCHANGED.
         name="qa_only_4823",
         claim=_claim(
             id="c9",
             claim="Only 4823 of the participants responded to the follow-up survey",
             qualifier="preliminary",
         ),
-        size=(180, 900),
+        size=(208, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Only…",
     ),
     ElisionFixture(
         # The wider case from #55: the split numeral is NOT the one in the
         # figure slot, so nothing else on the card contradicts it. Unfixed,
         # this renders "Response rate rose 1…" beside a figure reading "12".
+        #
+        # ROLE: inside-run. Re-canvassed 360 -> 484 for #66's 40px claim line:
+        # available = 420, 21 * 40 // 2 = 420 <= 420 < 440, so n = 21 and the
+        # raw cut is 20 — strictly inside the run (19, 21) of `12` — which
+        # backs up to 19 and rstrips to "Response rate rose". Expected string
+        # UNCHANGED.
         name="qa_split_numeral_is_not_the_figure",
         claim=_claim(
             id="c10",
             claim="Response rate rose 12 points among the 4823 enrolled participants",
             qualifier="preliminary",
         ),
-        size=(360, 900),
+        size=(484, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Response rate rose…",
     ),
     ElisionFixture(
-        # The same claim on the narrower canvas #55 calls out as already fine:
-        # the cut falls inside a word, not inside a number, so it must land
-        # exactly where it lands today. The fix narrows elision; it does not
-        # move cuts that were already safe.
+        # The same claim on a narrower canvas, which #55 calls out as already
+        # fine: the cut falls inside a word, not inside a number, so the
+        # backup must not fire at all.
+        #
+        # ROLE: inside-word (a control). Re-canvassed 180 -> 196 for #66's
+        # 40px claim line: available = 132, 6 * 40 // 2 = 120 <= 132 < 140,
+        # so n = 6 and the raw cut is 5 — inside the word "Response",
+        # touching no run ((19, 21) and (39, 43) are both far to the right) —
+        # so the cut stands and the card reads the first 5 characters. The
+        # expected string is RE-DERIVED ("Respons…" -> "Respo…") because this
+        # fixture pins a cut that must NOT move, and at 40px the same canvas
+        # holds fewer characters. Its role is unchanged: still a control,
+        # still no backup.
         name="control_cut_inside_a_word_is_unchanged",
         claim=_claim(
             id="c10",
             claim="Response rate rose 12 points among the 4823 enrolled participants",
             qualifier="preliminary",
         ),
-        size=(180, 900),
-        expected_claim_text="Respons…",
+        size=(196, 900),
+        role="inside-word",
+        claim_font_size=40,
+        expected_claim_text="Respo…",
     ),
     ElisionFixture(
         # A cut that falls after a whole numeral is safe and stays put: the
         # card may show "4823" in running text, it may not show "48".
+        #
+        # ROLE: after-numeral (a control). Re-canvassed 358 -> 264 for #66's
+        # 40px claim line: available = 200, 10 * 40 // 2 = 200 <= 200 < 220,
+        # so n = 10 and the raw cut is 9 — the END of the run (5, 9), not
+        # strictly inside it — so the backup does not fire and `4823` is shown
+        # whole. The expected string is RE-DERIVED
+        # ("Only 4823 of the par…" -> "Only 4823…"): fewer characters fit at
+        # 40px, and the cut now sits exactly at the run boundary, which is the
+        # sharpest form of this control.
         name="control_cut_after_a_whole_numeral_is_unchanged",
         claim=_claim(
             id="c9",
             claim="Only 4823 of the participants responded to the follow-up survey",
             qualifier="preliminary",
         ),
-        size=(358, 900),
-        expected_claim_text="Only 4823 of the par…",
+        size=(264, 900),
+        role="after-numeral",
+        claim_font_size=40,
+        expected_claim_text="Only 4823…",
     ),
     ElisionFixture(
         # CJK, where there is no word boundary to cut on and no Arabic digit
         # involved. Unfixed, this renders "试验共纳入四千…" — a reader parses
         # the fragment as 4000 for a claim that says 4823.
+        #
+        # ROLE: inside-run. No figure here, so the line is laid out at
+        # FONT_SIZE_CLAIM_NO_FIGURE, raised 40 -> 48 by #66. Re-canvassed
+        # 230 -> 232: available = 168, 7 * 48 // 2 = 168 <= 168 < 192, so
+        # n = 7 and the raw cut is 6 — strictly inside the run (5, 12) of
+        # 四千八百二十三 — which backs up to 5. Expected string UNCHANGED.
         name="cjk_numeral_run",
         claim=_claim(
             id="c40",
             claim="试验共纳入四千八百二十三名参与者",
             qualifier="初步结果",
         ),
-        size=(230, 900),
+        size=(232, 900),
+        role="inside-run",
+        claim_font_size=48,
         expected_claim_text="试验共纳入…",
     ),
     ElisionFixture(
         # The run starts at the very first character, so backing the cut up to
         # its start leaves nothing but the ellipsis. Refuse, per #43's
         # fit-or-refuse posture. Unfixed, this renders "四千八百…" — 4800.
+        #
+        # ROLE: refuses. The only fixture whose canvas #66 did not move:
+        # available = 116, 4 * 48 // 2 = 96 <= 116 < 120, so n = 4 and the raw
+        # cut is 3 — strictly inside the run (0, 7), which starts at index 0,
+        # so every backup lands on the empty string and the layout refuses.
+        # Expected value UNCHANGED (None).
         name="cjk_numeral_run_at_the_start_refuses",
         claim=_claim(
             id="c41",
@@ -768,44 +854,66 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
             qualifier="初步结果",
         ),
         size=(180, 900),
+        role="refuses",
+        claim_font_size=48,
         expected_claim_text=None,
     ),
     ElisionFixture(
         # A decimal point is interior to the number: "2.5" may never be shown
         # as "2." or "2". (Losing the word-form unit "x" is accepted by #55 and
         # is not what this fixture is about.)
+        # ROLE: inside-run. Re-canvassed 428 -> 584 for #66's 40px claim
+        # line: available = 520, 26 * 40 // 2 = 520 <= 520 < 540, so n = 26
+        # and the raw cut is 25 — strictly inside the run (24, 27) of `2.5` —
+        # which backs up to 24 and rstrips. Expected string UNCHANGED.
         name="decimal_point_is_interior",
         claim=_claim(
             id="c7",
             claim="Reaction times improved 2.5x in the treated group",
             qualifier="mice only, preliminary",
         ),
-        size=(428, 900),
+        size=(584, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Reaction times improved…",
     ),
     ElisionFixture(
         # A thousands separator is interior too: "12,500" may never be shown
         # as "12,5". The figure slot holds "3" here on purpose, so the card's
         # big numeral is not itself the number being split.
+        # ROLE: inside-run. Re-canvassed 484 -> 604 for #66's 40px claim
+        # line: available = 540, 27 * 40 // 2 = 540 <= 540 < 560, so n = 27
+        # and the raw cut is 26 — strictly inside the run (25, 31) of
+        # `12,500`, past the separator — which backs up to 25 and rstrips.
+        # Expected string UNCHANGED.
         name="thousands_separator_is_interior",
         claim=_claim(
             id="c11",
             claim="Overall 3 sites enrolled 12,500 participants nationwide",
             qualifier="preliminary",
         ),
-        size=(484, 900),
+        size=(604, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Overall 3 sites enrolled…",
     ),
     ElisionFixture(
         # A trailing percent sign belongs to its number: cutting between "48"
         # and "%" changes the magnitude by a factor of 100.
+        # ROLE: inside-run. Re-canvassed 456 -> 604 for #66's 40px claim
+        # line: available = 540, n = 27 (27 * 20 = 540 <= 540) and the raw cut
+        # is 26 — strictly inside the run (25, 28) of `48%`, i.e. between the
+        # digits and the sign — which backs up to 25. Expected string
+        # UNCHANGED.
         name="percent_sign_belongs_to_its_number",
         claim=_claim(
             id="c12",
             claim="Vaccine efficacy reached 48% in the trial",
             qualifier="preliminary",
         ),
-        size=(456, 900),
+        size=(604, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Vaccine efficacy reached…",
     ),
     # --- #57: the two gaps in the rule above, one fixture per reported case -
@@ -816,83 +924,123 @@ ELISION_FIXTURES: tuple[ElisionFixture, ...] = (
         # `48` for a claim that says `48 %`. One space defeated the adjacency
         # test, and the card is then wrong by a factor of 100 — the exact
         # hazard the fixture above was written to prevent.
+        # ROLE: inside-run. Re-canvassed 456 -> 604 for #66's 40px claim
+        # line: available = 540, n = 27 and the raw cut is 26 — strictly
+        # inside the run (25, 29) of `48 %`, the space included — which backs
+        # up to 25. Expected string UNCHANGED.
         name="whitespace_before_the_percent_sign",
         claim=_claim(
             id="c120",
             claim="Vaccine efficacy reached 48 % in the trial overall",
             qualifier="preliminary",
         ),
-        size=(456, 900),
+        size=(604, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Vaccine efficacy reached…",
     ),
     ElisionFixture(
         # `12` for `12-18`: a RANGE rendered as its LOWER BOUND.
+        # ROLE: inside-run. Re-canvassed 358 -> 464 for #66's 40px claim
+        # line: available = 400, 20 * 40 // 2 = 400 <= 400 < 420, so n = 20
+        # and the raw cut is 19 — strictly inside the run (18, 23) of `12-18`
+        # — which backs up to 18 and rstrips. Expected string UNCHANGED.
         name="hyphen_range_is_one_quantity",
         claim=_claim(
             id="c121",
             claim="Participants aged 12-18 were enrolled in the trial",
             qualifier="preliminary",
         ),
-        size=(358, 900),
+        size=(464, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Participants aged…",
     ),
     ElisionFixture(
         # The same range with an en dash, the form a copy editor leaves
         # behind. A rule that listed `-` and stopped would pass the fixture
         # above and fail this one.
+        # ROLE: inside-run. Re-canvassed 358 -> 464, same arithmetic as the
+        # hyphen fixture above: n = 20, raw cut 19, strictly inside the run
+        # (18, 23) of `12–18`. Expected string UNCHANGED.
         name="en_dash_range_is_one_quantity",
         claim=_claim(
             id="c122",
             claim="Participants aged 12–18 were enrolled in the trial",
             qualifier="preliminary",
         ),
-        size=(358, 900),
+        size=(464, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Participants aged…",
     ),
     ElisionFixture(
         # `1` for `1e5`: the claim line understates by a factor of 100000.
         # #58 already refuses to do this in the figure slot; the claim line
         # has to agree with it.
+        # ROLE: inside-run. Re-canvassed 330 -> 444 for #66's 40px claim
+        # line: available = 380, 19 * 40 // 2 = 380 <= 380 < 400, so n = 19
+        # and the raw cut is 18 — strictly inside the run (17, 20) of `1e5` —
+        # which backs up to 17 and rstrips. Expected string UNCHANGED.
         name="exponent_is_one_quantity",
         claim=_claim(
             id="c123",
             claim="Neurons numbered 1e5 per sample in the cortex",
             qualifier="preliminary",
         ),
-        size=(330, 900),
+        size=(444, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Neurons numbered…",
     ),
     ElisionFixture(
         # `1` for `1/3`: a third of the participants becomes one of them.
+        # ROLE: inside-run. Re-canvassed 176 -> 224 for #66's 40px claim
+        # line: available = 160, 8 * 40 // 2 = 160 <= 160 < 180, so n = 8 and
+        # the raw cut is 7 — strictly inside the run (6, 9) of `1/3` — which
+        # backs up to 6 and rstrips. Expected string UNCHANGED.
         name="fraction_is_one_quantity",
         claim=_claim(
             id="c124",
             claim="About 1/3 of the participants completed the follow-up",
             qualifier="preliminary",
         ),
-        size=(176, 900),
+        size=(224, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="About…",
     ),
     ElisionFixture(
         # `3` for `3:1`: a ratio rendered as its first term.
+        # ROLE: inside-run. Re-canvassed 554 -> 764 for #66's 40px claim
+        # line: available = 700, 35 * 40 // 2 = 700 <= 700 < 720, so n = 35
+        # and the raw cut is 34 — strictly inside the run (33, 36) of `3:1` —
+        # which backs up to 33 and rstrips. Expected string UNCHANGED.
         name="ratio_is_one_quantity",
         claim=_claim(
             id="c125",
             claim="The treated to control ratio was 3:1 in the study",
             qualifier="preliminary",
         ),
-        size=(554, 900),
+        size=(764, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="The treated to control ratio was…",
     ),
     ElisionFixture(
         # `12` for `12:30`: a clock time rendered as an hour count.
+        # ROLE: inside-run. Re-canvassed 358 -> 464, same arithmetic as the
+        # range fixtures: n = 20, raw cut 19, strictly inside the run
+        # (18, 23) of `12:30`. Expected string UNCHANGED.
         name="clock_time_is_one_quantity",
         claim=_claim(
             id="c126",
             claim="Sessions began at 12:30 on the second day of testing",
             qualifier="preliminary",
         ),
-        size=(358, 900),
+        size=(464, 900),
+        role="inside-run",
+        claim_font_size=40,
         expected_claim_text="Sessions began at…",
     ),
 )
@@ -1032,6 +1180,148 @@ def test_the_elision_fixtures_really_elide():
         assert layout.claim.text != fixture.claim.claim, (
             f"[{fixture.name}] claim {fixture.claim.claim!r} was not elided on "
             f"a {fixture.size[0]}x{fixture.size[1]} canvas"
+        )
+
+
+# --- #66: a fixture may not go quietly dead ----------------------------------
+# Raising the type scale moves the width-chosen cut, and a fixture whose cut
+# has drifted OUT of the numeral run it was written to split still passes:
+# `qa_only_4823` expected "Only…" at 28px with the cut at index 7 (inside
+# `4823`) and would still expect "Only…" at 40px on its old 180px canvas with
+# the cut at index 4 (after `Only`) — correct, green, and testing nothing.
+# Nobody edits a fixture whose string did not change, so nobody notices.
+#
+# The two helpers below make that mechanical. They use this file's OWN fake
+# metric and its OWN run scanner, and import no elision internals — not
+# `_elide`, `_numeral_runs`, `_cut_clear_of_numerals` or `_FIGURE_RE` (#57: a
+# detector that shares production's definition shares its blind spot).
+
+
+def _width_chosen_cut(text: str, font_size: int, available_width: int) -> int | None:
+    """Where WIDTH ALONE would cut `text`, knowing nothing about numerals.
+
+    The longest prefix whose `prefix + ELLIPSIS` still fits, measured with
+    this file's `_qa_measure`. This is the cut a card would make with the
+    numeral-run backup switched off, so comparing it with the cut the card
+    actually made says whether the backup fired.
+    """
+    for cut in range(len(text), -1, -1):
+        width, _ = _qa_measure(text[:cut] + ELLIPSIS, font_size)
+        if width <= available_width:
+            return cut
+    return None
+
+
+@pytest.mark.parametrize("fixture", ELISION_FIXTURES, ids=_elision_ids(ELISION_FIXTURES))
+def test_every_elision_fixture_still_exercises_its_declared_role(
+    fixture: ElisionFixture,
+):
+    """Each fixture still does the job it was written for, not merely pass.
+
+    `role` is the fixture's purpose and is invariant. When a type-scale change
+    moves the cut out of the place its role needs, the fix is to move the
+    fixture's CANVAS until the cut lands in the same semantic place again —
+    never to accept the new string, and never to relabel the role (#66).
+    """
+    claim_text = fixture.claim.claim
+    available = fixture.size[0] - 2 * CARD_MARGIN
+    raw_cut = _width_chosen_cut(claim_text, fixture.claim_font_size, available)
+
+    assert raw_cut is not None and raw_cut < len(claim_text), (
+        f"[{fixture.name}] nothing is cut at all on a {fixture.size[0]}px "
+        f"canvas at {fixture.claim_font_size}px — the fixture pins no elision. "
+        f"Narrow the canvas"
+    )
+
+    spans = _run_spans(claim_text, with_suffix=True, with_binders=True)
+    inside = [(start, end) for start, end in spans if start < raw_cut < end]
+    layout = compute_card_layout(fixture.claim, fixture.size, _qa_measure)
+
+    if fixture.role == "refuses":
+        assert inside, (
+            f"[{fixture.name}] DEAD FIXTURE: the width-chosen cut is at index "
+            f"{raw_cut}, which falls inside no numeral run of {claim_text!r} "
+            f"(runs: {spans}). This fixture pins a refusal caused by backing "
+            f"up out of a run; it cannot do that if the cut is already clear. "
+            f"Move the canvas until the cut is inside the leading run again"
+        )
+        assert inside[0][0] == 0, (
+            f"[{fixture.name}] the run the cut falls inside is "
+            f"{inside[0]}, which does not start at index 0 — backing up would "
+            f"leave a faithful prefix, so this is no longer a refusal fixture"
+        )
+        assert layout is None, (
+            f"[{fixture.name}] expected refusal, got "
+            f"{layout.claim.text!r}"
+        )
+        return
+
+    assert layout is not None, f"[{fixture.name}] expected a layout, got None"
+    assert layout.claim.font_size == fixture.claim_font_size, (
+        f"[{fixture.name}] the claim line was laid out at "
+        f"{layout.claim.font_size}px, but this fixture's expected string and "
+        f"canvas were derived by hand at {fixture.claim_font_size}px. The type "
+        f"scale moved under the fixtures: re-derive the cut, do not edit the "
+        f"declared size"
+    )
+
+    text = layout.claim.text
+    assert text.endswith(ELLIPSIS), (
+        f"[{fixture.name}] claim line {text!r} was not elided at all"
+    )
+    final_cut = len(text) - len(ELLIPSIS)
+
+    if fixture.role == "inside-run":
+        assert inside, (
+            f"[{fixture.name}] DEAD FIXTURE: the width-chosen cut is at index "
+            f"{raw_cut} of {claim_text!r}, which falls inside no numeral run "
+            f"(runs: {spans}). This fixture exists to prove a cut INSIDE a "
+            f"number is backed up; with the cut already clear it passes "
+            f"without exercising the backup at all. Widen or narrow its "
+            f"canvas until the cut is inside the run again — do not accept "
+            f"the string this now produces"
+        )
+        start, end = inside[0]
+        assert final_cut != raw_cut, (
+            f"[{fixture.name}] the numeral-run backup never fired: the card "
+            f"cut at {final_cut}, the same index width alone would choose, "
+            f"although {raw_cut} is inside the run "
+            f"{claim_text[start:end]!r} ({start}..{end})"
+        )
+        assert final_cut == len(claim_text[:start].rstrip()), (
+            f"[{fixture.name}] the cut backed up to {final_cut}, not to the "
+            f"start of the run {claim_text[start:end]!r} at {start} "
+            f"(whitespace stripped). A number is shown whole or not at all"
+        )
+        return
+
+    # The two controls: the width-chosen cut was already safe, so the backup
+    # must leave it exactly where it was.
+    assert not inside, (
+        f"[{fixture.name}] this control's cut at index {raw_cut} now falls "
+        f"inside the numeral run {inside}, so it no longer controls for "
+        f"anything: it has become an inside-run fixture. Move its canvas back"
+    )
+    assert final_cut == raw_cut, (
+        f"[{fixture.name}] the backup fired on a cut that was already safe: "
+        f"width alone chooses {raw_cut}, the card cut at {final_cut}. Elision "
+        f"may only be narrowed where a number would be split"
+    )
+
+    whole_runs_shown = [
+        (start, end) for start, end in spans if end <= final_cut
+    ]
+    if fixture.role == "after-numeral":
+        assert whole_runs_shown, (
+            f"[{fixture.name}] nothing this fixture shows is a whole numeral "
+            f"run ({claim_text[:final_cut]!r}), so it no longer controls for "
+            f"a cut falling clear of a number"
+        )
+    else:  # inside-word
+        assert not whole_runs_shown, (
+            f"[{fixture.name}] the cut now falls after the whole numeral run "
+            f"{whole_runs_shown}, which is the after-numeral control's job. "
+            f"This fixture must cut inside a WORD, with no number shown"
         )
 
 
@@ -1712,7 +2002,13 @@ def test_the_sign_fixture_table_still_covers_every_class():
 # Neither knows this file's `_run_spans` or production's `_numeral_runs`, so
 # neither can inherit a hole from either.
 
-_SWEEP_WIDTHS = tuple(range(140, 700, 4))  # every cut position, at 14px/char
+# Every cut position, and then some: the claim line is 20px/char under
+# `_qa_measure` since #66 raised FONT_SIZE_CLAIM_WITH_FIGURE 28 -> 40, so a
+# sweep that stopped at 700px (sized for 14px/char) stopped before the cut
+# had walked past the quantity in the longer claims and the assertions below
+# went vacuous — which they say so themselves. The upper bound is the
+# production canvas; the range is an instrument, not a pinned value.
+_SWEEP_WIDTHS = tuple(range(140, 1084, 4))
 
 
 def _cut_outcome(claim_text: str, width: int) -> object:
