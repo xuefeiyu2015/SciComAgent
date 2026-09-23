@@ -7,6 +7,7 @@
 #   reviewer   strong  — faithfulness check (MUST differ from drafter)
 #   researcher cheap   — topic abstraction + background search (OPTIONAL: falls back to extractor)
 #   stylist    cheap   — distill example articles into a voice profile (OPTIONAL: falls back to extractor)
+#   image_reviewer cheap — vision check that a generated cover carries no lettering (OPTIONAL: falls back to extractor)
 #
 # Each provider/model value may be:
 #   - a literal string            -> "anthropic", "claude-haiku-4-5-20251001"
@@ -33,6 +34,9 @@ models:
   stylist:
     provider: env   # -> STYLIST_PROVIDER     (optional; unconfigured -> extractor)
     model: env      # -> STYLIST_MODEL
+  image_reviewer:
+    provider: env   # -> IMAGE_REVIEWER_PROVIDER (optional; unconfigured -> extractor)
+    model: env      # -> IMAGE_REVIEWER_MODEL    (cheap VISION model: it is shown the generated cover and answers yes/no on lettering)
 
 # Learned writing style: drop popular-science articles you like into
 # api/styles/examples/ and they are distilled into a voice profile for the
@@ -58,3 +62,17 @@ search:
 # serial) if your provider rate-limits the burst. Env var: DRAFT_WORKERS.
 pipeline:
   draft_workers: 3
+
+# Image assets for a run: a cover (model-generated decoration) and, per claim,
+# an explainer card (deterministically rendered from the claim ledger — never
+# model-generated, so it can state nothing the ledger does not).
+# HOW MUCH to generate is NOT configured here: it is the per-call `images` dial
+# on generate / redraft / illustrate (off / cover / all, default off).
+# Same "env" indirection as models/style/search; env vars named below.
+# Optional env key, never stored here (byo_key):
+#   GOOGLE_API_KEY  — required for cover generation; env only, never in config
+images:
+  model: env      # -> IMAGE_MODEL      (image model, e.g. gemini-2.5-flash-image — what a standard Gemini API key serves; an imagen-* model works on a key that has one; unset -> cover generation is skipped with an image_error notice)
+  cap: env        # -> IMAGE_CAP        (max explainer cards per run; default 3, non-numeric falls back to 3, negative means none)
+  cover_attempts: env  # -> IMAGE_COVER_ATTEMPTS (how many times a cover may be generated before one that still shows lettering ships with a notice; default 3, non-numeric falls back to 3, clamped to at least 1)
+  font_path: env  # -> IMAGE_FONT_PATH  (font the claim cards are drawn with; a missing path falls back to system fonts, and if none load the card is refused rather than drawn as tofu)

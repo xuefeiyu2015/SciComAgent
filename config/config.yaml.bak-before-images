@@ -1,0 +1,27 @@
+# config.yaml — written by the SciComm review board settings sidebar.
+# Hand edits are respected, but a save from the sidebar rewrites this file
+# and drops comments. See config/config.example.yaml for the documented
+# reference (that file is never written).
+byo_key: true
+models:
+  extractor:
+    provider: google_genai
+    model: gemini-flash-lite-latest
+  drafter:
+    provider: google_genai
+    model: gemini-flash-latest
+  reviewer:
+    provider: google_genai
+    model: gemini-flash-lite-latest
+  researcher:
+    provider: google_genai
+    model: gemini-flash-lite-latest
+search:
+  sources:
+  - arxiv
+  - semantic_scholar
+  - pubmed
+  - crossref
+  - wikipedia
+  - ddgs
+  - tavily

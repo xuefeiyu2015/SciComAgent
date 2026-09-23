@@ -42,13 +42,16 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from api.paths import is_safe_session_id
 from api.pipeline import EventSink, redraft, run
 from api.schema import (
     AgentInput,
     AgentOutput,
+    ImageMode,
     JobKind,
     JobProgress,
     JobState,
+    Language,
     Notice,
     NoticeCode,
     Platform,
@@ -57,6 +60,7 @@ from api.schema import (
     Status,
     merge_dials,
 )
+from api.visuals import illustrate
 
 _log = logging.getLogger(__name__)
 
@@ -115,9 +119,18 @@ def start(inp: AgentInput) -> str:
     """Accept a run and return its session_id immediately.
 
     The pipeline executes on a worker thread; nothing about `inp` is validated
-    here beyond what AgentInput already guarantees.
+    here beyond what AgentInput already guarantees. When `inp.images` is not
+    `off`, the run is chained straight into `illustrate` (#31) — the caller
+    gets a result with `images` already populated, not a second call to make.
     """
-    return _submit(inp, lambda on_event: run(inp, on_event=on_event))
+    def work(on_event: EventSink, session_id: str) -> AgentOutput:
+        out = run(inp, on_event=on_event)
+        card = read_card(session_id) or {}
+        return _chain_images(
+            out, session_id, inp.images, card, inp.language, inp.liveliness, on_event,
+        )
+
+    return _submit(inp, work)
 
 
 def start_redraft(
@@ -174,28 +187,65 @@ def start_redraft(
     # Missing card -> redraft() falls back to a full run. That is slower, not
     # wrong, so it is not worth refusing over.
     card = read_card(session_id) or {}
-    return _submit(
-        after,
-        lambda on_event: redraft(
+
+    def work(on_event: EventSink, new_session_id: str) -> AgentOutput:
+        out = redraft(
             prev, before, after, card,
             on_event=on_event, allow_restate=allow_restate,
-        ),
-        kind=JobKind.redraft,
-    )
+        )
+        # Same images logic as `start`'s closure: `after`'s dials and the
+        # `card` already resolved above, not re-derived — a redraft with
+        # images enabled is not a silent no-op (#33).
+        return _chain_images(
+            out, new_session_id, after.images, card, after.language, after.liveliness,
+            on_event,
+        )
+
+    return _submit(after, work, kind=JobKind.redraft)
+
+
+def _chain_images(
+    out: AgentOutput,
+    session_id: str,
+    mode: ImageMode,
+    card: dict,
+    language: Language,
+    liveliness: int,
+    on_event: EventSink,
+) -> AgentOutput:
+    """Chain a just-finished run straight into `illustrate` (#31).
+
+    Skipped entirely — no `illustrate` call, no ProgressEvent, no
+    image-specific work at all — when `mode` is `off` or the run ended
+    `failed`/`no_claims`: an image stage has nothing sensible to draw from a
+    run that produced no reviewable draft. Otherwise this is the only place
+    that emits `ProgressEvent(stage="images")`, exactly once, through
+    `on_event` — the same milestone channel every other pipeline stage uses,
+    so it flows through `_on_event`'s `min(steps_done + 1, steps_total)`
+    clamp like any other stage and the `+1` `_submit` already reserved for it
+    (see `_submit`) gets accounted for.
+    """
+    if mode is ImageMode.off or out.status in (Status.failed, Status.no_claims):
+        return out
+    illustrated = illustrate(out, session_id, mode, card, language, liveliness)
+    on_event(ProgressEvent(stage="images", message="images generated"))
+    return illustrated
 
 
 def _submit(
     inp: AgentInput,
-    work: Callable[[EventSink], AgentOutput],
+    work: Callable[[EventSink, str], AgentOutput],
     kind: JobKind = JobKind.run,
 ) -> str:
     """Register a job for `work` and hand back its session_id immediately.
 
-    `work` is whatever produces the AgentOutput — a first run or a redraft.
-    Everything downstream of here (progress, partials, the mirror, the request
-    sidecar, eviction) is identical for both, which is the point of the seam.
-    `kind` is the one thing that is not: it rides along so that the job can
-    say what it was when it reports itself finished.
+    `work` is whatever produces the AgentOutput — a first run or a redraft —
+    and receives the job's own `on_event` sink plus the `session_id` `_submit`
+    mints for it (needed to chain into `illustrate`, which writes assets
+    keyed by that id). Everything downstream of here (progress, partials, the
+    mirror, the request sidecar, eviction) is identical for both, which is the
+    point of the seam. `kind` is the one thing that is not: it rides along so
+    that the job can say what it was when it reports itself finished.
     """
     session_id = f"j_{_INSTANCE}_{uuid.uuid4().hex[:8]}"
     now = time.time()
@@ -204,7 +254,8 @@ def _submit(
             session_id=session_id,
             state=JobState.queued,
             kind=kind,
-            steps_total=_PRELUDE_STEPS + len(inp.platforms),
+            steps_total=_PRELUDE_STEPS + len(inp.platforms)
+            + (1 if inp.images is not ImageMode.off else 0),
             started_at=now,
             updated_at=now,
             message="queued",
@@ -291,17 +342,86 @@ def result(session_id: str) -> AgentOutput | None:
     return _read_mirror(session_id)
 
 
+def illustrate_session(
+    session_id: str, mode: ImageMode, force: bool = False
+) -> AgentOutput:
+    """Turn a bare `session_id` into `illustrate`'s inputs, for a run that
+    already finished.
+
+    This is the session-level entry point: it assembles nothing itself beyond
+    what is already on disk for `session_id`. #33's standalone `illustrate`
+    MCP tool calls this directly rather than resolving the run/card/dials
+    itself.
+
+    Reads the run (`result`), the paper card (`read_card`, falling back to
+    `{}` when the sidecar is absent — a missing card is NORMAL, not an error:
+    `illustrate`/#30 treat a sparse card as fine, producing a thinner cover,
+    so no `image_error` notice is raised for that case alone), and the dials
+    (`read_request`, falling back to `AgentInput`'s own defaults —
+    `Language.zh` / `liveliness=3` — when the request sidecar is absent),
+    then calls `api.visuals.illustrate` and rewrites the mirror
+    (`_mirror_safely`) with the result.
+
+    Never raises, for any input:
+      - unknown/expired `session_id` (`result(session_id) is None`) returns a
+        `failed` AgentOutput carrying a `NoticeCode.unknown_session` notice.
+      - a `session_id` whose job is still running (`result(session_id).status
+        is Status.running`) also returns a `failed` AgentOutput with a
+        notice, rather than illustrating a partial run — mirrors
+        `start_redraft`'s guard against redrafting a still-running job,
+        except this path must not raise: nothing in `mcp_server` may see an
+        exception (#33).
+    """
+    out = result(session_id)
+    if out is None:
+        return AgentOutput(
+            status=Status.failed,
+            session_id=session_id,
+            notices=[
+                Notice(code=NoticeCode.unknown_session, message=_lost_message(session_id)),
+            ],
+        )
+    if out.status is Status.running:
+        return AgentOutput(
+            status=Status.failed,
+            session_id=session_id,
+            notices=[
+                Notice(
+                    code=NoticeCode.running,
+                    message=(
+                        f"job {session_id} is still running — poll `job_status` and "
+                        "call `illustrate` again once it reports state=done"
+                    ),
+                ),
+            ],
+        )
+
+    card = read_card(session_id) or {}
+    request = read_request(session_id)
+    language = request.language if request is not None else Language.zh
+    liveliness = request.liveliness if request is not None else 3
+
+    illustrated = illustrate(out, session_id, mode, card, language, liveliness, force)
+    _mirror_safely(session_id, illustrated)
+    return illustrated
+
+
 # --- execution --------------------------------------------------------------
 
-def _execute(session_id: str, work: Callable[[EventSink], AgentOutput]) -> None:
-    """Worker body: do the work, recording progress and the outcome."""
+def _execute(session_id: str, work: Callable[[EventSink, str], AgentOutput]) -> None:
+    """Worker body: do the work, recording progress and the outcome.
+
+    `work` stays opaque — a first run, a redraft, either chained into images
+    or not — `_execute` hands it the event sink and the session_id and does
+    not care what it does with them; no image-specific code lives here.
+    """
     record = _get(session_id)
     if record is None:  # evicted before it ever started
         return
 
     _update(record, state=JobState.running, stage="fetch", message="fetching source")
     try:
-        output = work(lambda event: _on_event(record, event))
+        output = work(lambda event: _on_event(record, event), session_id)
     except Exception as err:  # a crash is a result, not an exception to lose
         output = AgentOutput(
             status=Status.failed,
@@ -460,7 +580,7 @@ def read_request(session_id: str) -> AgentInput | None:
     Runs mirrored before this existed have no sidecar, so callers must treat a
     missing request as normal rather than as an error.
     """
-    if not _is_safe_session_id(session_id):
+    if not is_safe_session_id(session_id):
         return None
     path = _REQUESTS_DIR / f"{session_id}.json"
     try:
@@ -474,7 +594,7 @@ def read_request(session_id: str) -> AgentInput | None:
 
 def _write_card(session_id: str, card: dict) -> None:
     """Record what the paper said. Best effort — never sink a run over it."""
-    if not _is_safe_session_id(session_id):
+    if not is_safe_session_id(session_id):
         return
     try:
         _CARDS_DIR.mkdir(parents=True, exist_ok=True)
@@ -492,7 +612,7 @@ def read_card(session_id: str) -> dict | None:
     whose sidecar could not be written, has no card. That is normal — a caller
     without one redrafts the slow way, from the source.
     """
-    if not _is_safe_session_id(session_id):
+    if not is_safe_session_id(session_id):
         return None
     path = _CARDS_DIR / f"{session_id}.json"
     try:
@@ -534,7 +654,7 @@ def _mirror_safely(session_id: str, output: AgentOutput) -> None:
 
 def _read_mirror(session_id: str) -> AgentOutput | None:
     """Load a finished result written by an earlier life of this process."""
-    if not _is_safe_session_id(session_id):
+    if not is_safe_session_id(session_id):
         return None
     path = _mirror_path(session_id)
     try:
@@ -546,14 +666,7 @@ def _read_mirror(session_id: str) -> AgentOutput | None:
         return None
 
 
-def _is_safe_session_id(session_id: str) -> bool:
-    """Guard the mirror path: ids are ours, never caller-shaped path fragments."""
-    return bool(session_id) and all(
-        part.isalnum() for part in session_id.split("_")
-    )
-
-
 __all__ = [
     "start", "start_redraft", "wait", "status", "result", "read_request",
-    "read_card", "jobs_dir", "Platform",
+    "read_card", "jobs_dir", "Platform", "illustrate_session",
 ]

@@ -18,6 +18,7 @@ from mcp_server.server import (
     extract_ledger,
     generate,
     health,
+    illustrate,
     job_result,
     job_status,
     redraft,
@@ -25,6 +26,9 @@ from mcp_server.server import (
 )
 from api.schema import (
     AgentOutput,
+    ImageAsset,
+    ImageKind,
+    ImageMode,
     JobState,
     CheckFlag,
     Claim,
@@ -79,6 +83,23 @@ def test_background_flag_passes_through(monkeypatch):
 
     generate(source="http://paper", source_type=SourceType.url, background=False)
     assert captured["inp"].background is False
+
+
+def test_images_flag_passes_through(monkeypatch):
+    """`images` defaults to off and is marshaled into AgentInput like `background`."""
+    captured = {}
+
+    def fake_run(inp):
+        captured["inp"] = inp
+        return AgentOutput()
+
+    monkeypatch.setattr(jobs, "run", _accepting(fake_run))
+
+    generate(source="http://paper", source_type=SourceType.url)
+    assert captured["inp"].images == ImageMode.off
+
+    generate(source="http://paper", source_type=SourceType.url, images=ImageMode.cover)
+    assert captured["inp"].images == ImageMode.cover
 
 
 def test_need_pdf_returns_clear_message_without_crashing(monkeypatch):
@@ -195,6 +216,19 @@ def test_render_returns_markdown_string():
     assert "正文" in md
 
 
+def test_render_shows_images_with_no_change_to_the_tool(monkeypatch):
+    """#33 criterion: render already shows images (api/render.py, #32) and the
+    `render` tool needs no change to keep doing so — it still calls
+    `render_markdown` with no images-specific branching."""
+    out = AgentOutput(
+        status=Status.needs_review,
+        platform_outputs=[PlatformOutput(platform=Platform.news, title_options=["T"], body="正文")],
+        images=[ImageAsset(kind=ImageKind.cover, path="cover.png", alt="cover")],
+    )
+    md = render(result=out)
+    assert "cover.png" in md
+
+
 def test_render_never_crashes(monkeypatch):
     monkeypatch.setattr(
         server, "render_markdown",
@@ -294,6 +328,87 @@ def test_redraft_passes_only_the_settings_that_were_given(monkeypatch):
     assert out.status == Status.needs_review
 
 
+def test_redraft_passes_images_through_the_changes_dict(monkeypatch):
+    """`images` goes into `changes` exactly like every other redraft dial."""
+    seen = {}
+    monkeypatch.setattr(
+        jobs, "start_redraft",
+        lambda sid, changes, allow_restate=False:
+        seen.update(sid=sid, changes=changes) or "j_x_2",
+    )
+    monkeypatch.setattr(jobs, "wait", lambda sid, timeout: True)
+    monkeypatch.setattr(jobs, "result", lambda sid: AgentOutput(status=Status.needs_review))
+
+    redraft(session_id="j_x_1", images=ImageMode.cover, wait_seconds=5)
+
+    assert seen["changes"] == {"images": ImageMode.cover}
+
+
+def test_redraft_changing_only_images_generates_images_and_reuses_the_ledger(
+    monkeypatch,
+):
+    """The REDRAFTABLE_DIALS fix (#33), exercised end to end through the real
+    `jobs.start_redraft` / `merge_dials` — only the model calls are stubbed.
+
+    Before this fix `images` was dropped silently by `merge_dials`, so a
+    redraft asking for `images=cover` would look accepted and do nothing.
+    This proves it now actually reaches the new session AND that changing
+    `images` alone still takes the same-language ledger-reuse fast path
+    `background` alone already used.
+    """
+    ledger = [Claim(id="c1", claim="x", source_evidence="e", qualifier="q")]
+
+    monkeypatch.setattr(jobs, "run", _accepting(
+        lambda inp: AgentOutput(
+            status=Status.needs_review,
+            platform_outputs=[PlatformOutput(platform=Platform.news, body="b")],
+            claim_ledger=ledger,
+        )
+    ))
+    first = generate(source="http://paper", source_type=SourceType.url, wait_seconds=5)
+    assert first.session_id
+
+    redraft_calls = {}
+
+    def fake_pipeline_redraft(prev, before, after, card, on_event=None, allow_restate=False):
+        redraft_calls["before"] = before
+        redraft_calls["after"] = after
+        # A real redraft on the fast path reuses the ledger object as-is.
+        return AgentOutput(
+            status=Status.needs_review,
+            platform_outputs=[PlatformOutput(platform=Platform.news, body="b2")],
+            claim_ledger=prev.claim_ledger,
+        )
+
+    monkeypatch.setattr(jobs, "redraft", fake_pipeline_redraft)
+
+    illustrate_calls = {}
+
+    def fake_illustrate(out, session_id, mode, card, language, liveliness, force=False):
+        illustrate_calls["mode"] = mode
+        new = out.model_copy(deep=True)
+        new.images = [ImageAsset(kind=ImageKind.cover, path="cover.png")]
+        return new
+
+    monkeypatch.setattr(jobs, "illustrate", fake_illustrate)
+
+    out = redraft(session_id=first.session_id, images=ImageMode.cover, wait_seconds=5)
+
+    # images actually reached the new request, and nothing else changed
+    assert redraft_calls["before"].images == ImageMode.off
+    assert redraft_calls["after"].images == ImageMode.cover
+    assert redraft_calls["before"].language == redraft_calls["after"].language
+    assert redraft_calls["before"].platforms == redraft_calls["after"].platforms
+
+    # images were actually generated for the NEW session, not just carried forward
+    assert illustrate_calls["mode"] == ImageMode.cover
+    assert out.status == Status.needs_review
+    assert out.images and out.images[0].kind == ImageKind.cover
+
+    # same-language -> fast ledger-reuse path, same object the run already had
+    assert out.claim_ledger == ledger
+
+
 def test_redraft_hands_back_its_own_session_id(monkeypatch):
     """Poll the redraft, not the run it came from."""
     monkeypatch.setattr(jobs, "start_redraft",
@@ -336,6 +451,173 @@ def test_redraft_is_registered_as_a_tool():
     names = {t.name for t in asyncio.run(server.mcp.list_tools())}
 
     assert "redraft" in names
+
+
+# --- illustrate ---------------------------------------------------------------
+
+def test_illustrate_delegates_and_marshals(monkeypatch):
+    """`images` maps onto `illustrate_session`'s `mode` argument; nothing else
+    is assembled here — session_id/mode/force pass straight through."""
+    captured = {}
+
+    def fake_illustrate_session(session_id, mode, force=False):
+        captured.update(session_id=session_id, mode=mode, force=force)
+        return AgentOutput(
+            status=Status.needs_review,
+            session_id=session_id,
+            images=[ImageAsset(kind=ImageKind.cover, path="cover.png")],
+        )
+
+    monkeypatch.setattr(jobs, "illustrate_session", fake_illustrate_session)
+
+    out = illustrate(session_id="j_x_1", images=ImageMode.cover, force=True)
+
+    assert captured == {"session_id": "j_x_1", "mode": ImageMode.cover, "force": True}
+    assert out.status == Status.needs_review
+    assert out.images and out.images[0].kind == ImageKind.cover
+
+
+def test_illustrate_against_a_finished_run_produces_images_without_redrafting(
+    monkeypatch,
+):
+    """Real end-to-end: a run finished with images=off gets illustrated after
+    the fact, and drafting itself is never touched."""
+    redraft_called = {"count": 0}
+
+    def fail_if_called(*a, **k):
+        redraft_called["count"] += 1
+        raise AssertionError("illustrate must not redraft")
+
+    monkeypatch.setattr(jobs, "run", _accepting(
+        lambda inp: AgentOutput(
+            status=Status.needs_review,
+            platform_outputs=[PlatformOutput(platform=Platform.news, body="b")],
+            claim_ledger=[Claim(id="c1", claim="x", source_evidence="e", qualifier="q")],
+        )
+    ))
+    monkeypatch.setattr(jobs, "redraft", fail_if_called)
+
+    first = generate(source="http://paper", source_type=SourceType.url, wait_seconds=5)
+    assert first.session_id
+
+    def fake_illustrate(out, session_id, mode, card, language, liveliness, force=False):
+        new = out.model_copy(deep=True)
+        new.images = [ImageAsset(kind=ImageKind.cover, path="cover.png")]
+        return new
+
+    monkeypatch.setattr(jobs, "illustrate", fake_illustrate)
+
+    out = illustrate(session_id=first.session_id, images=ImageMode.cover)
+
+    assert out.status == Status.needs_review
+    assert out.images and out.images[0].kind == ImageKind.cover
+    assert out.platform_outputs[0].body == "b"  # draft untouched, not redrafted
+    assert redraft_called["count"] == 0
+
+
+def test_illustrate_on_an_unknown_session_fails_without_raising():
+    out = illustrate(session_id="j_nope_00000000", images=ImageMode.cover)
+
+    assert out.status == Status.failed
+    assert out.notices[0].code == NoticeCode.unknown_session
+
+
+def test_illustrate_on_a_still_running_session_fails_without_raising(monkeypatch):
+    release = threading.Event()
+
+    def slow(inp, on_event=None):
+        release.wait(5)
+        return AgentOutput(status=Status.needs_review)
+
+    monkeypatch.setattr(jobs, "run", slow)
+    try:
+        running = generate(source="s", source_type=SourceType.url, wait_seconds=0)
+        assert running.status == Status.running
+
+        out = illustrate(session_id=running.session_id, images=ImageMode.cover)
+
+        assert out.status == Status.failed
+        assert out.notices[0].code == NoticeCode.running
+    finally:
+        release.set()
+
+
+def test_illustrate_on_a_malformed_or_unsafe_session_id_fails_without_raising():
+    for bad_id in ("../../etc/passwd", ""):
+        out = illustrate(session_id=bad_id, images=ImageMode.cover)
+        assert out.status == Status.failed
+        assert out.notices[0].code == NoticeCode.unknown_session
+
+
+def test_illustrate_never_crashes_on_an_unexpected_error(monkeypatch):
+    def boom(session_id, mode, force=False):
+        raise RuntimeError("the renderer is on fire")
+
+    monkeypatch.setattr(jobs, "illustrate_session", boom)
+
+    out = illustrate(session_id="j_x_1", images=ImageMode.cover)
+
+    assert out.status == Status.failed
+    assert "on fire" in out.notices[0].message
+
+
+def test_illustrate_is_registered_as_a_tool():
+    names = {t.name for t in asyncio.run(server.mcp.list_tools())}
+
+    assert "illustrate" in names
+
+
+def test_no_tool_raises_on_a_malformed_or_unsafe_session_id():
+    """Not just `illustrate` — every tool that takes a session_id must survive
+    a path-traversal-shaped or empty one without raising."""
+    for bad_id in ("../../etc/passwd", ""):
+        assert job_status(bad_id).state == JobState.lost
+
+        result_out = job_result(bad_id)
+        assert result_out.status == Status.failed
+
+        illustrate_out = illustrate(session_id=bad_id, images=ImageMode.cover)
+        assert illustrate_out.status == Status.failed
+
+        redraft_out = redraft(session_id=bad_id, language=None, liveliness=5)
+        assert redraft_out.status == Status.failed
+
+
+def test_no_tool_raises_on_a_none_session_id():
+    """`None` is the case the malformed-id sweep above missed.
+
+    Every tool here has an `except Exception` fallback, and three of them used
+    to echo the caller's raw `session_id` straight back into
+    `JobProgress(session_id=...)` / `AgentOutput(session_id=...)`. Both models
+    declare `session_id: str`, so with `None` the FALLBACK ITSELF raised — the
+    error escaped the handler written to contain it, breaking this file's
+    "never crashes the tool" contract for one specific input.
+
+    `redraft` was always safe because it omits the field and lets it default;
+    that is the pattern the other three now follow via `session_id or ""`.
+    """
+    progress = job_status(None)  # type: ignore[arg-type]
+    assert progress.state == JobState.lost
+    assert progress.session_id == ""
+
+    for out in (
+        job_result(None),  # type: ignore[arg-type]
+        illustrate(session_id=None, images=ImageMode.cover),  # type: ignore[arg-type]
+        redraft(session_id=None, language=None, liveliness=5),  # type: ignore[arg-type]
+    ):
+        assert out.status == Status.failed
+        assert out.session_id == ""
+        assert out.notices, "a failure must say why"
+
+
+def test_generate_is_unaffected_by_the_none_session_id_fix(monkeypatch):
+    """The fix touches only failure paths; a real run still reports its own id."""
+    monkeypatch.setattr(jobs, "run", _accepting(
+        lambda inp: AgentOutput(status=Status.needs_review)
+    ))
+    out = generate(source="s", source_type=SourceType.url, wait_seconds=5)
+    assert out.session_id
+    assert job_status(out.session_id).session_id == out.session_id
 
 
 def test_job_status_reports_progress(monkeypatch):

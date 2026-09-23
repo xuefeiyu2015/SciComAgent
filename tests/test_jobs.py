@@ -18,6 +18,9 @@ from api.schema import (
     AgentInput,
     AgentOutput,
     Claim,
+    ImageAsset,
+    ImageKind,
+    ImageMode,
     JobKind,
     JobState,
     Language,
@@ -42,11 +45,12 @@ def _clean_registry(tmp_path, monkeypatch):
         jobs._JOBS.clear()
 
 
-def _input(platforms=None) -> AgentInput:
+def _input(platforms=None, images=ImageMode.off) -> AgentInput:
     return AgentInput(
         source="http://paper",
         source_type=SourceType.url,
         platforms=platforms or [Platform.news],
+        images=images,
     )
 
 
@@ -62,6 +66,32 @@ def _finished(**kw) -> AgentOutput:
 def _stub_run(monkeypatch, fn):
     """Replace the pipeline `run` that jobs calls."""
     monkeypatch.setattr(jobs, "run", fn)
+
+
+def _stub_illustrate(monkeypatch, images=None, extra_notices=None):
+    """Replace `api.visuals.illustrate` as `api.jobs` sees it.
+
+    Records every call (args as a dict) rather than hitting any real image
+    backend — no network, no models. Returns `out` with `images` set to
+    `images` (a single stub cover asset by default) and `extra_notices`
+    appended, exactly like the real `illustrate` never raises and always
+    returns a new AgentOutput.
+    """
+    calls = []
+    asset = ImageAsset(kind=ImageKind.cover, claim_id="", path="p", alt="a")
+
+    def fake(out, session_id, mode, card, language, liveliness, force=False):
+        calls.append(dict(
+            out=out, session_id=session_id, mode=mode, card=card,
+            language=language, liveliness=liveliness, force=force,
+        ))
+        return out.model_copy(update={
+            "images": images if images is not None else [asset],
+            "notices": list(out.notices) + (extra_notices or []),
+        })
+
+    monkeypatch.setattr(jobs, "illustrate", fake)
+    return calls
 
 
 # --- lifecycle --------------------------------------------------------------
@@ -480,3 +510,318 @@ def test_a_failed_run_is_never_announced_as_finished(monkeypatch):
     jobs.wait(session_id, 5)
 
     assert "finished" not in jobs.status(session_id).message.lower()
+
+
+# --- job chaining into images (#31) ------------------------------------------
+
+def test_execute_hands_work_the_session_id_and_stays_generic(monkeypatch):
+    """`_execute` is opaque: it hands `work` the id it minted, nothing more."""
+    seen = {}
+
+    def work(on_event, session_id):
+        seen["session_id"] = session_id
+        return _finished()
+
+    session_id = jobs._submit(_input(), work)
+    jobs.wait(session_id, 5)
+
+    assert seen["session_id"] == session_id
+
+
+def test_images_are_skipped_when_mode_is_off(monkeypatch):
+    calls = _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input(images=ImageMode.off))
+    jobs.wait(session_id, 5)
+
+    assert calls == []
+    assert jobs.result(session_id).images == []
+
+
+def test_images_are_skipped_when_the_run_failed(monkeypatch):
+    calls = _stub_illustrate(monkeypatch)
+
+    def failing(inp, on_event=None):
+        return AgentOutput(
+            status=Status.failed,
+            notices=[Notice(code=NoticeCode.fetch_error, message="could not fetch")],
+        )
+
+    _stub_run(monkeypatch, failing)
+    session_id = jobs.start(_input(images=ImageMode.cover))
+    jobs.wait(session_id, 5)
+
+    assert calls == []
+    assert jobs.status(session_id).state is JobState.done, "a failed status is a result, not a crash"
+    assert jobs.result(session_id).images == []
+
+
+def test_images_are_skipped_when_the_run_has_no_claims(monkeypatch):
+    calls = _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, lambda inp, on_event=None: AgentOutput(status=Status.no_claims))
+
+    session_id = jobs.start(_input(images=ImageMode.all))
+    jobs.wait(session_id, 5)
+
+    assert calls == []
+    assert jobs.result(session_id).images == []
+
+
+def test_images_are_generated_when_mode_is_enabled_and_the_run_succeeded(monkeypatch):
+    calls = _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input(images=ImageMode.cover))
+    jobs.wait(session_id, 5)
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["session_id"] == session_id
+    assert call["mode"] is ImageMode.cover
+    assert call["language"] is Language.zh
+    assert call["liveliness"] == 3
+    assert jobs.result(session_id).images, "the mirrored/in-memory result carries the assets"
+
+
+def test_a_missing_card_does_not_stop_illustrate_from_being_called(monkeypatch):
+    """A run that emitted no `card` (or none at all) is normal, not an error."""
+    calls = _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input(images=ImageMode.cover))
+    jobs.wait(session_id, 5)
+
+    assert calls[0]["card"] == {}
+
+
+def test_one_images_progress_event_flows_through_on_event(monkeypatch):
+    """The images stage rides the same milestone channel every stage uses."""
+    stages = []
+    real_on_event = jobs._on_event
+
+    def spy(record, event):
+        stages.append(event.stage)
+        real_on_event(record, event)
+
+    monkeypatch.setattr(jobs, "_on_event", spy)
+    _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input(images=ImageMode.cover))
+    jobs.wait(session_id, 5)
+
+    assert stages.count("images") == 1
+
+
+def test_steps_total_gets_one_more_step_only_when_images_are_enabled(monkeypatch):
+    _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    off_id = jobs.start(_input(images=ImageMode.off))
+    cover_id = jobs.start(_input(images=ImageMode.cover))
+    jobs.wait(off_id, 5)
+    jobs.wait(cover_id, 5)
+
+    assert jobs.status(cover_id).steps_total == jobs.status(off_id).steps_total + 1
+
+
+def test_the_images_event_reaches_steps_total_exactly_via_the_clamp(monkeypatch):
+    """Not clamped short (an uncounted stage), not left under (a missed one)."""
+    def emitting(inp, on_event=None):
+        # Mirror api.pipeline.run's own milestones: the four prelude stages
+        # plus one per platform, so steps_done tracks steps_total honestly.
+        for stage in ("ledger", "background", "glossary", "style"):
+            on_event(ProgressEvent(stage=stage))
+        on_event(ProgressEvent(stage="draft", platform=Platform.news))
+        return _finished()
+
+    seen = {}
+    real_on_event = jobs._on_event
+
+    def spy(record, event):
+        real_on_event(record, event)
+        if event.stage == "images":
+            with record.lock:
+                seen["steps_done"] = record.progress.steps_done
+                seen["steps_total"] = record.progress.steps_total
+
+    monkeypatch.setattr(jobs, "_on_event", spy)
+    _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, emitting)
+
+    session_id = jobs.start(_input(images=ImageMode.cover))
+    jobs.wait(session_id, 5)
+
+    assert seen["steps_done"] == seen["steps_total"] == jobs._PRELUDE_STEPS + 1 + 1
+
+
+def test_the_mirrored_result_contains_the_populated_images_list(monkeypatch):
+    asset = ImageAsset(kind=ImageKind.cover, claim_id="", path="cover.png", alt="a")
+    _stub_illustrate(monkeypatch, images=[asset])
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input(images=ImageMode.cover))
+    jobs.wait(session_id, 5)
+
+    with jobs._LOCK:  # simulate a restart: force result() to read the mirror
+        jobs._JOBS.clear()
+
+    assert jobs.result(session_id).images == [asset]
+
+
+def test_an_image_failure_leaves_the_job_done_not_failed(monkeypatch):
+    _stub_illustrate(
+        monkeypatch,
+        images=[],
+        extra_notices=[Notice(code=NoticeCode.image_error, message="cover image skipped")],
+    )
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input(images=ImageMode.cover))
+    jobs.wait(session_id, 5)
+
+    assert jobs.status(session_id).state is JobState.done
+    out = jobs.result(session_id)
+    assert out.images == []
+    assert any(n.code is NoticeCode.image_error for n in out.notices)
+
+
+def test_start_redraft_does_not_call_illustrate_when_after_images_is_off(monkeypatch):
+    calls = _stub_illustrate(monkeypatch)
+    first = _finish_a_run(monkeypatch, card={"title": "t"})  # images defaults to off
+    calls.clear()
+    monkeypatch.setattr(
+        jobs, "redraft",
+        lambda prev, before, after, card, on_event=None, allow_restate=False: _finished(),
+    )
+
+    second = jobs.start_redraft(first, {"liveliness": 5})
+    jobs.wait(second, 5)
+
+    assert calls == []
+
+
+def test_start_redraft_chains_into_illustrate_when_after_images_is_enabled(monkeypatch):
+    """The `images` dial carries forward from the first run (redraft cannot
+    change it yet — #33), and the redraft's closure must still act on it
+    rather than silently no-op."""
+    calls = _stub_illustrate(monkeypatch)
+    first = _finish_a_run(monkeypatch, card={"title": "t"}, images=ImageMode.cover)
+    calls.clear()  # only interested in the redraft's own call
+    monkeypatch.setattr(
+        jobs, "redraft",
+        lambda prev, before, after, card, on_event=None, allow_restate=False: _finished(),
+    )
+
+    second = jobs.start_redraft(first, {"liveliness": 5})
+    jobs.wait(second, 5)
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["session_id"] == second
+    assert call["mode"] is ImageMode.cover
+    assert call["card"] == {"title": "t"}
+    assert call["liveliness"] == 5
+    assert jobs.result(second).images
+
+
+# --- illustrate_session (#31) -------------------------------------------------
+
+def test_illustrate_session_calls_illustrate_with_the_runs_own_dials(monkeypatch):
+    calls = _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input())  # images off; illustrate_session drives it explicitly
+    jobs.wait(session_id, 5)
+    calls.clear()
+
+    out = jobs.illustrate_session(session_id, ImageMode.cover)
+
+    assert out.status is not Status.failed
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["session_id"] == session_id
+    assert call["mode"] is ImageMode.cover
+    assert call["language"] is Language.zh
+    assert call["liveliness"] == 3
+    assert out.images
+
+
+def test_illustrate_session_rewrites_the_mirror(monkeypatch):
+    asset = ImageAsset(kind=ImageKind.cover, claim_id="", path="cover.png", alt="a")
+    _stub_illustrate(monkeypatch, images=[asset])
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input())
+    jobs.wait(session_id, 5)
+    jobs.illustrate_session(session_id, ImageMode.cover)
+
+    with jobs._LOCK:  # force a read from disk
+        jobs._JOBS.clear()
+    assert jobs.result(session_id).images == [asset]
+
+
+def test_illustrate_session_on_an_unknown_session_id_reports_not_raises():
+    out = jobs.illustrate_session("j_nosuch_deadbeef", ImageMode.cover)
+
+    assert out.status is Status.failed
+    assert out.session_id == "j_nosuch_deadbeef"
+    assert out.notices[0].code is NoticeCode.unknown_session
+
+
+def test_illustrate_session_on_a_still_running_job_reports_not_raises(monkeypatch):
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow(inp, on_event=None):
+        started.set()
+        release.wait(5)
+        return _finished()
+
+    _stub_run(monkeypatch, slow)
+    session_id = jobs.start(_input())
+    try:
+        assert started.wait(5)
+        out = jobs.illustrate_session(session_id, ImageMode.cover)
+
+        assert out.status is Status.failed
+        assert "job_status" in out.notices[0].message
+        assert "done" in out.notices[0].message
+    finally:
+        release.set()
+        jobs.wait(session_id, 5)
+
+
+def test_illustrate_session_without_a_request_sidecar_falls_back_to_defaults(monkeypatch):
+    """A run mirrored before the request sidecar existed is normal, not an error."""
+    calls = _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input())
+    jobs.wait(session_id, 5)
+    calls.clear()
+    (jobs._REQUESTS_DIR / f"{session_id}.json").unlink()
+    assert jobs.read_request(session_id) is None
+
+    out = jobs.illustrate_session(session_id, ImageMode.cover)
+
+    assert out.status is not Status.failed
+    assert calls[0]["language"] is Language.zh
+    assert calls[0]["liveliness"] == 3
+
+
+def test_illustrate_session_without_a_card_sidecar_is_not_an_error(monkeypatch):
+    """A sparse/absent card is normal input to illustrate — no image_error."""
+    calls = _stub_illustrate(monkeypatch)
+    _stub_run(monkeypatch, lambda inp, on_event=None: _finished())
+
+    session_id = jobs.start(_input())  # no ledger event -> no card sidecar written
+    jobs.wait(session_id, 5)
+    calls.clear()
+    assert jobs.read_card(session_id) is None
+
+    out = jobs.illustrate_session(session_id, ImageMode.cover)
+
+    assert calls[0]["card"] == {}
+    assert not any(n.code is NoticeCode.image_error for n in out.notices)

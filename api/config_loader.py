@@ -29,10 +29,10 @@ from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 
 # Roles this agent declares (mirror agent.yaml model_requirements).
-# "researcher" and "stylist" are optional at runtime: topic/background/style
-# call them with fallback="extractor", so leaving them unconfigured never
-# breaks a run.
-ROLES = ("extractor", "drafter", "reviewer", "researcher", "stylist")
+# "researcher", "stylist" and "image_reviewer" are optional at runtime:
+# topic/background/style and api.lettering call them with
+# fallback="extractor", so leaving them unconfigured never breaks a run.
+ROLES = ("extractor", "drafter", "reviewer", "researcher", "stylist", "image_reviewer")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config" / "config.yaml"

@@ -44,3 +44,7 @@ api/styles/examples/*
 
 #Architecture file
 diagrams/
+
+#doc except for the mcq server doc
+docs/*
+!docs/sci_comm_mcpdoc.md
