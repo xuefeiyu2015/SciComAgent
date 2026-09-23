@@ -954,12 +954,16 @@ def _wrap_claim(
         if _fits(remaining, font_size, available_width, measure):
             return tuple([*lines, remaining])
 
+        # The widest legal break that still fits: scanned from the widest
+        # down, which is the same answer as scanning up and keeping the last
+        # one (both are `max{end : fits(end)}`) and stops measuring sooner.
         chosen: tuple[int, int] | None = None
-        for end, nxt in breaks:
+        for end, nxt in reversed(breaks):
             if end <= start:
-                continue
+                break
             if _fits(text[start:end], font_size, available_width, measure):
                 chosen = (end, nxt)
+                break
         if chosen is None:
             chosen = _last_resort_break(
                 text, start, runs, font_size, available_width, measure
