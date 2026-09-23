@@ -49,7 +49,6 @@ from api.schema import (
     AgentOutput,
     Claim,
     ClaimKind,
-    ImageAsset,
     ImageKind,
     ImageMode,
     Language,
