@@ -20,9 +20,18 @@ Covers, per the issue's acceptance criteria and testing notes:
 - input notices are preserved, never replaced
 - never raises: no drafts, no ledger, a failed status, or an unsafe
   session_id
+- the cover lettering check and its retry loop (#67), with a detector stub
+  that is CONTENT-ADDRESSED: `_detector` below reads the bytes it is handed
+  and answers from committed fixtures — "lettering" for `lettered.png`,
+  "clean" for `clean.png`. It takes no "say yes this time" parameter, so
+  production code that forgot to pass the new attempt's bytes through, or
+  passed a placeholder, or checked a cached copy, makes these tests fail
+  rather than pass.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +44,7 @@ from api.imagegen import (
     ImageGenProviderError,
     ImageGenRefusedError,
 )
+from api.lettering import LetteringCheckConfigError, LetteringCheckProviderError
 from api.schema import (
     AgentOutput,
     Claim,
@@ -54,6 +64,51 @@ from api.visuals import illustrate
 _PNG = b"\x89PNG\r\n\x1a\n" + b"fake-bytes"
 _SESSION = "sess1"
 _CARD = {"title": "A Paper", "contribution": "A contribution."}
+
+# Real PNGs, committed under tests/fixtures/cover/ — open them and one has
+# the word LETTERING on it, the other has no glyph anywhere (#67 AC-14).
+_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "cover"
+_LETTERED_PNG = (_FIXTURES / "lettered.png").read_bytes()
+_CLEAN_PNG = (_FIXTURES / "clean.png").read_bytes()
+
+
+def _detector(image_bytes: bytes) -> bool:
+    """The verdict comes from the BYTES, never from a flag (#67 AC-16).
+
+    There is deliberately no "say yes this time" parameter: a test scripts
+    what `generate_image` RETURNS, and the answer follows from that. Bytes
+    that no stub produced are an error rather than a guess, so production
+    code that hands the detector a placeholder, an empty buffer or a stale
+    cached copy cannot quietly pass.
+    """
+    if image_bytes == _LETTERED_PNG:
+        return True
+    if image_bytes in (_CLEAN_PNG, _PNG):
+        return False
+    raise AssertionError(
+        "the detector was handed bytes that no stub produced: "
+        f"{image_bytes[:16]!r} ({len(image_bytes)} bytes)"
+    )
+
+
+def _scripted_generator(sequence, calls):
+    """A `generate_image` stub returning `sequence` in order, counting calls."""
+
+    def _generate(prompt):
+        calls.append(prompt)
+        return sequence[min(len(calls) - 1, len(sequence) - 1)]
+
+    return _generate
+
+
+def _counted_detector(calls):
+    """`_detector`, wrapped so a test can count the calls it made."""
+
+    def _check(image_bytes):
+        calls.append(image_bytes)
+        return _detector(image_bytes)
+
+    return _check
 
 
 def _claim(id: str, claim: str, kind: ClaimKind = ClaimKind.finding) -> Claim:
@@ -84,9 +139,15 @@ def _out(
 
 @pytest.fixture(autouse=True)
 def _stub_backends(monkeypatch):
-    """Default happy-path stubs; individual tests override as needed."""
+    """Default happy-path stubs; individual tests override as needed.
+
+    The detector is stubbed with the same content-addressed `_detector` the
+    retry tests use — not with `lambda _: False`. No test in this file may
+    reach a real model or a real key.
+    """
     monkeypatch.setattr(visuals, "generate_image", lambda prompt: _PNG)
     monkeypatch.setattr(visuals, "render_claim_card", lambda claim: _PNG)
+    monkeypatch.setattr(visuals, "contains_lettering", _detector)
 
 
 # --- mode=off ----------------------------------------------------------------
@@ -380,3 +441,338 @@ def test_never_raises_when_a_composed_call_crashes_unexpectedly(monkeypatch):
     out = _out()
     result = illustrate(out, _SESSION, ImageMode.all, _CARD, Language.zh, 3)
     assert isinstance(result, AgentOutput)
+
+
+# --- #67: the cover lettering check and its retry loop ------------------------
+#
+# Every test below scripts what `generate_image` RETURNS and lets `_detector`
+# read those bytes. None of them tells the detector what to answer, and none
+# asserts on a flag the production code set: the assertions are counted stub
+# calls, the bytes on disk, and the notices.
+
+def _cover_notices(result: AgentOutput) -> list[str]:
+    return [n.message for n in result.notices if n.code is NoticeCode.image_error]
+
+
+def test_a_clean_cover_is_checked_once_with_the_bytes_that_were_generated(monkeypatch):
+    """AC-18, first direction: delete the call site and this test fails."""
+    image_calls: list[str] = []
+    detector_calls: list[bytes] = []
+    monkeypatch.setattr(
+        visuals, "generate_image", _scripted_generator([_CLEAN_PNG], image_calls)
+    )
+    monkeypatch.setattr(visuals, "contains_lettering", _counted_detector(detector_calls))
+
+    out = _out()
+    result = illustrate(out, _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+
+    assert len(image_calls) == 1
+    assert detector_calls == [_CLEAN_PNG]  # the real bytes, not a placeholder
+    assert image_path(_SESSION, ImageKind.cover).read_bytes() == _CLEAN_PNG
+    assert _cover_notices(result) == []
+    assert result.images[0].source_hash  # clean: reusable next time
+
+
+def test_a_lettered_first_attempt_is_regenerated(monkeypatch):
+    """AC-5/AC-17/AC-18, second direction: ignore the detector's result and
+    this test fails, because the lettered first attempt would be what ships."""
+    image_calls: list[str] = []
+    detector_calls: list[bytes] = []
+    monkeypatch.setattr(
+        visuals,
+        "generate_image",
+        _scripted_generator([_LETTERED_PNG, _CLEAN_PNG], image_calls),
+    )
+    monkeypatch.setattr(visuals, "contains_lettering", _counted_detector(detector_calls))
+
+    out = _out()
+    result = illustrate(out, _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+
+    assert len(image_calls) == 2
+    assert len(detector_calls) == 2
+    assert detector_calls == [_LETTERED_PNG, _CLEAN_PNG]  # each attempt, in order
+    # the SECOND attempt's bytes are what is on disk
+    assert image_path(_SESSION, ImageKind.cover).read_bytes() == _CLEAN_PNG
+    assert _cover_notices(result) == []
+    assert len(result.images) == 1
+
+
+def test_the_budget_is_exhausted_and_then_the_run_continues(monkeypatch):
+    """AC-6/AC-7: exactly `cover_attempts` image calls, no more, no fewer."""
+    image_calls: list[str] = []
+    detector_calls: list[bytes] = []
+    monkeypatch.setattr(
+        visuals, "generate_image", _scripted_generator([_LETTERED_PNG], image_calls)
+    )
+    monkeypatch.setattr(visuals, "contains_lettering", _counted_detector(detector_calls))
+
+    out = _out()
+    result = illustrate(out, _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+
+    assert len(image_calls) == 3  # the default budget
+    assert len(detector_calls) == 3
+    # the last attempt still ships
+    assert image_path(_SESSION, ImageKind.cover).read_bytes() == _LETTERED_PNG
+    assert len(result.images) == 1
+    assert result.images[0].kind is ImageKind.cover
+
+    flagged = [m for m in _cover_notices(result) if "may contain lettering" in m]
+    assert len(flagged) == 1
+    assert "3" in flagged[0]
+
+
+@pytest.mark.parametrize(
+    "configured, expected",
+    [("1", 1), ("2", 2), ("5", 5), ("0", 1), ("-4", 1), ("", 3), ("abc", 3)],
+)
+def test_the_attempt_budget_is_read_from_config(monkeypatch, configured, expected):
+    monkeypatch.setenv("IMAGE_COVER_ATTEMPTS", configured)
+    image_calls: list[str] = []
+    monkeypatch.setattr(
+        visuals, "generate_image", _scripted_generator([_LETTERED_PNG], image_calls)
+    )
+
+    out = _out()
+    result = illustrate(out, _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+
+    assert len(image_calls) == expected
+    assert visuals._resolve_cover_attempts() == expected
+    assert any(f"{expected} attempt" in m for m in _cover_notices(result))
+
+
+def test_the_budget_is_read_from_the_config_file_too(monkeypatch, isolated_config):
+    from api import config_loader
+
+    isolated_config.write_text("images:\n  cover_attempts: 2\n", encoding="utf-8")
+    config_loader.reload_config()
+
+    image_calls: list[str] = []
+    monkeypatch.setattr(
+        visuals, "generate_image", _scripted_generator([_LETTERED_PNG], image_calls)
+    )
+    illustrate(_out(), _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+
+    assert len(image_calls) == 2
+
+
+def test_a_flagged_cover_records_no_source_hash_and_is_regenerated(monkeypatch):
+    """AC-8: a cover that shipped flagged must never be reused, so its notice
+    can never be dropped by a later run that keeps the file."""
+    image_calls: list[str] = []
+    monkeypatch.setattr(
+        visuals, "generate_image", _scripted_generator([_LETTERED_PNG], image_calls)
+    )
+
+    out = _out()
+    first = illustrate(out, _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+    assert first.images[0].source_hash == ""
+
+    second = illustrate(out, _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+    assert len(image_calls) == 6  # three more attempts, not a reuse
+    assert any("may contain lettering" in m for m in _cover_notices(second))
+
+
+def test_a_clean_cover_is_reused_with_no_image_and_no_detector_call(monkeypatch):
+    """AC-8, the other side: the check does not re-run on a reused cover."""
+    image_calls: list[str] = []
+    detector_calls: list[bytes] = []
+    monkeypatch.setattr(
+        visuals, "generate_image", _scripted_generator([_CLEAN_PNG], image_calls)
+    )
+    monkeypatch.setattr(visuals, "contains_lettering", _counted_detector(detector_calls))
+
+    out = _out()
+    illustrate(out, _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+    assert (len(image_calls), len(detector_calls)) == (1, 1)
+
+    second = illustrate(out, _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+    assert (len(image_calls), len(detector_calls)) == (1, 1)  # zero new calls
+    assert len(second.images) == 1
+    assert _cover_notices(second) == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        LetteringCheckConfigError("no image_reviewer model configured"),
+        LetteringCheckProviderError("503 unavailable"),
+    ],
+)
+def test_a_detector_failure_keeps_the_cover_and_says_it_was_not_checked(
+    monkeypatch, error
+):
+    """AC-9: fail OPEN on the asset, never silent on the notice. And never
+    reported as "image backend not configured", which would skip the cover."""
+    image_calls: list[str] = []
+    monkeypatch.setattr(
+        visuals, "generate_image", _scripted_generator([_CLEAN_PNG], image_calls)
+    )
+    monkeypatch.setattr(
+        visuals,
+        "contains_lettering",
+        lambda image_bytes: (_ for _ in ()).throw(error),
+    )
+
+    out = _out()
+    result = illustrate(out, _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+
+    assert len(result.images) == 1
+    assert result.images[0].kind is ImageKind.cover
+    assert image_path(_SESSION, ImageKind.cover).read_bytes() == _CLEAN_PNG
+    assert result.images[0].source_hash == ""  # unchecked: not reusable either
+
+    messages = _cover_notices(result)
+    assert len(messages) == 1
+    assert "not checked" in messages[0]
+    assert "not configured" not in messages[0]
+    assert "skipped" not in messages[0]
+    assert len(image_calls) == 1  # a detector failure is not a reason to redraw
+
+
+def test_a_detector_failure_is_not_mistaken_for_an_image_backend_failure(monkeypatch):
+    """The `except LetteringCheckError` clause must precede `except
+    ImageGenError`: LetteringCheckError IS an ImageGenError, so the wrong
+    order would drop the cover instead of keeping it."""
+    monkeypatch.setattr(
+        visuals,
+        "contains_lettering",
+        lambda image_bytes: (_ for _ in ()).throw(LetteringCheckConfigError("nope")),
+    )
+    result = illustrate(_out(), _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+
+    assert [a.kind for a in result.images] == [ImageKind.cover]
+    assert not any("image generation failed" in m for m in _cover_notices(result))
+
+
+def test_no_api_key_value_appears_in_a_lettering_notice(monkeypatch):
+    """AC-12, in the shape tests/test_imagegen.py uses."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "sk-super-secret-key-value")
+    monkeypatch.setattr(
+        visuals,
+        "contains_lettering",
+        lambda image_bytes: (_ for _ in ()).throw(
+            LetteringCheckProviderError("401: key *** rejected")
+        ),
+    )
+    result = illustrate(_out(), _SESSION, ImageMode.cover, _CARD, Language.zh, 3)
+
+    for message in _cover_notices(result):
+        assert "sk-super-secret-key-value" not in message
+
+
+# --- #67: per-asset isolation, proven three ways (AC-10) ----------------------
+
+def _explainer_ids(result: AgentOutput) -> set[str]:
+    return {a.claim_id for a in result.images if a.kind is ImageKind.explainer}
+
+
+def test_isolation_when_the_detector_always_says_lettering(monkeypatch):
+    monkeypatch.setattr(visuals, "generate_image", lambda prompt: _LETTERED_PNG)
+
+    result = illustrate(_out(), _SESSION, ImageMode.all, _CARD, Language.zh, 3)
+
+    assert _explainer_ids(result) == {"c1", "c2"}
+    messages = _cover_notices(result)
+    assert len(messages) == 1  # the cover's own, and nothing else
+    assert "may contain lettering" in messages[0]
+    assert not any("c1" in m or "c2" in m for m in messages)
+
+
+def test_isolation_when_the_detector_always_raises(monkeypatch):
+    monkeypatch.setattr(
+        visuals,
+        "contains_lettering",
+        lambda image_bytes: (_ for _ in ()).throw(LetteringCheckProviderError("down")),
+    )
+
+    result = illustrate(_out(), _SESSION, ImageMode.all, _CARD, Language.zh, 3)
+
+    assert _explainer_ids(result) == {"c1", "c2"}
+    assert any(a.kind is ImageKind.cover for a in result.images)
+    messages = _cover_notices(result)
+    assert len(messages) == 1
+    assert "not checked" in messages[0]
+    assert not any("c1" in m or "c2" in m for m in messages)
+
+
+def test_isolation_when_generate_image_raises_on_every_attempt(monkeypatch):
+    monkeypatch.setattr(
+        visuals,
+        "generate_image",
+        lambda prompt: (_ for _ in ()).throw(ImageGenProviderError("network down")),
+    )
+
+    result = illustrate(_out(), _SESSION, ImageMode.all, _CARD, Language.zh, 3)
+
+    assert not any(a.kind is ImageKind.cover for a in result.images)  # no cover at all
+    assert _explainer_ids(result) == {"c1", "c2"}
+    messages = _cover_notices(result)
+    assert len(messages) == 1
+    assert "provider call failed" in messages[0]
+    assert not any("c1" in m or "c2" in m for m in messages)
+
+
+# --- #67: end to end, stubbing only the network boundary (AC-19) -------------
+
+def test_end_to_end_stubs_only_the_network_boundary(monkeypatch):
+    """Real `illustrate`, real `api.assets`, real manifest read/write, real
+    `api.claimcard`, and the REAL `api.lettering.contains_lettering` — the
+    only two stubs are `api.imagegen.generate_image` and the chat model the
+    detector resolves from config. Nothing in between is stubbed, so the
+    base64 data URL the detector builds, the prompt it loads from
+    api/prompts/lettering.md and its yes/no parse all really run.
+    """
+    import base64
+
+    from api import lettering
+
+    image_calls: list[str] = []
+    monkeypatch.setattr(
+        visuals,
+        "generate_image",
+        _scripted_generator([_LETTERED_PNG, _CLEAN_PNG], image_calls),
+    )
+    monkeypatch.setattr(visuals, "contains_lettering", lettering.contains_lettering)
+
+    seen: list[bytes] = []
+
+    class _Reply:
+        def __init__(self, content):
+            self.content = content
+
+    class _ChatModel:
+        """Answers from the image it was actually handed — content-addressed
+        at the network boundary, so a payload that is not the new attempt's
+        bytes produces the wrong verdict and fails this test."""
+
+        def invoke(self, messages):
+            url = messages[-1].content[-1]["image_url"]["url"]
+            payload = base64.b64decode(url.split(",", 1)[1])
+            seen.append(payload)
+            return _Reply("yes" if payload == _LETTERED_PNG else "no")
+
+    monkeypatch.setattr(
+        lettering, "get_model", lambda role, temperature=0.0, fallback=None: _ChatModel()
+    )
+
+    out = _out()
+    result = illustrate(out, _SESSION, ImageMode.all, _CARD, Language.zh, 3)
+
+    assert seen == [_LETTERED_PNG, _CLEAN_PNG]
+    assert len(image_calls) == 2
+    assert _cover_notices(result) == []
+
+    saved = image_path(_SESSION, ImageKind.cover)
+    assert saved.read_bytes() == _CLEAN_PNG  # the clean retry, on disk
+
+    manifest = read_manifest(_SESSION)
+    assert manifest == result.images
+    cover = next(a for a in manifest if a.kind is ImageKind.cover)
+    assert cover.path == repo_relative(saved)
+    assert cover.source_hash  # clean, so reusable
+    for asset in manifest:
+        if asset.kind is ImageKind.explainer:
+            # rendered by the real api.claimcard, written by the real api.assets
+            assert image_path(_SESSION, ImageKind.explainer, asset.claim_id).read_bytes()[:8] == (
+                b"\x89PNG\r\n\x1a\n"
+            )

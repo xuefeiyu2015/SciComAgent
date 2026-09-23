@@ -10,6 +10,8 @@ selection (`api.explainer`).
 
 Composition order per asset:
     cover:      api.imageprompt.build_cover_prompt -> api.imagegen.generate_image
+                -> api.lettering.contains_lettering (regenerate while it says
+                   yes, up to `images.cover_attempts` attempts)
                 -> api.assets.image_path (write bytes)
     explainer:  api.explainer.select_claim_ids -> api.claimcard.render_claim_card
                 -> api.assets.image_path (write bytes)
@@ -35,7 +37,8 @@ claim's card refusing to render, or the cover backend refusing the request,
 must not lose any other asset. Each distinct failure is a `Notice` with
 `code=NoticeCode.image_error`; there is only the one code, so the MESSAGE is
 what tells a font refusal apart from a provider refusal, a config error, a
-format error, or a layout refusal (see `_generate_cover`/`_generate_card`).
+format error, a layout refusal, a cover that may still carry lettering, or
+one that could not be checked for it (see `_generate_cover`/`_generate_card`).
 
 Never mutates the `AgentOutput` it is given: `illustrate` always returns a
 new object built with `model_copy`, and every field it changes (`notices`,
@@ -61,6 +64,7 @@ from api.imagegen import (
     generate_image,
 )
 from api.imageprompt import build_cover_prompt
+from api.lettering import LetteringCheckError, contains_lettering
 from api.schema import (
     AgentOutput,
     Claim,
@@ -85,6 +89,13 @@ _DEFAULT_CAP = "3"
 _MODEL_SETTING_PATH = ("images", "model")
 _MODEL_ENV_VAR = "IMAGE_MODEL"
 
+# How many times a cover may be generated before one that still shows
+# lettering ships with a notice (#67). Same env indirection and the same
+# defend-against-malformed-config parse as `images.cap` above.
+_COVER_ATTEMPTS_SETTING_PATH = ("images", "cover_attempts")
+_COVER_ATTEMPTS_ENV_VAR = "IMAGE_COVER_ATTEMPTS"
+_DEFAULT_COVER_ATTEMPTS = "3"
+
 
 def _resolve_cap() -> int:
     """How many explainer cards a run may render, parsed defensively.
@@ -100,6 +111,24 @@ def _resolve_cap() -> int:
         return max(int(raw), 0)
     except (TypeError, ValueError):
         return int(_DEFAULT_CAP)
+
+
+def _resolve_cover_attempts() -> int:
+    """How many covers may be generated before a lettered one ships, parsed
+    defensively.
+
+    Same shape as `_resolve_cap`: a garbage `images.cover_attempts` (unset,
+    non-numeric, negative) never raises, it falls back to
+    `_DEFAULT_COVER_ATTEMPTS`. Clamped to AT LEAST 1 — zero attempts would
+    mean no cover at all, and the operator asked for a cover.
+    """
+    raw = resolve_setting(
+        _COVER_ATTEMPTS_SETTING_PATH, _COVER_ATTEMPTS_ENV_VAR, _DEFAULT_COVER_ATTEMPTS
+    )
+    try:
+        return max(int(raw), 1)
+    except (TypeError, ValueError):
+        return int(_DEFAULT_COVER_ATTEMPTS)
 
 
 def _resolve_image_model_name() -> str:
@@ -169,6 +198,47 @@ def _generate_cover(
     Isolated from every other asset: any failure here returns without
     raising and without adding to `images` — it never touches `notices`
     for any OTHER asset, and never stops explainer cards from being tried.
+
+    THE NO-LETTERING RULE IS CHECKED HERE, NOT MERELY REQUESTED (#67).
+    `api/prompts/cover.md` forbids lettering, and the image model obeys it
+    only intermittently, so every generated cover is handed to
+    `api.lettering.contains_lettering` — a different model, a different
+    prompt — and a "yes" makes this function GENERATE AGAIN. The loop lives
+    here rather than in either adapter because composition and retry policy
+    are what this module is for: `api.imagegen.generate_image` makes exactly
+    one attempt, and so does `contains_lettering`.
+
+    COST IN CALLS, per cover (the durable unit; prices drift):
+
+        clean on the first try   1 image call  + 1 detector call
+        one retry                2 image calls + 2 detector calls
+        budget exhausted         `cover_attempts` image calls
+                                 + `cover_attempts` detector calls
+        reused from the manifest 0 image calls + 0 detector calls
+
+    so at most `cover_attempts` image calls plus at most `cover_attempts`
+    detector calls, and the detector is the cheap half by two orders of
+    magnitude (see `api/lettering.py`). `cover_attempts` is
+    `images.cover_attempts` / `IMAGE_COVER_ATTEMPTS`, default 3.
+
+    TERMINAL STATES, all three of which still SHIP the cover:
+
+    - clean: the asset is recorded normally, with its prompt `source_hash`,
+      so a later run reuses it.
+    - still lettered after the budget: the last attempt is saved anyway and a
+      notice says it may contain lettering. Nothing here auto-publishes
+      (CLAUDE.md rule 4), so the operator sees that notice before anything
+      goes out — the notice IS the guard, and a cover with a stray glyph is
+      still usable decoration, unlike a tofu claim card which is worth
+      nothing and is therefore refused.
+    - not checked (a `LetteringCheckError`): the cover is kept and a notice
+      says it was not checked. Fail OPEN on the asset, never silent on the
+      notice — an unconfigured or broken detector must not cost the cover.
+
+    In the last two cases the asset is recorded with `source_hash=""`, which
+    makes `_reuse` decline it: a flagged or unchecked cover is regenerated on
+    the next run rather than reused, so its notice can never be silently
+    dropped by a reuse that keeps the file but not the warning.
     """
     try:
         prompt = build_cover_prompt(card, language, liveliness, out.style_profile)
@@ -189,56 +259,78 @@ def _generate_cover(
         images.append(reused)
         return
 
-    try:
-        image_bytes = generate_image(prompt)
-    except ImageGenConfigError as err:
-        notices.append(
-            Notice(
-                code=NoticeCode.image_error,
-                message=f"cover image skipped — image backend not configured: {err}",
+    attempts = _resolve_cover_attempts()
+    image_bytes = b""
+    lettered = False
+    unchecked = ""
+
+    for _attempt in range(attempts):
+        # ONE except chain over both calls, ordered most-specific first:
+        # `LetteringCheckError` is an `ImageGenError` subclass, so Python
+        # would otherwise hand it to the `except ImageGenError` clause below
+        # and the cover would be dropped instead of kept. The four clauses
+        # above it are untouched (#62 pinned those types; #30 catches them by
+        # type). The detector's clause does not `return` — the bytes are
+        # already in hand by the time it can fire, so it breaks out and the
+        # cover is still saved.
+        try:
+            image_bytes = generate_image(prompt)
+            lettered = contains_lettering(image_bytes)
+        except ImageGenConfigError as err:
+            notices.append(
+                Notice(
+                    code=NoticeCode.image_error,
+                    message=f"cover image skipped — image backend not configured: {err}",
+                )
             )
-        )
-        return
-    except ImageGenRefusedError as err:
-        notices.append(
-            Notice(
-                code=NoticeCode.image_error,
-                message=f"cover image skipped — provider refused the request: {err}",
+            return
+        except ImageGenRefusedError as err:
+            notices.append(
+                Notice(
+                    code=NoticeCode.image_error,
+                    message=f"cover image skipped — provider refused the request: {err}",
+                )
             )
-        )
-        return
-    except ImageGenProviderError as err:
-        notices.append(
-            Notice(
-                code=NoticeCode.image_error,
-                message=f"cover image skipped — provider call failed: {err}",
+            return
+        except ImageGenProviderError as err:
+            notices.append(
+                Notice(
+                    code=NoticeCode.image_error,
+                    message=f"cover image skipped — provider call failed: {err}",
+                )
             )
-        )
-        return
-    except ImageGenFormatError as err:
-        notices.append(
-            Notice(
-                code=NoticeCode.image_error,
-                message=f"cover image skipped — provider returned invalid image data: {err}",
+            return
+        except ImageGenFormatError as err:
+            notices.append(
+                Notice(
+                    code=NoticeCode.image_error,
+                    message=f"cover image skipped — provider returned invalid image data: {err}",
+                )
             )
-        )
-        return
-    except ImageGenError as err:  # any other/future ImageGenError subclass
-        notices.append(
-            Notice(
-                code=NoticeCode.image_error,
-                message=f"cover image skipped — image generation failed: {err}",
+            return
+        except LetteringCheckError as err:  # MUST precede ImageGenError
+            unchecked = str(err)
+            lettered = False
+            break
+        except ImageGenError as err:  # any other/future ImageGenError subclass
+            notices.append(
+                Notice(
+                    code=NoticeCode.image_error,
+                    message=f"cover image skipped — image generation failed: {err}",
+                )
             )
-        )
-        return
-    except Exception as err:  # truly unexpected
-        notices.append(
-            Notice(
-                code=NoticeCode.image_error,
-                message=f"cover image skipped — unexpected error: {err}",
+            return
+        except Exception as err:  # truly unexpected
+            notices.append(
+                Notice(
+                    code=NoticeCode.image_error,
+                    message=f"cover image skipped — unexpected error: {err}",
+                )
             )
-        )
-        return
+            return
+
+        if not lettered:
+            break  # clean: this attempt is the one that ships
 
     try:
         path = image_path(session_id, ImageKind.cover)
@@ -252,6 +344,29 @@ def _generate_cover(
         )
         return
 
+    # Only now that the cover is actually on disk: a warning about a file
+    # that was never saved would be a second notice for one failure.
+    if unchecked:
+        notices.append(
+            Notice(
+                code=NoticeCode.image_error,
+                message=(
+                    f"cover image was not checked for lettering — {unchecked}; "
+                    "check it before publishing"
+                ),
+            )
+        )
+    elif lettered:
+        notices.append(
+            Notice(
+                code=NoticeCode.image_error,
+                message=(
+                    f"cover image may contain lettering — kept after {attempts} "
+                    f"attempt{'s' if attempts != 1 else ''}; check it before publishing"
+                ),
+            )
+        )
+
     images.append(
         ImageAsset(
             kind=ImageKind.cover,
@@ -261,7 +376,10 @@ def _generate_cover(
             generated=True,
             prompt=prompt,
             model=_resolve_image_model_name(),
-            source_hash=source_hash,
+            # A cover that shipped flagged or unchecked records NO source
+            # hash, so `_reuse` declines it: the next run generates a fresh
+            # one rather than reusing a file whose notice it would not repeat.
+            source_hash="" if (lettered or unchecked) else source_hash,
         )
     )
 
@@ -433,10 +551,17 @@ def illustrate(
     """Produce every image asset for one finished run, in one call.
 
     Composes, in order per asset: `api.claimcard.render_claim_card` (cards),
-    `api.imageprompt.build_cover_prompt` + `api.imagegen.generate_image`
-    (cover), `api.assets.image_path`/`write_manifest`/`read_manifest`
-    (storage), and `api.explainer.select_claim_ids` (which cards, in
-    `ImageMode.all`). Holds no layout, prompt or provider logic of its own.
+    `api.imageprompt.build_cover_prompt` + `api.imagegen.generate_image` +
+    `api.lettering.contains_lettering` (cover),
+    `api.assets.image_path`/`write_manifest`/`read_manifest` (storage), and
+    `api.explainer.select_claim_ids` (which cards, in `ImageMode.all`). Holds
+    no layout, prompt or provider logic of its own.
+
+    A generated cover is checked for lettering and regenerated while it has
+    any, up to `images.cover_attempts` (default 3) attempts; a cover that is
+    still lettered after that, or that could not be checked, still ships and
+    carries its own `image_error` notice. See `_generate_cover` for the cost
+    in calls and the terminal states.
 
     Args:
         out: a finished run's result. An output with no drafts, no ledger, or
