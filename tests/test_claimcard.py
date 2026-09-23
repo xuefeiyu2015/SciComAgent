@@ -573,6 +573,35 @@ def test_a_break_never_falls_inside_a_numeral_run():
     assert seen, "the sweep never put a digit on a card; it proved nothing"
 
 
+def test_a_numeral_run_wider_than_a_line_ends_the_claim_on_the_line_before():
+    """The give-back: a card that rendered before #69 may not refuse after it.
+
+    `四千八百二十三` is seven characters and the line holds four, so B1 forbids
+    every break inside it and B4 may not override that. The budget still hands
+    the claim a third line, which would have to BEGIN inside the run — and
+    `_elide` on a remainder that starts inside a run refuses. Read literally,
+    D2 step 8 then refuses the whole card, although the pre-#69 layout rendered
+    `试验共纳入…` on this very canvas. The claim ends on the previous line
+    instead, elided there: strictly less text, every character verbatim, one
+    ellipsis, and no card lost.
+    """
+    claim = _claim(id="c40", claim="试验共纳入四千八百二十三名参与者", qualifier="")
+    size = (4 * FONT_SIZE_CLAIM_NO_FIGURE + 2 * CARD_MARGIN, 400)  # 256x400
+
+    layout = compute_card_layout(claim, size, _measure)
+
+    assert layout is not None, (
+        "wrapping refused a card the unwrapped layout rendered; the give-back "
+        "is what stops that"
+    )
+    lines = [element.text for element in layout.claim_lines]
+    assert lines == ["试验共纳", "入…"]
+    # the number is not shown at all rather than shown in pieces, which is
+    # #55's rule and the reason the give-back cannot simply break the run.
+    assert "四千" not in "".join(lines)
+    assert sum(line.count(ELLIPSIS) for line in lines) == 1
+
+
 def test_a_latin_word_breaks_only_when_it_alone_is_wider_than_a_line():
     # B4: the last resort, and it inserts NOTHING — no hyphen, no soft hyphen.
     # Neither character is in claim.claim, and writing one to make the type

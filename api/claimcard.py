@@ -926,14 +926,30 @@ def _wrap_claim(
         `_elide(text)` and nothing else. The cap does not degrade to a
         paragraph, a dropped middle line, or a smaller font.
 
-    `None` only where `_elide` itself refuses (#43's fit-or-refuse): backing
-    the last line's cut clear of a numeral run left nothing to show.
+    THE GIVE-BACK, and why it is not optional. Two things can go wrong on the
+    way down, and both have the same cause — a numeral run wider than a whole
+    line, which B1 forbids breaking and B4 may not override:
 
-    THE ONE PLACE A LINE CANNOT BE STARTED AT ALL is a numeral run wider than
-    a whole line: B1 forbids breaking it and B4 may not override that. The
-    claim then ENDS ON THE PREVIOUS LINE, elided there — never broken inside
-    the run, and never a refusal where the unwrapped card would have rendered,
-    because the fallback walks back to `_elide(text)` itself.
+      - a line CANNOT BE STARTED at all (no legal break, and the last resort
+        backs up to where the line began);
+      - the LAST line's `_elide` refuses, because the run it would have to cut
+        inside starts at that line's first character.
+
+    In both cases the claim ENDS ON THE PREVIOUS LINE, elided there: the
+    remainder is handed back and `_elide` is tried again one line up, as far
+    back as line 1, which is `_elide(text)` itself — the pre-#69 answer. So
+    this function refuses ONLY where the unwrapped layout would also have
+    refused, and wrapping can never cost a card that used to render.
+
+    That is a deliberate departure from a literal reading of #69's D2 step 8
+    ("if `_elide` refuses line N, the card refuses"). Taken literally it turns
+    `试验共纳入四千八百二十三名参与者` on a 300x300 canvas — which rendered
+    `试验共纳入…` before #69 — into a refusal, purely because the four-line
+    budget happens to start line 3 inside the run. Refusing a whole card to
+    avoid showing LESS of a sentence is the opposite of what this issue is
+    for, and the give-back costs no faithfulness: every line stays a verbatim
+    contiguous substring and the single ellipsis stays on the last one.
+    Reported on the issue rather than left as a silent reinterpretation.
     """
     runs = _numeral_runs(text)
     breaks = _break_opportunities(text, runs)
@@ -948,32 +964,37 @@ def _wrap_claim(
             return tuple(lines)
 
         remaining = text[start:]
-        if len(lines) == max_lines - 1:
-            last = _elide(remaining, font_size, available_width, measure)
-            return None if last is None else tuple([*lines, last])
         if _fits(remaining, font_size, available_width, measure):
-            return tuple([*lines, remaining])
+            return tuple([*lines, remaining])  # the rest fits: no ellipsis
 
-        # The widest legal break that still fits: scanned from the widest
-        # down, which is the same answer as scanning up and keeping the last
-        # one (both are `max{end : fits(end)}`) and stops measuring sooner.
         chosen: tuple[int, int] | None = None
-        for end, nxt in reversed(breaks):
-            if end <= start:
-                break
-            if _fits(text[start:end], font_size, available_width, measure):
-                chosen = (end, nxt)
-                break
+        if len(lines) == max_lines - 1:
+            # The last line the budget allows: it carries what is left, elided.
+            last = _elide(remaining, font_size, available_width, measure)
+            if last is not None:
+                return tuple([*lines, last])
+        else:
+            # The widest legal break that still fits: scanned from the widest
+            # down, which is the same answer as scanning up and keeping the
+            # last one (both are `max{end : fits(end)}`) and measures less.
+            for end, nxt in reversed(breaks):
+                if end <= start:
+                    break
+                if _fits(text[start:end], font_size, available_width, measure):
+                    chosen = (end, nxt)
+                    break
+            if chosen is None:
+                chosen = _last_resort_break(
+                    text, start, runs, font_size, available_width, measure
+                )
+
         if chosen is None:
-            chosen = _last_resort_break(
-                text, start, runs, font_size, available_width, measure
-            )
-        if chosen is None:
-            # Nothing can be placed on this line. Give the previous line back
-            # its remainder and elide it there; repeat until a line can carry
-            # the ellipsis, the last candidate being line 1, i.e. `_elide` on
-            # the whole claim — the pre-#69 answer, so this fallback cannot
-            # refuse a card the unwrapped layout would have rendered.
+            # Either nothing can be placed on this line, or the last line
+            # cannot be cut clear of a numeral run. Give the previous line
+            # back its remainder and elide it THERE; repeat until a line can
+            # carry the ellipsis, the last candidate being line 1, i.e.
+            # `_elide` on the whole claim — the pre-#69 answer. See the
+            # give-back note in the docstring for why this beats refusing.
             while lines:
                 lines.pop()
                 start = starts.pop()
