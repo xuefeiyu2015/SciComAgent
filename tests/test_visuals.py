@@ -776,3 +776,43 @@ def test_end_to_end_stubs_only_the_network_boundary(monkeypatch):
             assert image_path(_SESSION, ImageKind.explainer, asset.claim_id).read_bytes()[:8] == (
                 b"\x89PNG\r\n\x1a\n"
             )
+
+
+# --- #67: the guarantee #27's deferral of #39 rests on (AC-4) ----------------
+
+@pytest.mark.parametrize(
+    "scripted, detector_error, expect_clean",
+    [
+        ([_CLEAN_PNG], None, True),                    # passed the check
+        ([_LETTERED_PNG, _CLEAN_PNG], None, True),     # passed it on the retry
+        ([_LETTERED_PNG], None, False),                # budget exhausted
+        ([_CLEAN_PNG], LetteringCheckProviderError("down"), False),   # not checked
+        ([_CLEAN_PNG], LetteringCheckConfigError("no model"), False),  # not checked
+    ],
+)
+def test_every_cover_either_passed_the_check_or_carries_a_notice(
+    monkeypatch, scripted, detector_error, expect_clean
+):
+    """The invariant, asserted over the whole returned AgentOutput rather than
+    one branch at a time: no cover reaches the operator that has neither
+    passed the lettering check nor gained a notice saying it may contain
+    lettering or was not checked."""
+    image_calls: list[str] = []
+    monkeypatch.setattr(visuals, "generate_image", _scripted_generator(scripted, image_calls))
+    if detector_error is not None:
+        monkeypatch.setattr(
+            visuals,
+            "contains_lettering",
+            lambda image_bytes: (_ for _ in ()).throw(detector_error),
+        )
+
+    result = illustrate(_out(), _SESSION, ImageMode.all, _CARD, Language.zh, 3)
+
+    covers = [a for a in result.images if a.kind is ImageKind.cover]
+    assert len(covers) == 1  # the cover always ships
+    warned = [
+        m
+        for m in _cover_notices(result)
+        if "may contain lettering" in m or "not checked" in m
+    ]
+    assert (warned == []) is expect_clean
