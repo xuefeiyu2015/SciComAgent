@@ -2751,7 +2751,20 @@ _UNIT_SUFFIXES: tuple[str, ...] = (
     "bits", "trials", "mice", "%-free",
 )
 
-_SCALE_TEMPLATE = "Model size reached 1.3{gap}{suffix} in the final training run"
+_SCALE_TEMPLATE = "Model size reached 1.3{gap}{suffix}{follow}"
+
+# What comes AFTER the suffix, which is the half this sweep used to leave
+# fixed. Every claim it built continued with " in the final training run" — a
+# SPACE — so no case in it ever put a CJK character straight after a scale
+# word, and #70 (`1.3B参数` reading as `1.3`) swept green through the whole
+# table. Chinese writes no space there, so the unspaced CJK follower is the
+# ordinary form in this project's primary output language, not an edge case.
+_FOLLOWERS: tuple[str, ...] = (
+    " in the final training run",  # Latin, space-separated
+    "参数的模型在最终训练中",  # CJK, no space (#70)
+    "",  # end of string
+)
+_FOLLOWER_IDS = ("latin_spaced", "cjk_tight", "end_of_string")
 
 
 @dataclass(frozen=True)
@@ -2943,18 +2956,20 @@ def test_scale_fixture_figure_is_lifted_not_composed(fixture: ScaleFixture):
 
 @pytest.mark.parametrize("suffix", _SCALE_SUFFIXES, ids=_SCALE_SUFFIXES)
 @pytest.mark.parametrize("gap", ("", " "), ids=("tight", "one_space"))
-def test_every_scale_suffix_joins_the_figure(suffix: str, gap: str):
+@pytest.mark.parametrize("follow", _FOLLOWERS, ids=_FOLLOWER_IDS)
+def test_every_scale_suffix_joins_the_figure(suffix: str, gap: str, follow: str):
     """A suffix that multiplies the digits is shown with them, however spaced.
 
     Swept over this file's own scale set so the answer cannot be "the two
     suffixes somebody wrote a fixture for". `48%` and `48 %` are the same
     claim; so are `1.3B` and `1.3 B` (#57's spacing ruling, this slot).
     """
-    claim_text = _SCALE_TEMPLATE.format(gap=gap, suffix=suffix)
+    claim_text = _SCALE_TEMPLATE.format(gap=gap, suffix=suffix, follow=follow)
     expected = f"1.3{gap}{suffix}"
     figure = _figure_on_card(claim_text)
     assert figure == expected, (
-        f"[{suffix!r}, gap {gap!r}] the card's largest element reads "
+        f"[{suffix!r}, gap {gap!r}, followed by {follow!r}] the card's "
+        f"largest element reads "
         f"{figure!r} for a claim that says {expected!r}. The suffix "
         f"MULTIPLIES the digits: 1.3 is not the quantity, and the figure "
         f"slot carries no ellipsis to say anything was dropped (#68)"
@@ -2963,7 +2978,8 @@ def test_every_scale_suffix_joins_the_figure(suffix: str, gap: str):
 
 @pytest.mark.parametrize("suffix", _UNIT_SUFFIXES, ids=_UNIT_SUFFIXES)
 @pytest.mark.parametrize("gap", ("", " "), ids=("tight", "one_space"))
-def test_no_unit_suffix_joins_the_figure(suffix: str, gap: str):
+@pytest.mark.parametrize("follow", _FOLLOWERS, ids=_FOLLOWER_IDS)
+def test_no_unit_suffix_joins_the_figure(suffix: str, gap: str, follow: str):
     """A suffix that only NAMES a dimension stays out (#55's accepted limit).
 
     The failure this guards is the rule widening into a shape test and
@@ -2971,10 +2987,11 @@ def test_no_unit_suffix_joins_the_figure(suffix: str, gap: str):
     so taking the word in buys no faithfulness and costs width, which under
     #43 refuses cards.
     """
-    claim_text = _SCALE_TEMPLATE.format(gap=gap, suffix=suffix)
+    claim_text = _SCALE_TEMPLATE.format(gap=gap, suffix=suffix, follow=follow)
     figure = _figure_on_card(claim_text)
     assert figure == "1.3", (
-        f"[{suffix!r}, gap {gap!r}] the figure reads {figure!r}; expected "
+        f"[{suffix!r}, gap {gap!r}, followed by {follow!r}] the figure reads "
+        f"{figure!r}; expected "
         f"'1.3'. {suffix!r} names a dimension, it does not multiply the "
         f"digits — 1.3 IS the quantity the claim states, so the suffix is a "
         f"unit and the rule has eaten one (#55)"
