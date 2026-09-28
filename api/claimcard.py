@@ -425,6 +425,14 @@ def _scale_suffix_end(text: str, i: int) -> int:
     THE ONE definition of "this suffix multiplies the number", used by
     `figure_of` to decide what to show and by `_numeral_runs` to decide where
     a cut may fall. Those two answered differently before #68.
+
+    A FOLLOWING HYPHENATED WORD DROPS A SCALE MARK, NEVER A SCALE WORD (#73).
+    #58's joiner rule was written about `%` — `1.3%-free` is one compound and
+    `50%-60%` is a range — and then applied to every suffix, which cost the
+    `B` in `a 32B-parameter model` and put `32` on the card for 32 billion.
+    The asymmetry is the point: a mark sits between the digits and whatever
+    the hyphen joins, so the compound can claim it, whereas a scale word is
+    the last word of the quantity itself and the hyphen begins a new one.
     """
     n = len(text)
     j = i
@@ -441,7 +449,9 @@ def _scale_suffix_end(text: str, i: int) -> int:
         end = word.end()
         if end < n and _continues_a_latin_word(text, end):
             return i
-    return i if _joins_a_following_word(text, end) else end
+    if end - j == 1 and text[j] in _NUMERAL_SCALES:
+        return i if _joins_a_following_word(text, end) else end
+    return end
 
 
 # --- the measure contract ----------------------------------------------------

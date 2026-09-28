@@ -3104,3 +3104,107 @@ def test_the_68_fixture_table_still_pins_the_reported_strings():
         "the CJK fixtures are gone; the CJK scale characters are exactly "
         "where the 10^8 version of this defect lives"
     )
+
+
+# --- #73: a scale WORD survives a hyphenated word, a scale MARK does not ------
+# #58's joiner rule was reasoned about `%` — `1.3%-free` is one compound and
+# `50%-60%` is a range — and then applied to every suffix. That cost the `B`
+# in `a 32B-parameter model`, putting `32` in the card's largest element for a
+# model with 32 BILLION parameters: #68's harm with a hyphen in front of it.
+# No test pinned it, which is how it survived #58, #68 and #70.
+#
+# The asymmetry is the rule, not an exception: a mark sits between the digits
+# and whatever the hyphen joins, so the compound can claim it; a scale word is
+# the last word of the quantity itself, and the hyphen begins a new one.
+
+_HYPHEN_SCALE_KEPT: tuple[tuple[str, str], ...] = (
+    ("a 32B-parameter model", "32B"),
+    ("1.3B-parameter model", "1.3B"),
+    ("a 70B-scale training run", "70B"),
+    ("the 7B-parameter variant", "7B"),
+    ("a 1.3 billion-parameter model", "1.3 billion"),
+)
+
+_HYPHEN_MARK_DROPPED: tuple[tuple[str, str], ...] = (
+    ("a 5%-fat diet", "5"),
+    ("a 1.3%-free solution", "1.3"),
+    ("a 50%-60% response range", "50"),
+)
+
+
+@pytest.mark.parametrize(
+    ("claim_text", "expected"),
+    _HYPHEN_SCALE_KEPT,
+    ids=[c for c, _ in _HYPHEN_SCALE_KEPT],
+)
+def test_a_scale_word_survives_a_following_hyphenated_word(
+    claim_text: str, expected: str
+):
+    """`32B-parameter` states 32 billion; the card may not say `32` (#73)."""
+    figure = _figure_on_card(claim_text)
+    assert figure == expected, (
+        f"the card's largest element reads {figure!r} for a claim that says "
+        f"{expected!r}. The scale word MULTIPLIES the digits, and a hyphen "
+        f"after it starts a new word rather than taking it (#73)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("claim_text", "expected"),
+    _HYPHEN_MARK_DROPPED,
+    ids=[c for c, _ in _HYPHEN_MARK_DROPPED],
+)
+def test_a_scale_mark_is_still_dropped_by_a_following_hyphenated_word(
+    claim_text: str, expected: str
+):
+    """#58's rule, unchanged — #73 narrowed it, it did not repeal it.
+
+    If one of these moves, #73 has widened into #58's territory and taken a
+    case that was decided against it.
+    """
+    figure = _figure_on_card(claim_text)
+    assert figure == expected, (
+        f"the figure reads {figure!r}; expected {expected!r}. #58 ruled that "
+        f"a scale MARK before a hyphenated word belongs to the compound, and "
+        f"#73 narrowed that rule to marks rather than repealing it"
+    )
+
+
+@pytest.mark.parametrize(
+    "claim_text", ("Qwen2.5-32B-Base", "Llama-3-70B-Instruct", "Mistral-7B-v0.1")
+)
+def test_a_model_name_is_never_torn_through_its_parameter_count(claim_text: str):
+    """`Qwen2.5-32B-Base` may not render as `Qwen2.5-32` / `B-Base` (#73).
+
+    Asserted on the RENDERED lines rather than on a run scanner, because the
+    harm is the same whether the split came from a wrap break or an elision
+    cut, and because this file's own scanner deliberately knows only about
+    scale MARKS — it would not have seen this one.
+
+    The tear was legal before #73: the scale letter had been dropped from the
+    run, so a break between `32` and `B` fell outside every run and B1
+    allowed it.
+    """
+    count = re.search(r"\d+(?:\.\d+)?[BMKT]", claim_text)
+    assert count is not None, "fixture no longer contains a parameter count"
+    digits, letter = count.group()[:-1], count.group()[-1]
+
+    claim = _claim(id="c73", claim=claim_text, qualifier="preliminary")
+    rendered = 0
+    for width in _SWEEP_WIDTHS:
+        layout = compute_card_layout(claim, (width, 300), _measure)
+        if layout is None:
+            continue
+        rendered += 1
+        for line in layout.claim_lines:
+            shown = line.text.removesuffix(ELLIPSIS)
+            assert not shown.endswith(digits), (
+                f"at width {width} a claim line ends {shown[-12:]!r}, so "
+                f"{count.group()!r} in {claim_text!r} was separated from its "
+                f"{letter!r} by a line break or an elision cut. The card then "
+                f"states a number 10^9 smaller than the claim does (#73)"
+            )
+    assert rendered, (
+        f"{claim_text!r} rendered on no canvas in _SWEEP_WIDTHS, so this test "
+        f"asserted nothing"
+    )
