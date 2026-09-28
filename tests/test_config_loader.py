@@ -87,3 +87,96 @@ def test_real_config_is_available_to_a_test_that_asks_for_it(real_config):
     """The deliberate opt-out: naming the fixture restores the operator's file."""
     assert config_loader.config_path() == real_config
     assert real_config == conftest._REAL_CONFIG_PATH
+
+
+# --- #44: a deployment with no usable font -----------------------------------
+# Claim cards are drawn locally and `render_claim_card` refuses rather than
+# draw tofu boxes, so an image with no CJK-capable font installed refuses
+# EVERY card. That used to be discoverable only by running a job and finding
+# the assets missing; `capabilities()` now answers it up front.
+
+
+def test_card_font_is_true_when_a_font_resolves():
+    """The happy path, so the False test below cannot pass vacuously."""
+    assert capabilities()["card_font"] is True
+
+
+def test_card_font_is_false_when_no_font_can_be_resolved(monkeypatch):
+    """A deployment with no font reports it instead of failing mid-run.
+
+    This is #44's failure reproduced: on a slim container image with no font
+    package installed, `resolve_font_path` finds neither a configured path,
+    nor the (uncommitted) bundled default, nor any system candidate.
+    """
+    import api.claimcard
+
+    def _no_font():
+        raise api.claimcard.FontRefusedError("no font on this machine")
+
+    monkeypatch.setattr(api.claimcard, "resolve_font_path", _no_font)
+    assert capabilities()["card_font"] is False
+
+
+def test_health_stays_answerable_when_font_resolution_explodes(monkeypatch):
+    """`health` must survive a broken deployment — diagnosing one is its job.
+
+    A bare `except Exception` is deliberate here: anything that stops a font
+    path being produced is a `False`, never an exception that takes the whole
+    health probe down with it.
+    """
+    import api.claimcard
+
+    def _boom():
+        raise RuntimeError("something unexpected in font land")
+
+    monkeypatch.setattr(api.claimcard, "resolve_font_path", _boom)
+    assert capabilities()["card_font"] is False
+
+
+def test_the_debian_font_path_the_dockerfile_installs_is_still_searched():
+    """`Dockerfile.example` and `_SYSTEM_FONT_CANDIDATES` must agree (#44).
+
+    The image installs `fonts-noto-cjk` and the code never learns about it —
+    the contract between them is only this path. Dropping it from the
+    candidate list would leave a container that installs a font the renderer
+    then refuses to look for, and nothing else would notice.
+    """
+    from pathlib import Path
+
+    from api.claimcard import _SYSTEM_FONT_CANDIDATES
+
+    debian = Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")
+    assert debian in _SYSTEM_FONT_CANDIDATES, (
+        f"{debian} is where `apt-get install fonts-noto-cjk` puts the font "
+        f"that Dockerfile.example installs for #44. It is no longer searched, "
+        f"so a container built from that Dockerfile will refuse every card."
+    )
+
+
+def test_agent_manifest_health_output_matches_what_capabilities_returns():
+    """The manifest describes `health`'s real shape, not a stale copy.
+
+    `agent.yaml` is the contract the MCP platform reads. It has drifted from
+    the code before — `image_reviewer` was added to `ROLES` and the manifest
+    kept advertising five roles — and nothing failed, because no test
+    compared them. This one does.
+    """
+    import yaml
+
+    manifest = yaml.safe_load(open("agent.yaml"))
+    health = next(t for t in manifest["tools"] if t["name"] == "health")
+    assert set(health["output"]) == set(capabilities()), (
+        "agent.yaml's `health` output keys and `capabilities()` disagree; "
+        "the manifest is what the platform believes this agent reports"
+    )
+
+
+def test_agent_manifest_declares_every_role_the_code_resolves():
+    """Every role in `ROLES` is declared in `model_requirements`."""
+    import yaml
+
+    manifest = yaml.safe_load(open("agent.yaml"))
+    declared = {r["role"] for r in manifest["model_requirements"]}
+    assert set(ROLES) <= declared, (
+        f"roles in code but not in agent.yaml: {sorted(set(ROLES) - declared)}"
+    )

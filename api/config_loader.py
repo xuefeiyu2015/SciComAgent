@@ -139,6 +139,8 @@ def capabilities() -> dict[str, Any]:
         search_sources  list[str]     — enabled external search clients
         optional_keys   {name: bool}  — presence of optional API keys (never values)
         byo_key         True          — keys are brought via env, never stored
+        card_font       bool          — a font claim cards can be drawn with
+                        exists; False means every card will refuse (#44)
     """
     # Imported here to avoid an import cycle (api.sources imports this module).
     from api.sources import enabled_sources
@@ -160,7 +162,32 @@ def capabilities() -> dict[str, Any]:
             "ncbi": bool(os.environ.get("NCBI_API_KEY")),
         },
         "byo_key": True,
+        "card_font": _card_font_available(),
     }
+
+
+def _card_font_available() -> bool:
+    """Whether a font exists that claim cards can actually be drawn with.
+
+    Images are useless without one: `render_claim_card` refuses rather than
+    draw tofu boxes, so on an image with no CJK-capable font installed EVERY
+    card refuses (#44). That failure used to surface only mid-run, as missing
+    assets and an `image_error` notice; reporting it here means `health` says
+    so before anything is generated.
+
+    Imported inside the function because `api.claimcard` imports this module
+    for `resolve_setting` — the same cycle-avoidance `enabled_sources` uses.
+    """
+    try:
+        from api.claimcard import resolve_font_path
+
+        resolve_font_path()
+        return True
+    except Exception:
+        # Any failure to produce a usable font path is a False here, never an
+        # exception: `health` must stay answerable on a broken deployment,
+        # since diagnosing one is exactly what it is for.
+        return False
 
 
 def resolve_setting(

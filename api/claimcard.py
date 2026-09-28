@@ -361,14 +361,44 @@ _ASCII_SCALE_WORDS = (
     "k", "m", "b", "t",                             # the single letters
 )
 
-# `(?![^\W\d_])` is "not followed by a letter": the word-boundary clause that
-# keeps `mm`, `Kg` and `billionaires` out. It sits INSIDE the alternation so
-# the engine backtracks through the shorter alternatives instead of stopping
-# at the first one that matched.
+# The alternation alone is ordered longest-first, so `billion` wins over `b`
+# and `bn` over `b`. Where the word ENDS is a separate question, answered by
+# `_continues_a_latin_word` below rather than by a lookahead here: the rule is
+# about script, and a regex character class cannot say "Latin letter" (#70).
 _ASCII_SCALE_WORD_RE = re.compile(
-    rf"(?:{'|'.join(_ASCII_SCALE_WORDS)})(?![^\W\d_])",
+    rf"(?:{'|'.join(_ASCII_SCALE_WORDS)})",
     re.IGNORECASE,
 )
+
+
+def _continues_a_latin_word(text: str, i: int) -> bool:
+    """Whether `text[i]` carries on the Latin word that ends just before it.
+
+    A scale word must be a WHOLE word — this is what keeps `mm`, `Kg` and
+    `billionaires` from reading as `m`, `K` and `billion`. The question is
+    therefore "does the next character continue THIS word", and a Latin word
+    is continued only by another Latin letter.
+
+    Asked the older way — "is the next character a letter" — the answer is
+    wrong for Chinese (#70). A CJK ideograph is Unicode category `Lo`, i.e. a
+    letter, and Chinese puts no space between a number and the word after it,
+    so `1.3B参数` read as "B is followed by a letter, so it is not a scale"
+    and the card showed `1.3` for 1.3 billion — a 10^9 error in its largest
+    element.
+
+    The rule is stated on the scale word's OWN script rather than by listing
+    the scripts that may follow it, which is why it cannot have an
+    incomplete-alphabet failure mode: anything that is not a Latin letter ends
+    a Latin word, whether it is Han, Hangul, Cyrillic, punctuation or space.
+    #58's first attempt failed precisely by enumerating an ASCII-only class.
+    """
+    ch = text[i]
+    if not ch.isalpha():
+        return False
+    try:
+        return unicodedata.name(ch).startswith("LATIN ")
+    except ValueError:  # unnamed character: not a Latin letter
+        return False
 
 
 def _joins_a_following_word(text: str, i: int) -> bool:
@@ -395,6 +425,14 @@ def _scale_suffix_end(text: str, i: int) -> int:
     THE ONE definition of "this suffix multiplies the number", used by
     `figure_of` to decide what to show and by `_numeral_runs` to decide where
     a cut may fall. Those two answered differently before #68.
+
+    A FOLLOWING HYPHENATED WORD DROPS A SCALE MARK, NEVER A SCALE WORD (#73).
+    #58's joiner rule was written about `%` — `1.3%-free` is one compound and
+    `50%-60%` is a range — and then applied to every suffix, which cost the
+    `B` in `a 32B-parameter model` and put `32` on the card for 32 billion.
+    The asymmetry is the point: a mark sits between the digits and whatever
+    the hyphen joins, so the compound can claim it, whereas a scale word is
+    the last word of the quantity itself and the hyphen begins a new one.
     """
     n = len(text)
     j = i
@@ -409,7 +447,11 @@ def _scale_suffix_end(text: str, i: int) -> int:
         if word is None:
             return i
         end = word.end()
-    return i if _joins_a_following_word(text, end) else end
+        if end < n and _continues_a_latin_word(text, end):
+            return i
+    if end - j == 1 and text[j] in _NUMERAL_SCALES:
+        return i if _joins_a_following_word(text, end) else end
+    return end
 
 
 # --- the measure contract ----------------------------------------------------
