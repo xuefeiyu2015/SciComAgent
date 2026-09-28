@@ -172,13 +172,14 @@ tools:
       message: "A single greeting sentence confirming the server is reachable"
 
   - name: health
-    description: Report agent readiness — configured model roles, enabled search sources, and optional-key presence (booleans only, never values)
+    description: Report agent readiness — configured model roles, enabled search sources, optional-key presence, and whether claim cards can be drawn (booleans only, never values)
     parameters: {}
     output:
-      roles:          "Per-role resolvability {extractor, drafter, reviewer, researcher, stylist: bool}"
+      roles:          "Per-role resolvability {extractor, drafter, reviewer, researcher, stylist, image_reviewer: bool}"
       search_sources: "Enabled external search clients"
       optional_keys:  "Presence of optional API keys {tavily, semantic_scholar, ncbi: bool}"
       byo_key:        "Always true — keys are brought via env, never stored"
+      card_font:      "A font claim cards can be drawn with exists; false means every card will refuse (#44)"
 
 # Models are declared by ROLE; concrete names live in config, never here.
 model_requirements:
@@ -187,6 +188,7 @@ model_requirements:
   - { role: reviewer,   tier: strong }   # faithfulness check (different model than drafter)
   - { role: researcher, tier: cheap }    # topic abstraction + background search (falls back to extractor)
   - { role: stylist,    tier: cheap }    # distill example articles into a voice profile (falls back to extractor)
+  - { role: image_reviewer, tier: cheap } # checks a generated cover for lettering (falls back to extractor); needs image input
 
 # Schema describing the agent's configurable settings (see config/).
 config_schema:

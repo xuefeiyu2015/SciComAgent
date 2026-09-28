@@ -5,6 +5,25 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+# A CJK-capable font, REQUIRED whenever images are enabled (#44).
+#
+# Claim cards are rendered locally with Pillow, and `resolve_font_path` in
+# api/claimcard.py refuses rather than draw tofu boxes when it cannot find a
+# font that covers the text — so on a slim image with no font installed,
+# EVERY card refuses and the image feature is dead on arrival. This is not
+# caught by the test suite, which runs on developer machines where a system
+# font happens to exist.
+#
+# `fonts-noto-cjk` installs NotoSansCJK-Regular.ttc at the Debian path that
+# `_SYSTEM_FONT_CANDIDATES` already looks in, so nothing in the code needs to
+# know about this line. Installing the font in the image is what keeps a
+# ~17MB binary out of git (see the note above `_BUNDLED_FONT`).
+#
+# Check it landed: the `health` tool reports `card_font: true`.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/*
+
 # TODO: install uv and project deps (from requirements.txt / pyproject)
 # COPY pyproject.toml uv.lock ./
 # RUN pip install uv && uv sync --frozen --no-dev
