@@ -32,6 +32,7 @@ if _REPO_ROOT not in sys.path:
 
 import config  # noqa: E402  (repo root; resolves ahead of the config/ YAML dir)
 from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 from starlette.requests import Request  # noqa: E402
 from starlette.responses import JSONResponse  # noqa: E402
 
@@ -624,6 +625,15 @@ def main(transport: str | None = None) -> None:
 
     mcp.settings.host = config.HOST
     mcp.settings.port = config.PORT
+    # FastMCP() was built with its 127.0.0.1 default, which switched on a
+    # localhost-only Host allowlist — and moving the bind address does not
+    # switch it off. The platform router fronts us as
+    # <slug>.agents.turingplanet.ai, so that allowlist 421'd every /mcp call.
+    # DNS-rebinding protection guards a server a browser can reach on
+    # localhost; a deployed server behind the router is not one.
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False
+    )
     # Behind the platform gateway every call is a fresh proxied request, and we
     # report progress by polling (job_status), never by server->client
     # notifications — so stateless costs nothing and drops session affinity,

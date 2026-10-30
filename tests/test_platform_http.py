@@ -90,6 +90,40 @@ def test_main_configures_streamable_http(monkeypatch):
     assert server.mcp.settings.json_response is True
 
 
+def test_deployed_mcp_accepts_the_platform_hostname(monkeypatch):
+    """The router fronts us as <slug>.agents.turingplanet.ai, not localhost.
+
+    FastMCP built with its 127.0.0.1 default allowlists only localhost Host
+    headers, so every proxied /mcp call came back 421 "Invalid Host header"
+    while /api/health (a plain route) still answered 200.
+    """
+    monkeypatch.setattr(server.mcp, "run", lambda **kw: None)
+    server.main(transport="streamable-http")
+    # The session manager captures the security settings when the app is
+    # built; drop the module fixture's cached one so this app sees main()'s.
+    monkeypatch.setattr(server.mcp, "_session_manager", None)
+
+    app = server.mcp.streamable_http_app()
+    with TestClient(app, base_url="https://scicomagent.agents.turingplanet.ai") as client:
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "0.1"},
+                },
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["result"]["serverInfo"]["name"] == "scicomm-agent"
+
+
 def test_transport_follows_config_when_unspecified(monkeypatch):
     """No explicit transport -> config.py decides (PORT set means deployed)."""
     captured = {}
