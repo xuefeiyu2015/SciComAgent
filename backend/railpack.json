@@ -1,6 +1,9 @@
 {
   "$schema": "https://schema.railpack.com",
   "deploy": {
-    "startCommand": "python -m webui.app"
+    "startCommand": "python -m webui.app",
+    "aptPackages": [
+      "fonts-noto-cjk"
+    ]
   }
 }
