@@ -50,7 +50,7 @@ async function loadStrings() {
     I18N.lang = (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
   }
 
-  const resp = await fetch('/api/strings');
+  const resp = await fetch(`${globalThis.SCICOM_API_BASE || ''}/api/strings`, { credentials: 'include' });
   I18N.strings = await resp.json();
   applyStrings();
 }

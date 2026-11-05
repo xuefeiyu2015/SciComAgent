@@ -98,7 +98,8 @@ async function start() {
 
   renderManifest();
   try {
-    const resp = await fetch('/api/agent');
+    const resp = await fetch(`${globalThis.SCICOM_API_BASE || ''}/api/agent`, { credentials: 'include' });
+    if (resp.status === 401) globalThis.SciComGate?.show();
     if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
     manifest = await resp.json();
   } catch (err) {

@@ -57,7 +57,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const IMAGES_PATH_PREFIX = 'outputs/images/';
 function imageUrl(path) {
   return typeof path === 'string' && path.startsWith(IMAGES_PATH_PREFIX)
-    ? `/images/${path.slice(IMAGES_PATH_PREFIX.length)}`
+    ? `${globalThis.SCICOM_API_BASE || ''}/images/${path.slice(IMAGES_PATH_PREFIX.length)}`
     : '';
 }
 
@@ -120,10 +120,14 @@ function imageFigure(asset) {
 
 /* ── transport ──────────────────────────────────────────────────────── */
 
+/* `SCICOM_API_BASE` (static/config.js) is the backend's address when the
+ * pages are hosted apart from it; '' when the backend serves them itself. The
+ * access cookie rides along via `credentials`; a 401 opens the gate dialog. */
 async function api(path, options = {}) {
-  const resp = await fetch(path, options);
+  const resp = await fetch(`${globalThis.SCICOM_API_BASE || ''}${path}`, { credentials: 'include', ...options });
   let body = {};
   try { body = await resp.json(); } catch { /* an empty body is still an outcome */ }
+  if (resp.status === 401) globalThis.SciComGate?.show();
   if (!resp.ok) throw new Error(body.error || `${resp.status} ${resp.statusText}`);
   return body;
 }
