@@ -36,6 +36,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 import uvicorn  # noqa: E402
 from starlette.applications import Starlette  # noqa: E402
+from starlette.concurrency import run_in_threadpool  # noqa: E402
 from starlette.requests import Request  # noqa: E402
 from starlette.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from starlette.routing import Mount, Route  # noqa: E402
@@ -363,7 +364,8 @@ async def revise(request: Request) -> JSONResponse:
     if not sentence:
         raise _HttpError(400, "nothing to revise: 'sentence' is empty")
 
-    revised = revise_sentence(
+    revised = await run_in_threadpool(
+        revise_sentence,
         sentence,
         instruction,
         ledger,
@@ -406,7 +408,8 @@ async def converse_route(request: Request) -> JSONResponse:
     ]
     glossary = _model(Glossary, body.get("glossary") or {}, "glossary")
 
-    reply = converse(
+    reply = await run_in_threadpool(
+        converse,
         message, drafts, ledger, flags, inp, transcript,
         card=jobs.read_card(session_id) if session_id else None,
         background=background,
@@ -454,7 +457,7 @@ async def recheck(request: Request) -> JSONResponse:
     ledger = [_model(Claim, item, "claim") for item in body.get("ledger", [])]
     language = _enum(Language, body.get("language", "zh"), "language")
 
-    flags = check_faithfulness(draft, ledger, {}, language)
+    flags = await run_in_threadpool(check_faithfulness, draft, ledger, {}, language)
     located, unlocated = locate_flags(draft, [_as_overreach(f, draft.platform) for f in flags])
     return JSONResponse(
         {
@@ -592,7 +595,7 @@ async def providers(request: Request) -> JSONResponse:
 
     out = []
     for row in provider_status():
-        listing = list_models(row["id"]) if row["available"] else None
+        listing = await run_in_threadpool(list_models, row["id"]) if row["available"] else None
         out.append({
             **row,
             "models": [m.model_dump(mode="json") for m in listing.models] if listing else [],
@@ -631,7 +634,8 @@ async def verify(request: Request) -> JSONResponse:
     roles = body.get("roles") or list(ROLES)
     results = {}
     for role in roles:
-        ok, detail = settings.verify_role(role)
+        # Off the event loop: a live model call must never stall every other request.
+        ok, detail = await run_in_threadpool(settings.verify_role, role)
         results[role] = {"ok": ok, "detail": detail}
     return JSONResponse({"verified": results})
 
