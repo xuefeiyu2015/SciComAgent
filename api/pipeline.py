@@ -34,6 +34,7 @@ draft + provenance (claim ledger) + overstatement flags for review.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 from collections.abc import Callable
@@ -247,9 +248,14 @@ def _draft_all(
     workers = max(1, min(len(inp.platforms), _draft_workers()))
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="draft") as pool:
+        # Each draft runs in a COPY of this thread's context: a worker thread
+        # does not inherit contextvars, and the run's telemetry trace lives in
+        # one. Without it every drafter/reviewer call would land outside the
+        # run's trace. One copy per task — a Context cannot be entered twice.
         futures = {
             pool.submit(
-                _draft_one, platform, ledger, card, inp, background, style, glossary
+                contextvars.copy_context().run,
+                _draft_one, platform, ledger, card, inp, background, style, glossary,
             ): platform
             for platform in inp.platforms
         }

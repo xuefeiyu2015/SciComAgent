@@ -76,3 +76,13 @@ images:
   cap: env        # -> IMAGE_CAP        (max explainer cards per run; default 3, non-numeric falls back to 3, negative means none)
   cover_attempts: env  # -> IMAGE_COVER_ATTEMPTS (how many times a cover may be generated before one that still shows lettering ships with a notice; default 3, non-numeric falls back to 3, clamped to at least 1)
   font_path: env  # -> IMAGE_FONT_PATH  (font the claim cards are drawn with; a missing path falls back to system fonts, and if none load the card is refused rather than drawn as tofu)
+
+# Evaluation dashboard (Langfuse Cloud): traces every LLM call by role (tokens,
+# latency, cost, errors), scores each run, and records user feedback.
+# Keys are env-only, never stored here (byo_key):
+#   LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL
+# `enabled` uses the same "env" indirection (env var: TELEMETRY_ENABLED).
+#   auto (default) — on whenever both Langfuse keys are set
+#   false          — off; nothing is sent even with keys set
+telemetry:
+  enabled: auto

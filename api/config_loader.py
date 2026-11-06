@@ -118,13 +118,28 @@ def get_model(role: str, temperature: float = 0.0, fallback: str | None = None):
         A LangChain chat model. API keys are read from the environment by
         the provider client (byo_key); none are stored in config.
     """
+    served_by = role
     try:
         provider, model = resolve_role(role)
     except ValueError:
         if fallback is None or role not in ROLES:
             raise
         provider, model = resolve_role(fallback)
-    return init_chat_model(model, model_provider=provider, temperature=temperature)
+        served_by = fallback
+    chat = init_chat_model(model, model_provider=provider, temperature=temperature)
+    # Imported here, not at module top: api.telemetry imports this module.
+    from api import telemetry
+
+    # The ROLE rides on every call as a tag + metadata, so the dashboard can
+    # group tokens / latency / cost per subagent. `served_by` says which role's
+    # config actually answered (differs only when the fallback was used).
+    # Call sites only `.invoke`, which a RunnableBinding supports unchanged.
+    return chat.with_config(
+        callbacks=telemetry.callbacks(role),
+        run_name=role,
+        tags=[f"role:{role}"],
+        metadata={"role": role, "served_by": served_by, "model": model},
+    )
 
 
 def capabilities() -> dict[str, Any]:
