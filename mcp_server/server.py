@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from typing import Literal
 from pathlib import Path
 
 # Run as a SCRIPT (`python mcp_server/server.py`, railpack.json's startCommand),
@@ -39,6 +40,7 @@ from starlette.responses import JSONResponse  # noqa: E402
 from api import jobs  # noqa: E402
 from api.check import check_faithfulness  # noqa: E402
 from api.config_loader import capabilities  # noqa: E402
+from api.feedback import record_feedback  # noqa: E402
 from api.pipeline import extract_ledger_preview  # noqa: E402
 from api.render import render_markdown  # noqa: E402
 from api.schema import (  # noqa: E402
@@ -46,6 +48,8 @@ from api.schema import (  # noqa: E402
     AgentOutput,
     CheckFlag,
     Claim,
+    FeedbackInput,
+    FeedbackResult,
     ImageMode,
     JobKind,
     JobProgress,
@@ -466,7 +470,10 @@ def _announce_done(out: AgentOutput, kind: JobKind = JobKind.run) -> AgentOutput
                 f"{subject} — {made}{review if flags else ''}. Somebody is "
                 "waiting on this: say plainly that it is done and show them "
                 "the result (`render` turns it into readable Markdown with its "
-                "provenance). Nothing has been published, and nothing may be."
+                "provenance). Nothing has been published, and nothing may be. "
+                "Then invite them to rate it — 👍/👎, 1–5, a comment — and pass "
+                "what THEY say to `feedback` with this session_id; never rate "
+                "it yourself."
             ),
         )
     )
@@ -564,6 +571,43 @@ def render(
         return render_markdown(result, platform=platform, include_provenance=include_provenance)
     except Exception as exc:  # never crash the tool — surface as a short message
         return f"render failed: {exc}"
+
+
+@mcp.tool()
+def feedback(
+    session_id: str,
+    thumb: Literal["up", "down"] | None = None,
+    rating: int | None = None,
+    platform: Platform | None = None,
+    comment: str | None = None,
+) -> FeedbackResult:
+    """Record the HUMAN's verdict on a finished run (thumb, 1–5 rating, comment).
+
+    Call this only with what the person actually said, after showing them the
+    result — never invent, infer or fill in a rating yourself. Give at least one
+    of thumb / rating / comment. The feedback is stored against the run's
+    session for the evaluation dashboard; nothing is published.
+
+    `recorded=false` always comes with the reason (unknown or still-running
+    session, telemetry off); tell the person it was NOT saved rather than
+    thanking them for it.
+
+    Args:
+        session_id: the run being rated, from `generate` / `redraft`.
+        thumb: "up" if the draft was usable, "down" if not.
+        rating: overall quality, 1 (poor) to 5 (excellent).
+        platform: which platform's draft the feedback is about; omit for the
+            whole run. `wechat` is recorded as `xhs`.
+        comment: the person's own words, up to 2000 characters.
+    """
+    try:
+        fb = FeedbackInput(
+            session_id=session_id, thumb=thumb, rating=rating,
+            platform=platform, comment=comment,
+        )
+    except ValueError as err:  # pydantic ValidationError is a ValueError
+        return FeedbackResult(recorded=False, message=f"feedback NOT recorded: {err}")
+    return record_feedback(fb, "mcp")
 
 
 @mcp.tool()

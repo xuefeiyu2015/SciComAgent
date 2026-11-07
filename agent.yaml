@@ -14,9 +14,10 @@ routing:
   # re-enterable, and answers "now in English" by saying it cannot.
   intents: [paper to public, science communication, explain research,
             redraft a draft, translate a draft, another platform for a draft,
-            ask about a paper]
+            ask about a paper, rate a draft, give feedback on a draft]
   keywords: [sci-comm, paper, news, wechat, xiaohongshu, explainer,
-             redraft, rewrite, translate, in english, another version]
+             redraft, rewrite, translate, in english, another version,
+             feedback, rating, thumbs up, thumbs down]
 
 # MCP tools exposed by /mcp (thin wrappers over /api)
 tools:
@@ -163,6 +164,20 @@ tools:
       session_id:       "The id you passed in; there is no new run to poll"
       status:           { allowed: [ok, needs_review, failed], description: "failed = unknown/expired session, or the job is still running (the notice says which); the run's stored result is left alone in that case" }
       notices:          "image_error = an asset was skipped and why (an unconfigured image model, a missing font); the drafts and the rest of the result are unaffected"
+
+  - name: feedback
+    description: Record the HUMAN's verdict on a finished run (thumb / 1-5 rating / comment) for the evaluation dashboard. Only what the person said — never rate a draft yourself. Never publishes
+    parameters:
+      session_id: { required: true,  description: "The run being rated, from `generate` / `redraft`" }
+      thumb:      { required: false, allowed: [up, down], description: "Was the draft usable?" }
+      rating:     { required: false, min: 1, max: 5, description: "Overall quality, 1 (poor) to 5 (excellent)" }
+      platform:   { required: false, allowed: [news, wechat, xhs], description: "Which platform's draft; omit for the whole run. `wechat` is recorded as `xhs`" }
+      comment:    { required: false, description: "The person's own words, up to 2000 characters" }
+    # At least one of thumb / rating / comment. Stored as Langfuse scores on the run's session.
+    output:
+      recorded: "true only if the feedback was actually stored; false comes with the reason — tell the person it was NOT saved"
+      message:  "Human-readable outcome"
+      scores:   "Names of the scores stored (user_thumb, user_rating, user_comment)"
 
   - name: ping
     description: Dummy connectivity check — returns one sentence; no models, no network, no pipeline
