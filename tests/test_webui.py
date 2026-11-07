@@ -1220,3 +1220,37 @@ def test_every_images_dial_string_is_in_both_locales():
             assert strings[locale][key] not in source
     assert "t('board.images.ask')" in source
     assert "t('board.images.note')" in source
+
+
+# --- feedback -----------------------------------------------------------------
+
+def test_feedback_route_reports_what_api_feedback_said(client, monkeypatch):
+    from api.schema import FeedbackResult
+
+    seen = {}
+
+    def fake_record(fb, channel):
+        seen["fb"], seen["channel"] = fb, channel
+        return FeedbackResult(recorded=True, message="thanks", scores=["user_thumb"])
+
+    monkeypatch.setattr(webui, "record_feedback", fake_record)
+    resp = client.post("/api/feedback", json={
+        "session_id": "j_abc_12345678", "platform": "news", "thumb": "up", "comment": "good",
+    })
+    assert resp.status_code == 200
+    assert resp.json() == {"recorded": True, "message": "thanks", "scores": ["user_thumb"]}
+    assert seen["channel"] == "web"
+    assert seen["fb"].thumb == "up" and seen["fb"].platform.value == "news"
+
+
+def test_feedback_route_says_not_recorded_when_telemetry_is_off(client):
+    # Real api.feedback, no stubs: the run is unknown, so it is refused with a reason.
+    resp = client.post("/api/feedback", json={"session_id": "j_abc_00000000", "thumb": "up"})
+    assert resp.status_code == 200
+    assert resp.json()["recorded"] is False
+
+
+def test_feedback_route_refuses_empty_feedback(client):
+    resp = client.post("/api/feedback", json={"session_id": "j_abc_12345678"})
+    assert resp.status_code == 400
+    assert "feedback" in resp.json()["error"]

@@ -38,6 +38,7 @@ const state = {
   polling: null,
   openKey: null,
   rewriter: null,     // the passage currently being rewritten by hand
+  feedback: {},       // "session:platform" -> {thumb, rating, comment, busy, message, recorded}
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -535,6 +536,7 @@ function renderBoard() {
       tags.textContent = draft.hashtags.map((h) => `#${h.replace(/^[#＃]+/, '')}`).join(' ');
       wrap.append(tags);
     }
+    if (state.sessionId && state.result.status !== 'running') wrap.append(feedbackBox(platform));
     board.append(wrap);
   });
 
@@ -619,6 +621,125 @@ function archivedVersion(snapshot) {
     section.append(wrap);
   });
   return section;
+}
+
+/* ── feedback ───────────────────────────────────────────────────────────
+ *
+ * One box per platform draft: a thumb, a 1–5 rating, a line of comment. Sent
+ * to /api/feedback, which records it as Langfuse scores on this run's session
+ * (api/feedback.py). The server says whether it actually landed — "telemetry
+ * is off" is shown as-is, never dressed up as a success.
+ *
+ * Kept in `state.feedback` keyed by session AND platform, so a re-render (a
+ * flag decided, a rewrite accepted) keeps what the reviewer had picked, and a
+ * different run starts clean. */
+function feedbackEntry(platform) {
+  const key = `${state.sessionId}:${platform}`;
+  if (!state.feedback[key]) {
+    state.feedback[key] = { thumb: null, rating: null, comment: '', busy: false, message: '', recorded: null };
+  }
+  return state.feedback[key];
+}
+
+function feedbackBox(platform) {
+  const entry = feedbackEntry(platform);
+  const box = el('section', 'feedback');
+  box.append(fieldLabel(t('board.feedback')));
+
+  const row = el('div', 'feedback-row');
+  [['up', '👍', 'board.feedbackUp'], ['down', '👎', 'board.feedbackDown']].forEach(([value, glyph, label]) => {
+    const btn = el('button', 'fb-thumb');
+    btn.type = 'button';
+    btn.textContent = glyph;
+    btn.title = t(label);
+    btn.setAttribute('aria-label', t(label));
+    btn.setAttribute('aria-pressed', String(entry.thumb === value));
+    btn.onclick = () => {
+      entry.thumb = entry.thumb === value ? null : value;
+      refreshFeedback(box, platform);
+    };
+    row.append(btn);
+  });
+
+  const stars = el('span', 'fb-stars');
+  for (let n = 1; n <= 5; n += 1) {
+    const star = el('button', 'fb-star');
+    star.type = 'button';
+    star.textContent = entry.rating && n <= entry.rating ? '★' : '☆';
+    star.title = t('board.feedbackStars', { n });
+    star.setAttribute('aria-label', t('board.feedbackStars', { n }));
+    star.setAttribute('aria-pressed', String(entry.rating === n));
+    star.onclick = () => {
+      entry.rating = entry.rating === n ? null : n;
+      refreshFeedback(box, platform);
+    };
+    stars.append(star);
+  }
+  row.append(stars);
+  box.append(row);
+
+  const area = el('textarea', 'fb-comment');
+  area.rows = 2;
+  area.maxLength = 2000;
+  area.placeholder = t('board.feedbackComment');
+  area.value = entry.comment;
+  area.oninput = () => { entry.comment = area.value; };
+  box.append(area);
+
+  const foot = el('div', 'feedback-foot');
+  const send = el('button', 'btn fb-send');
+  send.type = 'button';
+  send.textContent = t('board.feedbackSend');
+  send.disabled = entry.busy;
+  send.onclick = () => sendFeedback(box, platform);
+  foot.append(send);
+  if (entry.message) {
+    const status = el('span', 'fb-status');
+    status.dataset.recorded = String(entry.recorded);
+    status.textContent = entry.message;
+    foot.append(status);
+  }
+  box.append(foot);
+  return box;
+}
+
+/* Redraw just this box — a full board render would be overkill for a star. */
+function refreshFeedback(box, platform) {
+  box.replaceWith(feedbackBox(platform));
+}
+
+async function sendFeedback(box, platform) {
+  const entry = feedbackEntry(platform);
+  const comment = entry.comment.trim();
+  if (!entry.thumb && !entry.rating && !comment) {
+    toast(t('board.feedbackEmpty'));
+    return;
+  }
+  entry.busy = true;
+  refreshFeedback(box, platform);
+  const live = document.querySelector(`.manuscript[data-platform="${platform}"] .feedback`);
+  try {
+    const out = await postJSON('/api/feedback', {
+      session_id: state.sessionId,
+      platform,
+      thumb: entry.thumb,
+      rating: entry.rating,
+      comment: comment || null,
+    });
+    entry.recorded = out.recorded;
+    // Success is the board's own sentence, in the board's language; a refusal
+    // is the server's, verbatim — it carries the reason (telemetry off, …).
+    entry.message = out.recorded ? t('board.feedbackRecorded') : out.message;
+    toast(out.message, out.recorded ? 'info' : 'error');
+  } catch (err) {
+    entry.recorded = false;
+    entry.message = t('board.feedbackFailed', { error: err.message });
+    toast(entry.message, 'error');
+  } finally {
+    entry.busy = false;
+    const current = document.querySelector(`.manuscript[data-platform="${platform}"] .feedback`) || live;
+    if (current) refreshFeedback(current, platform);
+  }
 }
 
 function fieldLabel(text) {
