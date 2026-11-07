@@ -234,7 +234,8 @@ def test_every_tool_declares_the_servers_parameters():
 # run here over that payload and the assertion reads the HTML it produced —
 # not the parsed manifest a second time.
 
-_STATIC = Path(__file__).resolve().parent.parent / "webui" / "static"
+# The pages live in frontend/ at the repository root, next to backend/.
+_STATIC = Path(__file__).resolve().parents[2] / "frontend" / "static"
 _NODE = shutil.which("node")
 _NO_NODE = "node is not installed; the front.js render harness needs it"
 
@@ -289,7 +290,7 @@ def _render_tool_card(tool_name: str, locale: str = "en") -> str:
         **os.environ,
         "FRONT_HARNESS": json.dumps({
             "static_dir": str(_STATIC),
-            "i18n_json": str(_STATIC.parent / "i18n.json"),
+            "i18n_json": str(Path(__file__).resolve().parent.parent / "webui" / "i18n.json"),
             "locale": locale,
             "manifest": load_manifest().model_dump(mode="json"),  # what /api/agent serves
             "tool": tool_name,

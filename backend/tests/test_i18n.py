@@ -15,7 +15,7 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
 _STRINGS = json.loads((_ROOT / "webui" / "i18n.json").read_text(encoding="utf-8"))
-_PAGES = ["index.html", "front.html"]
+_PAGES = ["board.html", "index.html"]  # frontend/: the board, the overview
 
 
 def test_both_languages_are_present():
@@ -39,7 +39,7 @@ def test_no_string_is_empty(language):
 @pytest.mark.parametrize("page", _PAGES)
 def test_every_key_used_in_the_markup_exists(page):
     """A data-i18n pointing at nothing shows the key to the user."""
-    html = (_ROOT / "webui" / "static" / page).read_text(encoding="utf-8")
+    html = (_ROOT.parent / "frontend" / page).read_text(encoding="utf-8")
     used = set(re.findall(r'data-i18n(?:-\w+)?="([^"]+)"', html))
 
     missing = sorted(used - set(_STRINGS["zh"]))

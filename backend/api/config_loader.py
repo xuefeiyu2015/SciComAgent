@@ -104,7 +104,20 @@ def resolve_role(role: str) -> tuple[str, str]:
     return provider, model
 
 
-def get_model(role: str, temperature: float = 0.0, fallback: str | None = None):
+def _env_number(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+def get_model(
+    role: str,
+    temperature: float = 0.0,
+    fallback: str | None = None,
+    timeout: float | None = None,
+    max_retries: int | None = None,
+):
     """Build the chat model for a role.
 
     Args:
@@ -113,6 +126,10 @@ def get_model(role: str, temperature: float = 0.0, fallback: str | None = None):
         fallback: optional role to resolve instead when `role` is declared
             but unconfigured (e.g. researcher -> extractor). An unknown
             `role` still raises — the fallback never masks a typo.
+        timeout / max_retries: per-call bounds. Default to MODEL_TIMEOUT_SECONDS
+            (120) and MODEL_MAX_RETRIES (2): the provider clients' own defaults
+            (no timeout, ~6 retries with backoff) turn a quota or unknown-model
+            error into minutes of silence.
 
     Returns:
         A LangChain chat model. API keys are read from the environment by
@@ -126,7 +143,13 @@ def get_model(role: str, temperature: float = 0.0, fallback: str | None = None):
             raise
         provider, model = resolve_role(fallback)
         served_by = fallback
-    chat = init_chat_model(model, model_provider=provider, temperature=temperature)
+    chat = init_chat_model(
+        model,
+        model_provider=provider,
+        temperature=temperature,
+        timeout=timeout if timeout is not None else _env_number("MODEL_TIMEOUT_SECONDS", 120),
+        max_retries=max_retries if max_retries is not None else int(_env_number("MODEL_MAX_RETRIES", 2)),
+    )
     # Imported here, not at module top: api.telemetry imports this module.
     from api import telemetry
 

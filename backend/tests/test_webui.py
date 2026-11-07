@@ -583,7 +583,9 @@ _EXPLAINER = ImageAsset(
     generated=False,
 )
 
-_BOARD_JS = Path(webui.__file__).resolve().parent / "static" / "board.js"
+# The pages live in frontend/ at the repository root, next to backend/.
+_FRONTEND_STATIC = Path(webui.__file__).resolve().parents[2] / "frontend" / "static"
+_BOARD_JS = _FRONTEND_STATIC / "board.js"
 
 
 @pytest.fixture
@@ -827,12 +829,12 @@ process.stdout.write(globalThis.__render());
 
 def _render_image_figure(asset: ImageAsset, locale: str = "zh") -> str:
     """The markup board.js's own `imageFigure()` produces for one asset."""
-    static_dir = Path(webui.__file__).resolve().parent / "static"
+    static_dir = _FRONTEND_STATIC
     env = {
         **os.environ,
         "BOARD_HARNESS": json.dumps({
             "static_dir": str(static_dir),
-            "i18n_json": str(static_dir.parent / "i18n.json"),
+            "i18n_json": str(Path(webui.__file__).resolve().parent / "i18n.json"),
             "locale": locale,
             "asset": asset.model_dump(mode="json"),
         }),
@@ -1041,12 +1043,12 @@ setImmediate(() => setImmediate(() => {
 
 def _drive_board(mode: str, *, locale: str = "zh", **options) -> dict:
     """Run the board's own dialog in node and report what it posted."""
-    static_dir = Path(webui.__file__).resolve().parent / "static"
+    static_dir = _FRONTEND_STATIC
     env = {
         **os.environ,
         "BOARD_COMPOSER": json.dumps({
             "static_dir": str(static_dir),
-            "i18n_json": str(static_dir.parent / "i18n.json"),
+            "i18n_json": str(Path(webui.__file__).resolve().parent / "i18n.json"),
             "locale": locale,
             "mode": mode,
             **options,

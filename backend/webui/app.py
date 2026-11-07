@@ -5,9 +5,13 @@ THIN wrapper only, exactly like /mcp_server: every route marshals JSON into an
 (see the directory contract in CLAUDE.md). /api must never import this module.
 
 Bound to LOOPBACK by default and deliberately so — these routes write the repo
-`.env`, read local files, and spend the operator's API budget. There is no auth
-because there is no remote surface; putting one on a public interface would
-need real authentication first.
+`.env`, read local files, and spend the operator's API budget. On any other
+address (HOST/PORT from the environment, e.g. hosted on Railway) every /api and
+/images route sits behind the access gate in webui/access.py.
+
+The pages themselves live in ../frontend (served by Vercel when hosted). When
+that folder is next to this one — a local checkout — this server serves them
+too, so `python -m webui.app` is still the whole app on one port.
 
 Run with `python -m webui.app` (or `python webui/app.py`); open the printed URL.
 """
@@ -16,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
 import uuid
@@ -33,9 +38,11 @@ import uvicorn  # noqa: E402
 from starlette.applications import Starlette  # noqa: E402
 from starlette.concurrency import run_in_threadpool  # noqa: E402
 from starlette.requests import Request  # noqa: E402
-from starlette.responses import FileResponse, JSONResponse  # noqa: E402
+from starlette.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from starlette.routing import Mount, Route  # noqa: E402
 from starlette.staticfiles import StaticFiles  # noqa: E402
+
+from webui import access  # noqa: E402
 
 from api import jobs, settings  # noqa: E402
 from api.check import check_faithfulness  # noqa: E402
@@ -67,7 +74,10 @@ from api.schema import (  # noqa: E402
 
 _log = logging.getLogger(__name__)
 
-_STATIC_DIR = Path(__file__).resolve().parent / "static"
+# The pages: frontend/ at the repository root, next to backend/. Absent when
+# only backend/ is deployed (Railway), and then this server is API-only.
+_FRONTEND_DIR = _REPO_ROOT.parent / "frontend"
+_STATIC_DIR = _FRONTEND_DIR / "static"
 _I18N_PATH = Path(__file__).resolve().parent / "i18n.json"
 _UPLOAD_DIR = _REPO_ROOT / "outputs" / "uploads"
 _REVIEW_DIR = _REPO_ROOT / "outputs" / "reviews"
@@ -88,8 +98,8 @@ _MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 # before ever touching the filesystem.
 _SAFE_NAME_RE = re.compile(r"[^0-9A-Za-z._一-鿿-]+")
 
-_HOST = "127.0.0.1"
-_PORT = 8080
+_HOST = os.environ.get("HOST", "127.0.0.1")
+_PORT = int(os.environ.get("PORT", "8080"))
 
 
 # --- error handling -----------------------------------------------------------
@@ -159,12 +169,17 @@ def _enum(cls, value: Any, what: str):
 
 async def front(request: Request) -> FileResponse:
     """The overview: what this agent does, and the tools it exposes."""
-    return FileResponse(_STATIC_DIR / "front.html", headers={"Cache-Control": "no-cache"})
+    return FileResponse(_FRONTEND_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 async def index(request: Request) -> FileResponse:
     """The review board itself."""
-    return FileResponse(_STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+    return FileResponse(_FRONTEND_DIR / "board.html", headers={"Cache-Control": "no-cache"})
+
+
+async def frontend_config(request: Request) -> Response:
+    """Served same-origin here, so the pages call this server's own /api."""
+    return Response("globalThis.SCICOM_API_BASE = '';\n", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
 
 
 @_endpoint
@@ -351,7 +366,8 @@ async def revise(request: Request) -> JSONResponse:
     if not sentence:
         raise _HttpError(400, "nothing to revise: 'sentence' is empty")
 
-    revised = revise_sentence(
+    revised = await run_in_threadpool(
+        revise_sentence,
         sentence,
         instruction,
         ledger,
@@ -394,7 +410,8 @@ async def converse_route(request: Request) -> JSONResponse:
     ]
     glossary = _model(Glossary, body.get("glossary") or {}, "glossary")
 
-    reply = converse(
+    reply = await run_in_threadpool(
+        converse,
         message, drafts, ledger, flags, inp, transcript,
         card=jobs.read_card(session_id) if session_id else None,
         background=background,
@@ -442,7 +459,7 @@ async def recheck(request: Request) -> JSONResponse:
     ledger = [_model(Claim, item, "claim") for item in body.get("ledger", [])]
     language = _enum(Language, body.get("language", "zh"), "language")
 
-    flags = check_faithfulness(draft, ledger, {}, language)
+    flags = await run_in_threadpool(check_faithfulness, draft, ledger, {}, language)
     located, unlocated = locate_flags(draft, [_as_overreach(f, draft.platform) for f in flags])
     return JSONResponse(
         {
@@ -593,7 +610,7 @@ async def providers(request: Request) -> JSONResponse:
 
     out = []
     for row in provider_status():
-        listing = list_models(row["id"]) if row["available"] else None
+        listing = await run_in_threadpool(list_models, row["id"]) if row["available"] else None
         out.append({
             **row,
             "models": [m.model_dump(mode="json") for m in listing.models] if listing else [],
@@ -632,7 +649,8 @@ async def verify(request: Request) -> JSONResponse:
     roles = body.get("roles") or list(ROLES)
     results = {}
     for role in roles:
-        ok, detail = settings.verify_role(role)
+        # Off the event loop: a live model call must never stall every other request.
+        ok, detail = await run_in_threadpool(settings.verify_role, role)
         results[role] = {"ok": ok, "detail": detail}
     return JSONResponse({"verified": results})
 
@@ -655,8 +673,8 @@ class _RevalidatingStatic(StaticFiles):
 
 
 routes = [
-    Route("/", front),
-    Route("/board", index),
+    *access.routes,
+    access.session_route(_HOST),
     Route("/api/agent", agent),
     Route("/api/upload", upload, methods=["POST"]),
     Route("/api/generate", generate, methods=["POST"]),
@@ -675,21 +693,29 @@ routes = [
     Route("/api/settings/models", write_models, methods=["POST"]),
     Route("/api/settings/sources", write_sources, methods=["POST"]),
     Route("/api/settings/verify", verify, methods=["POST"]),
-    Mount("/static", _RevalidatingStatic(directory=str(_STATIC_DIR)), name="static"),
     # Serves outputs/images/<session_id>/<file>.png so the board can show what
     # api/assets.py wrote. Containment (no path outside outputs/images/, no
     # `..`/absolute/symlink escape) comes entirely from StaticFiles itself —
-    # the same mechanism that already protects /static — plus the loopback
-    # binding below (no remote caller exists to begin with). No hand-rolled
-    # path joining happens here or anywhere else in this module.
+    # the same mechanism that already protects /static — plus the access gate
+    # (webui/access.py) on any non-loopback address. No hand-rolled path
+    # joining happens here or anywhere else in this module.
     Mount("/images", _RevalidatingStatic(directory=str(_IMAGES_DIR)), name="images"),
 ]
 
-app = Starlette(routes=routes)
+if _FRONTEND_DIR.is_dir():
+    routes += [
+        Route("/", front),
+        Route("/board", index),
+        Route("/static/config.js", frontend_config),
+        Mount("/static", _RevalidatingStatic(directory=str(_STATIC_DIR)), name="static"),
+    ]
+
+app = Starlette(routes=routes, middleware=access.middleware(_HOST))
 
 
 def main() -> None:
-    print(f"SciComm agent -> http://{_HOST}:{_PORT}   (board: /board)")
+    where = "(board: /board)" if _FRONTEND_DIR.is_dir() else "(API only; pages are served from frontend/)"
+    print(f"SciComm agent -> http://{_HOST}:{_PORT}   {where}")
     uvicorn.run(app, host=_HOST, port=_PORT, log_level="info")
 
 
