@@ -143,7 +143,9 @@ def verify_role(role: str) -> tuple[bool, str]:
     except ValueError as err:
         return False, str(err)
     try:
-        get_model(role, temperature=0.0).invoke(_VERIFY_PROMPT)
+        # One short try: a wrong model name or no quota should come back in
+        # seconds, as the provider's own message, not after minutes of retries.
+        get_model(role, temperature=0.0, timeout=30, max_retries=0).invoke(_VERIFY_PROMPT)
     except Exception as err:
         return False, f"{provider} / {model}: {err}"
     return True, f"{provider} / {model}"

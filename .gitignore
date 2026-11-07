@@ -1,3 +1,5 @@
+# Paths are relative to this file: the Python project lives in backend/ (see README.md).
+
 # Virtual environment
 .venv/
 
@@ -9,8 +11,8 @@ __pycache__/
 .ruff_cache/
 
 # Config secrets (never commit real tokens/keys)
-config/*.yaml
-!config/config.example.yaml
+backend/config/*.yaml
+!backend/config/config.example.yaml
 .env
 .env.*
 !.env.example
@@ -35,9 +37,9 @@ htmlcov/
 outputs/
 
 # Learned-style example articles (local only; distilled into a StyleProfile)
-api/styles/examples/*
-!api/styles/examples/.gitkeep
-!api/styles/examples/README.md
+backend/api/styles/examples/*
+!backend/api/styles/examples/.gitkeep
+!backend/api/styles/examples/README.md
 
 # OS
 .DS_Store
@@ -46,5 +48,5 @@ api/styles/examples/*
 diagrams/
 
 #doc except for the mcq server doc
-docs/*
-!docs/sci_comm_mcpdoc.md
+backend/docs/*
+!backend/docs/sci_comm_mcpdoc.md

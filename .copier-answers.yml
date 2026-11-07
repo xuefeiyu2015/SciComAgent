@@ -6,12 +6,12 @@ _src_path: gh:turingplanet/agent-template
 adopt_mode: true
 author_email: xuefeiyuformal@gmail.com
 author_name: Xuefei
-cmd_install: uv sync
-cmd_lint: uv run ruff check .
-cmd_security: uv run bandit -q -r api
-cmd_test: uv run pytest -q
+cmd_install: cd backend && uv sync
+cmd_lint: cd backend && uv run ruff check .
+cmd_security: cd backend && uv run bandit -q -r api
+cmd_test: cd backend && uv run pytest -q
 description: An 图灵星球 Agent 军团 member agent.用来根据文献写科普文
-path_api: ./api
+path_api: ./backend/api
 profile: python-mcp
 project_name: SciComAgent
 project_slug: scicomagent

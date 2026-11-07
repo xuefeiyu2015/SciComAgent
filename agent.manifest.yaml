@@ -13,14 +13,14 @@ toolchain:
   packageManager: uv
 
 paths:
-  api: ./api
-  mcp: ./mcp_server          # runnable MCP server (stdio) wrapping your logic
+  api: ./backend/api
+  mcp: ./backend/mcp_server          # runnable MCP server (stdio) wrapping your logic
 
 commands:                    # the review flow runs EXACTLY these
-  install: uv sync
-  test:    uv run pytest -q
-  lint:    uv run ruff check .
-  security: uv run --with bandit bandit -q -r api
+  install: cd backend && uv sync
+  test:    cd backend && uv run pytest -q
+  lint:    cd backend && uv run ruff check .
+  security: cd backend && uv run --with bandit bandit -q -r api
 
 # Platform-membership intent (RFC 001 §10). true = on your first push to GitHub,
 # the platform opens a members.yaml PR for you (an admin merges — nothing is

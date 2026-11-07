@@ -1,5 +1,34 @@
+# SciComAgent
 
+The repository has two halves:
 
+| Folder | What | Hosted on | Address |
+| --- | --- | --- | --- |
+| `frontend/` | The pages: overview (`index.html`) and review board (`board.html`). Plain HTML/JS/CSS, no build step | Vercel | https://scicom-app.apps.turingplanet.ai |
+| `backend/` | The Python agent: `api/` (all the logic), the MCP server (`mcp_server/`) and the board's API (`webui/app.py`) | Railway | MCP: https://scicomagent.agents.turingplanet.ai/mcp · board API: https://scicom-api.agents.turingplanet.ai |
+
+The platform files stay at the repository root: `agent.manifest.yaml` (its commands `cd backend` first),
+`.copier-answers.yml`, `.github/` and `scripts/`.
+
+## Run locally
+
+```bash
+cd backend
+uv sync
+uv run python -m webui.app      # http://127.0.0.1:8080 , board at /board
+```
+
+Locally the backend also serves `../frontend`, so it is one app on one port, with no access key asked.
+Every command in the rest of this README runs in `backend/`.
+Tests: `uv run pytest -q --ignore=tests/faithfulness` (the faithfulness suite calls real models).
+
+## How the hosted halves talk
+
+- `frontend/static/config.js` holds the board API's address. The pages call it directly (`fetch` with credentials), and
+  generated images load from its `/images/`.
+- The board API allows that one origin (CORS, `SCICOM_FRONTEND_ORIGINS`) and keeps every `/api` and `/images` route
+  behind an **access key** (`backend/webui/access.py`). The key is entered once per browser and kept as an HttpOnly
+  cookie for 30 days. Without a key configured, a hosted board API stays locked. A local run (loopback) has no gate.
 
 ## Review board (local web UI)
 
