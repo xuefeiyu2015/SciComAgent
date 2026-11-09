@@ -47,6 +47,7 @@ from webui import access  # noqa: E402
 from api import jobs, settings  # noqa: E402
 from api.check import check_faithfulness  # noqa: E402
 from api.converse import converse  # noqa: E402
+from api.feedback import record_feedback  # noqa: E402
 from api.config_loader import ROLES, capabilities  # noqa: E402
 from api.highlight import locate_flags, locate_hedged  # noqa: E402
 from api.history import list_runs  # noqa: E402
@@ -59,6 +60,7 @@ from api.providers import (  # noqa: E402
 from api.render import render_text  # noqa: E402
 from api.revise import revise_sentence  # noqa: E402
 from api.schema import (  # noqa: E402
+    FeedbackInput,
     AgentInput,
     AgentOutput,
     BackgroundMaterial,
@@ -554,6 +556,19 @@ async def read_settings(request: Request) -> JSONResponse:
 
 
 @_endpoint
+async def feedback_route(request: Request) -> JSONResponse:
+    """Record a reviewer's thumb / rating / comment on a run (api.feedback).
+
+    Always 200 with `recorded` true or false: "telemetry is off" or "unknown
+    run" is an answer for the human, not a server error. Only a malformed body
+    is a 400. The Langfuse send is network I/O, so it runs off the event loop.
+    """
+    fb = _model(FeedbackInput, await _json_body(request), "feedback")
+    result = await run_in_threadpool(record_feedback, fb, "web")
+    return JSONResponse(result.model_dump(mode="json"))
+
+
+@_endpoint
 async def history(request: Request) -> JSONResponse:
     """Past runs, newest first — the rail's way back to earlier work.
 
@@ -674,6 +689,7 @@ routes = [
     Route("/api/providers", providers),
     Route("/api/strings", strings),
     Route("/api/history", history),
+    Route("/api/feedback", feedback_route, methods=["POST"]),
     Route("/api/settings/models", write_models, methods=["POST"]),
     Route("/api/settings/sources", write_sources, methods=["POST"]),
     Route("/api/settings/verify", verify, methods=["POST"]),

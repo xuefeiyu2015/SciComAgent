@@ -11,8 +11,9 @@ No business logic lives here — only the data contract.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # --- enums (allowed values from agent.yaml) ---------------------------------
@@ -647,4 +648,47 @@ class ProgressEvent(BaseModel):
         description="The source card this run extracted, carried on the ledger "
         "milestone. A listener may keep it so the SAME paper can be redrafted "
         "later without fetching and extracting it again.",
+    )
+
+
+# --- user feedback ------------------------------------------------------------
+
+class FeedbackInput(BaseModel):
+    """A human's verdict on one run's drafts. Recorded as Langfuse scores.
+
+    At least one of `thumb`, `rating` or `comment` must be given. Feedback is
+    only ever what the human said: a host agent relays it, never invents it.
+    """
+
+    session_id: str = Field(description="The run being rated, from `generate` / `redraft`.")
+    thumb: Literal["up", "down"] | None = Field(
+        default=None, description="Quick verdict: was the draft usable?"
+    )
+    rating: int | None = Field(default=None, ge=1, le=5, description="Overall quality, 1–5.")
+    platform: Platform | None = Field(
+        default=None,
+        description="Which platform's draft this is about; omit for the run as a whole. "
+        "`wechat` is recorded as `xhs` (they are one draft).",
+    )
+    comment: str | None = Field(default=None, max_length=2000, description="Free text.")
+
+    @field_validator("comment")
+    @classmethod
+    def _blank_comment_is_none(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+    @model_validator(mode="after")
+    def _says_something(self) -> "FeedbackInput":
+        if self.thumb is None and self.rating is None and self.comment is None:
+            raise ValueError("feedback needs a thumb, a rating or a comment")
+        return self
+
+
+class FeedbackResult(BaseModel):
+    """Whether the feedback landed. `recorded=False` always says why."""
+
+    recorded: bool
+    message: str
+    scores: list[str] = Field(
+        default_factory=list, description="Names of the scores sent, e.g. user_thumb."
     )

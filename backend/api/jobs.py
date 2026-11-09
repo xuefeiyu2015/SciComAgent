@@ -42,6 +42,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from api import telemetry
 from api.paths import is_safe_session_id
 from api.pipeline import EventSink, redraft, run
 from api.schema import (
@@ -421,7 +422,12 @@ def _execute(session_id: str, work: Callable[[EventSink, str], AgentOutput]) -> 
 
     _update(record, state=JobState.running, stage="fetch", message="fetching source")
     try:
-        output = work(lambda event: _on_event(record, event), session_id)
+        # One Langfuse trace per job (a no-op without keys). It opens HERE, on
+        # the worker thread, so every LLM call the work makes nests under it.
+        with telemetry.job_trace(
+            session_id, record.progress.kind.value, read_request(session_id)
+        ):
+            output = work(lambda event: _on_event(record, event), session_id)
     except Exception as err:  # a crash is a result, not an exception to lose
         output = AgentOutput(
             status=Status.failed,
@@ -449,6 +455,7 @@ def _execute(session_id: str, work: Callable[[EventSink, str], AgentOutput]) -> 
         record.progress.result_available = True
         record.progress.message = _finished_message(record.progress.kind, state)
     _mirror_safely(session_id, output)
+    telemetry.record_quality(session_id, output)
 
 
 def _finished_message(kind: JobKind, state: JobState) -> str:

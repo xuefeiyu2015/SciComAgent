@@ -111,3 +111,16 @@ def _isolate_job_mirrors(tmp_path, monkeypatch):
             except Exception:
                 pass
     jobs._JOBS.clear()
+
+
+@pytest.fixture(autouse=True)
+def _telemetry_off(monkeypatch):
+    """No test sends traces or scores to Langfuse.
+
+    `api.config_loader` auto-loads the repo `.env`, so an operator who has put
+    their Langfuse keys there would otherwise have every `pytest` run post
+    traces to their dashboard. A test that exercises the enabled path sets
+    fake keys itself and mocks the client.
+    """
+    for var in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "TELEMETRY_ENABLED"):
+        monkeypatch.delenv(var, raising=False)

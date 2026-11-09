@@ -750,3 +750,44 @@ def test_a_failed_run_is_not_announced_as_finished(monkeypatch):
     out = generate(source="s", source_type=SourceType.url, wait_seconds=5)
 
     assert NoticeCode.done not in [n.code for n in out.notices]
+
+
+# --- feedback -----------------------------------------------------------------
+
+def test_feedback_is_a_tool():
+    names = {t.name for t in asyncio.run(server.mcp.list_tools())}
+    assert "feedback" in names
+
+
+def test_feedback_passes_the_humans_words_through(monkeypatch):
+    from api.schema import FeedbackResult
+
+    seen = {}
+
+    def fake_record(fb, channel):
+        seen["fb"], seen["channel"] = fb, channel
+        return FeedbackResult(recorded=True, message="ok", scores=["user_rating"])
+
+    monkeypatch.setattr(server, "record_feedback", fake_record)
+    out = server.feedback("j_abc_12345678", rating=4, platform="wechat", comment="clear")
+    assert out.recorded is True
+    assert seen["channel"] == "mcp"
+    assert seen["fb"].rating == 4 and seen["fb"].comment == "clear"
+
+
+def test_empty_feedback_is_refused_not_raised():
+    out = server.feedback("j_abc_12345678")
+    assert out.recorded is False and "NOT recorded" in out.message
+
+
+def test_out_of_range_rating_is_refused_not_raised():
+    out = server.feedback("j_abc_12345678", rating=9)
+    assert out.recorded is False
+
+
+def test_a_finished_run_invites_feedback():
+    from api.schema import AgentOutput, Status
+
+    out = server._announce_done(AgentOutput(status=Status.ok))
+    done = next(n for n in out.notices if n.code.value == "done")
+    assert "`feedback`" in done.message and "never rate" in done.message
